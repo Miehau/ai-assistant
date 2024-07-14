@@ -14,7 +14,7 @@
 
   let message = '';
   let correlationId = writable<string | null>(null);
-  let messages: Array<{ type: 'sent' | 'received', content: string }> = [];
+  let messages: Array<{ type: 'sent' | 'received', content: string, intent?: string, slider?: string }> = [];
 
   async function sendEchoRequest() {
     console.log(`sending echo request with ${message}, correlation: ${$correlationId}`)
@@ -31,9 +31,14 @@
     });
 
     if (response.ok) {
-      const data = await response.json();
+      const data: EchoResponse = await response.json();
       correlationId.set(data.correlationId || null);
-      messages = [...messages, { type: 'received', content: JSON.stringify(data) }];
+      messages = [...messages, { 
+        type: 'received', 
+        content: data.message,
+        intent: data.intent,
+        slider: data.slider
+      }];
       console.log(data);
     }
     message = '';
@@ -53,7 +58,12 @@
   <Badge variant="outline" class="absolute right-3 top-3">Output</Badge>
   <div class="flex-1 overflow-y-auto mb-4 space-y-4">
     {#each messages as msg}
-      <ChatMessage type={msg.type} content={msg.content.message} />
+      <ChatMessage 
+        type={msg.type} 
+        content={msg.content} 
+        intent={msg.intent} 
+        slider={msg.slider}
+      />
     {/each}
   </div>
   <form class="relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring">
