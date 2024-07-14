@@ -15,6 +15,7 @@
   let correlationId = writable<string | null>(null);
 
   async function sendEchoRequest() {
+    console.log(`sending echo request with ${message}, correlation: ${$correlationId}`)
     const response = await fetch('http://localhost:3000/api/echo', {
       method: 'POST',
       headers: {
