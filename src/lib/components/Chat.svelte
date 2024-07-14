@@ -10,6 +10,7 @@
   import { Textarea } from "$lib/components/ui/textarea/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
   import { writable } from 'svelte/store';
+  import ChatMessage from './ChatMessage.svelte';
 
   let message = '';
   let correlationId = writable<string | null>(null);
@@ -50,11 +51,9 @@
   class="relative flex h-full min-h-[50vh] flex-col rounded-xl bg-muted/50 p-4 lg:col-span-2"
 >
   <Badge variant="outline" class="absolute right-3 top-3">Output</Badge>
-  <div class="flex-1 overflow-y-auto mb-4">
+  <div class="flex-1 overflow-y-auto mb-4 space-y-4">
     {#each messages as msg}
-      <div class={`mb-2 p-2 rounded ${msg.type === 'sent' ? 'bg-blue-100 text-right' : 'bg-gray-100'}`}>
-        <p>{msg.content}</p>
-      </div>
+      <ChatMessage type={msg.type} content={msg.content} />
     {/each}
   </div>
   <form class="relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring">
