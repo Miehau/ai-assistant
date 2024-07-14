@@ -9,6 +9,37 @@
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import { Textarea } from "$lib/components/ui/textarea/index.js";
   import { Label } from "$lib/components/ui/label/index.js";
+  import { writable } from 'svelte/store';
+
+  let message = '';
+  let correlationId = writable<string | null>(null);
+
+  async function sendEchoRequest() {
+    const response = await fetch('/api/echo', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+        correlationId: $correlationId,
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      correlationId.set(data.correlationId || null);
+      // Handle the response data as needed
+      console.log(data);
+    }
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      sendEchoRequest();
+    }
+  }
 </script>
 
 <div
@@ -20,6 +51,8 @@
     <Label for="message" class="sr-only">Message</Label>
     <Textarea
       id="message"
+      bind:value={message}
+      on:keydown={handleKeydown}
       placeholder="Type your message here..."
       class="min-h-12 resize-none border-0 p-3 shadow-none focus-visible:ring-0"
     />
@@ -42,7 +75,7 @@
         </Tooltip.Trigger>
         <Tooltip.Content side="top">Use Microphone</Tooltip.Content>
       </Tooltip.Root>
-      <Button type="submit" size="sm" class="ml-auto gap-1.5">
+      <Button type="button" on:click={sendEchoRequest} size="sm" class="ml-auto gap-1.5">
         Send Message
         <CornerDownLeft class="size-3.5" />
       </Button>
