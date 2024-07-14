@@ -1,116 +1,27 @@
 <script lang="ts">
-  import Rabbit from "lucide-svelte/icons/rabbit";
-  import Bird from "lucide-svelte/icons/bird";
-  import Turtle from "lucide-svelte/icons/turtle";
+  import { marked } from 'marked';
 
-  import { Label } from "$lib/components/ui/label/index.js";
-  import { Input } from "$lib/components/ui/input/index.js";
-  import * as Select from "$lib/components/ui/select/index.js";
-  import { Textarea } from "$lib/components/ui/textarea/index.js";
+  const settingsMarkdown = `
+# Settings
+
+## Model
+- **Neural Genesis**: Our fastest model for general use cases.
+- **Neural Explorer**: Performance and speed for efficiency.
+- **Neural Quantum**: The most powerful model for complex computations.
+
+## Parameters
+- **Temperature**: 0.4
+- **Top P**: 0.7
+- **Top K**: 0.0
+
+## Messages
+- **Role**: System
+- **Content**: You are a...
+`;
+
+  const htmlContent = marked(settingsMarkdown);
 </script>
 
-<form class="grid w-full items-start gap-6">
-  <fieldset class="grid gap-6 rounded-lg border p-4">
-    <legend class="-ml-1 px-1 text-sm font-medium"> Settings </legend>
-    <div class="grid gap-3">
-      <Label for="model">Model</Label>
-      <Select.Root>
-        <Select.Trigger
-          id="model"
-          class="items-start [&_[data-description]]:hidden"
-        >
-          <Select.Value placeholder="Select a model" />
-        </Select.Trigger>
-        <Select.Content>
-          <Select.Item value="genesis" label="Neural Genesis">
-            <div class="flex items-start gap-3 text-muted-foreground">
-              <Rabbit class="size-5" />
-              <div class="grid gap-0.5">
-                <p>
-                  Neural
-                  <span class="font-medium text-foreground">
-                    Genesis
-                  </span>
-                </p>
-                <p class="text-xs" data-description>
-                  Our fastest model for general use cases.
-                </p>
-              </div>
-            </div>
-          </Select.Item>
-          <Select.Item value="explorer" label="Neural Explorer">
-            <div class="flex items-start gap-3 text-muted-foreground">
-              <Bird class="size-5" />
-              <div class="grid gap-0.5">
-                <p>
-                  Neural
-                  <span class="font-medium text-foreground">
-                    Explorer
-                  </span>
-                </p>
-                <p class="text-xs" data-description>
-                  Performance and speed for efficiency.
-                </p>
-              </div>
-            </div>
-          </Select.Item>
-          <Select.Item value="quantum">
-            <div class="flex items-start gap-3 text-muted-foreground">
-              <Turtle class="size-5" />
-              <div class="grid gap-0.5">
-                <p>
-                  Neural
-                  <span class="font-medium text-foreground">
-                    Quantum
-                  </span>
-                </p>
-                <p class="text-xs" data-description>
-                  The most powerful model for complex
-                  computations.
-                </p>
-              </div>
-            </div>
-          </Select.Item>
-        </Select.Content>
-      </Select.Root>
-    </div>
-    <div class="grid gap-3">
-      <Label for="temperature">Temperature</Label>
-      <Input id="temperature" type="number" placeholder="0.4" />
-    </div>
-    <div class="grid grid-cols-2 gap-4">
-      <div class="grid gap-3">
-        <Label for="top-p">Top P</Label>
-        <Input id="top-p" type="number" placeholder="0.7" />
-      </div>
-      <div class="grid gap-3">
-        <Label for="top-k">Top K</Label>
-        <Input id="top-k" type="number" placeholder="0.0" />
-      </div>
-    </div>
-  </fieldset>
-  <fieldset class="grid gap-6 rounded-lg border p-4">
-    <legend class="-ml-1 px-1 text-sm font-medium"> Messages </legend>
-    <div class="grid gap-3">
-      <Label for="role">Role</Label>
-      <Select.Root selected={{ value: "system", label: "System" }}>
-        <Select.Trigger>
-          <Select.Value placeholder="Select a role" />
-        </Select.Trigger>
-        <Select.Content>
-          <Select.Item value="system">System</Select.Item>
-          <Select.Item value="user">User</Select.Item>
-          <Select.Item value="assistant">Assistant</Select.Item>
-        </Select.Content>
-      </Select.Root>
-    </div>
-    <div class="grid gap-3">
-      <Label for="content">Content</Label>
-      <Textarea
-        id="content"
-        placeholder="You are a..."
-        class="min-h-[9.5rem]"
-      />
-    </div>
-  </fieldset>
-</form>
+<div class="prose dark:prose-invert max-w-none">
+  {@html htmlContent}
+</div>
