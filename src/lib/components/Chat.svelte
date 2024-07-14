@@ -53,7 +53,7 @@
   <Badge variant="outline" class="absolute right-3 top-3">Output</Badge>
   <div class="flex-1 overflow-y-auto mb-4 space-y-4">
     {#each messages as msg}
-      <ChatMessage type={msg.type} content={msg.content} />
+      <ChatMessage type={msg.type} content={msg.content.message} />
     {/each}
   </div>
   <form class="relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring">
