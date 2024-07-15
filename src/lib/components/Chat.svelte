@@ -3,6 +3,7 @@
   import Paperclip from "lucide-svelte/icons/paperclip";
   import Mic from "lucide-svelte/icons/mic";
   import CornerDownLeft from "lucide-svelte/icons/corner-down-left";
+  import { fly } from 'svelte/transition';
 
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -18,14 +19,16 @@
 
   async function sendEchoRequest() {
     console.log(`sending echo request with ${message}, correlation: ${$correlationId}`)
-    messages = [...messages, { type: 'sent', content: message }];
+    const sentMessage = message;
+    message = ''; // Clear the input immediately
+    messages = [...messages, { type: 'sent', content: sentMessage }];
     const response = await fetch('http://localhost:3000/api/echo', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        message,
+        message: sentMessage,
         correlationId: $correlationId,
       }),
     });
@@ -41,7 +44,6 @@
       }];
       console.log(data);
     }
-    message = '';
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -58,12 +60,14 @@
   <Badge variant="outline" class="absolute right-3 top-3">Output</Badge>
   <div class="flex-1 overflow-y-auto mb-4 space-y-4">
     {#each messages as msg}
-      <ChatMessage 
-        type={msg.type} 
-        content={msg.content} 
-        intent={msg.intent} 
-        slider={msg.slider}
-      />
+      <div transition:fly="{{ y: 20, duration: 300 }}">
+        <ChatMessage 
+          type={msg.type} 
+          content={msg.content} 
+          intent={msg.intent} 
+          slider={msg.slider}
+        />
+      </div>
     {/each}
   </div>
   <form class="relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring">
