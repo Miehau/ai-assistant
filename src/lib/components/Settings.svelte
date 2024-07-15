@@ -1,7 +1,10 @@
 <script lang="ts">
   import { marked } from 'marked';
+  import { getContext } from 'svelte';
 
-  const settingsMarkdown = `
+  const currentSlider = getContext('currentSlider');
+
+  $: settingsMarkdown = `
 # Settings
 
 ## Model
@@ -13,13 +16,14 @@
 - **Temperature**: 0.4
 - **Top P**: 0.7
 - **Top K**: 0.0
+${$currentSlider ? `- **Slider**: ${$currentSlider}` : ''}
 
 ## Messages
 - **Role**: System
 - **Content**: You are a...
 `;
 
-  const htmlContent = marked(settingsMarkdown);
+  $: htmlContent = marked(settingsMarkdown);
 </script>
 
 <div class="prose dark:prose-invert max-w-none">

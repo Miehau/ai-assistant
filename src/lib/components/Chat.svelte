@@ -4,7 +4,7 @@
   import Mic from "lucide-svelte/icons/mic";
   import CornerDownLeft from "lucide-svelte/icons/corner-down-left";
   import { fly } from 'svelte/transition';
-  import { onMount, afterUpdate } from 'svelte';
+  import { onMount, afterUpdate, setContext } from 'svelte';
 
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -18,6 +18,9 @@
   let correlationId = writable<string | null>(null);
   let messages: Array<{ type: 'sent' | 'received', content: string, intent?: string, slider?: string }> = [];
   let chatContainer: HTMLElement;
+  let currentSlider = writable<string | null>(null);
+
+  setContext('currentSlider', currentSlider);
 
   function scrollToBottom() {
     if (chatContainer) {
@@ -58,6 +61,7 @@
         intent: data.intent,
         slider: data.slider
       }];
+      currentSlider.set(data.slider || null);
       console.log(data);
     }
   }
