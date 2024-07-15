@@ -13,6 +13,7 @@
   import { Label } from "$lib/components/ui/label/index.js";
   import { writable } from 'svelte/store';
   import ChatMessage from './ChatMessage.svelte';
+  import { sendEchoRequest } from '$lib/services/api';
 
   let message = '';
   let correlationId = writable<string | null>(null);
@@ -36,24 +37,14 @@
     scrollToBottom();
   });
 
-  async function sendEchoRequest() {
+  async function handleSendEchoRequest() {
     console.log(`sending echo request with ${message}, correlation: ${$correlationId}`)
     const sentMessage = message;
     message = ''; // Clear the input immediately
     messages = [...messages, { type: 'sent', content: sentMessage }];
-    const response = await fetch('http://localhost:3000/api/echo', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: sentMessage,
-        correlationId: $correlationId,
-      }),
-    });
-
-    if (response.ok) {
-      const data: EchoResponse = await response.json();
+    
+    try {
+      const data = await sendEchoRequest(sentMessage, $correlationId);
       correlationId.set(data.correlationId || null);
       messages = [...messages, { 
         type: 'received', 
@@ -63,13 +54,16 @@
       }];
       currentSlider.set(data.slider || null);
       console.log(data);
+    } catch (error) {
+      console.error('Failed to send echo request:', error);
+      // Handle error (e.g., show an error message to the user)
     }
   }
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      sendEchoRequest();
+      handleSendEchoRequest();
     }
   }
 </script>
@@ -120,7 +114,7 @@
         </Tooltip.Trigger>
         <Tooltip.Content side="top">Use Microphone</Tooltip.Content>
       </Tooltip.Root>
-      <Button type="button" on:click={sendEchoRequest} size="sm" class="ml-auto gap-1.5">
+      <Button type="button" on:click={handleSendEchoRequest} size="sm" class="ml-auto gap-1.5">
         Send Message
         <CornerDownLeft class="size-3.5" />
       </Button>
