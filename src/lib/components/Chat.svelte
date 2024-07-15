@@ -70,23 +70,25 @@
   }
 </script>
 
-<div
-  class="relative flex h-full min-h-[50vh] flex-col rounded-xl bg-muted/50 p-4 lg:col-span-2"
->
+<div class="relative flex flex-col h-full min-h-[50vh] rounded-xl bg-muted/50 p-4 lg:col-span-2">
   <Badge variant="outline" class="absolute right-3 top-3">Output</Badge>
-  <div bind:this={chatContainer} class="flex-1 overflow-y-auto mb-4 space-y-4">
-    {#each messages as msg}
-      <div transition:fly="{{ y: 20, duration: 300 }}">
-        <ChatMessage 
-          type={msg.type} 
-          content={msg.content} 
-          intent={msg.intent} 
-          slider={msg.slider}
-        />
-      </div>
-    {/each}
+  
+  <div class="flex-1 overflow-hidden">
+    <div bind:this={chatContainer} class="h-full overflow-y-auto pr-4 space-y-4">
+      {#each messages as msg}
+        <div transition:fly="{{ y: 20, duration: 300 }}">
+          <ChatMessage 
+            type={msg.type} 
+            content={msg.content} 
+            intent={msg.intent} 
+            slider={msg.slider}
+          />
+        </div>
+      {/each}
+    </div>
   </div>
-  <form class="relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring">
+  
+  <form class="mt-4 relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring">
     <Label for="message" class="sr-only">Message</Label>
     <Textarea
       id="message"
