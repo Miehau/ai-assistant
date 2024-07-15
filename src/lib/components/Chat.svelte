@@ -4,6 +4,7 @@
   import Mic from "lucide-svelte/icons/mic";
   import CornerDownLeft from "lucide-svelte/icons/corner-down-left";
   import { fly } from 'svelte/transition';
+  import { onMount, afterUpdate } from 'svelte';
 
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -16,6 +17,21 @@
   let message = '';
   let correlationId = writable<string | null>(null);
   let messages: Array<{ type: 'sent' | 'received', content: string, intent?: string, slider?: string }> = [];
+  let chatContainer: HTMLElement;
+
+  function scrollToBottom() {
+    if (chatContainer) {
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+  }
+
+  onMount(() => {
+    scrollToBottom();
+  });
+
+  afterUpdate(() => {
+    scrollToBottom();
+  });
 
   async function sendEchoRequest() {
     console.log(`sending echo request with ${message}, correlation: ${$correlationId}`)
@@ -58,7 +74,7 @@
   class="relative flex h-full min-h-[50vh] flex-col rounded-xl bg-muted/50 p-4 lg:col-span-2"
 >
   <Badge variant="outline" class="absolute right-3 top-3">Output</Badge>
-  <div class="flex-1 overflow-y-auto mb-4 space-y-4">
+  <div bind:this={chatContainer} class="flex-1 overflow-y-auto mb-4 space-y-4">
     {#each messages as msg}
       <div transition:fly="{{ y: 20, duration: 300 }}">
         <ChatMessage 
