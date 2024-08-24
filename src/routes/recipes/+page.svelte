@@ -26,19 +26,26 @@
   .input-focused .container,
   .input-focused .container * {
     filter: blur(5px);
+    transition: filter 0.3s ease;
   }
 
   .input-focused input[type="text"] {
-    transition: transform 0.3s ease;
+    transition: all 0.3s ease;
     z-index: 100;
     position: relative;
-    transform: scale(1.2);
+    transform: scale(1.5);
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+  }
+
+  .input-wrapper {
+    position: relative;
+    z-index: 10;
   }
 </style>
 
 <MainLayout>
   <div class="container mx-auto py-8">
-  <div class="mb-8 flex justify-center relative">
+  <div class="mb-8 flex justify-center relative input-wrapper">
       <Input
         type="text"
         placeholder="Add a new recipe..."
