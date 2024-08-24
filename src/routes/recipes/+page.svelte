@@ -30,8 +30,9 @@
 
   .input-focused input[type="text"] {
     transition: transform 0.3s ease;
-    z-index: 10;
-    transform: scale(2);
+    z-index: 100;
+    position: relative;
+    transform: scale(1.2);
   }
 </style>
 
