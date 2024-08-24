@@ -22,6 +22,7 @@
   ];
 
   let isInputFocused = false;
+  let inputValue = "";
 
   function handleFocus() {
     isInputFocused = true;
@@ -30,19 +31,44 @@
   function handleBlur() {
     isInputFocused = false;
   }
+
+  async function handleSubmit(event: Event) {
+    event.preventDefault();
+    if (inputValue.trim()) {
+      try {
+        const response = await fetch('/api/recipes', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ recipe: inputValue }),
+        });
+
+        if (response.ok) {
+          console.log('Recipe submitted successfully');
+          inputValue = ""; // Clear the input after successful submission
+        } else {
+          console.error('Failed to submit recipe');
+        }
+      } catch (error) {
+        console.error('Error submitting recipe:', error);
+      }
+    }
+  }
 </script>
 
 <MainLayout>
   <div class="container mx-auto py-8">
-    <div class="mb-8 flex justify-center relative input-wrapper" class:focused={isInputFocused}>
+    <form on:submit={handleSubmit} class="mb-8 flex justify-center relative input-wrapper" class:focused={isInputFocused}>
       <Input
         type="text"
         placeholder="Add a new recipe..."
         class="w-full max-w-xl rounded-full transition-all duration-300"
         on:focus={handleFocus}
         on:blur={handleBlur}
+        bind:value={inputValue}
       />
-    </div>
+    </form>
 
     <div class="content" class:blurred={isInputFocused}>
       <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
