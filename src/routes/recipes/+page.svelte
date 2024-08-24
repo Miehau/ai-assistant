@@ -23,11 +23,13 @@
 </script>
 
 <style>
-  .input-focused .container {
+  .input-focused .container,
+  .input-focused .container * {
     filter: blur(5px);
   }
 
   .input-focused input[type="text"] {
+    transition: transform 0.3s ease;
     z-index: 10;
     transform: scale(2);
   }
