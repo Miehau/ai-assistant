@@ -15,7 +15,10 @@
   import * as Drawer from "$lib/components/ui/drawer/index.js";
   import SettingsComponent from "$lib/components/Settings.svelte";
   import Chat from "$lib/components/Chat.svelte";
+  import Navbar from "$lib/components/Navbar.svelte";
 </script>
+
+<Navbar />
 
 <div class="grid h-screen w-full pl-[53px]">
   <aside class="inset-y fixed left-0 z-20 flex h-full flex-col border-r">

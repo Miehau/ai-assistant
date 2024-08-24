@@ -19,7 +19,10 @@
     },
     // Add more recipes as needed
   ];
+  import Navbar from "$lib/components/Navbar.svelte";
 </script>
+
+<Navbar />
 
 <div class="container mx-auto py-8">
   <div class="mb-8 flex justify-center">
