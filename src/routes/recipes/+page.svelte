@@ -2,6 +2,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Card from "$lib/components/ui/card";
+  import MainLayout from "$lib/components/MainLayout.svelte";
 
   // Sample data for recipes (replace with actual data later)
   const recipes = [
@@ -19,21 +20,31 @@
     },
     // Add more recipes as needed
   ];
-  import MainLayout from "$lib/components/MainLayout.svelte";
-</script>
 
+  let isInputFocused = false;
+
+  function handleFocus() {
+    isInputFocused = true;
+  }
+
+  function handleBlur() {
+    isInputFocused = false;
+  }
+</script>
 
 <MainLayout>
   <div class="container mx-auto py-8">
-    <div class="mb-8 flex justify-center relative input-wrapper" id="inputWrapper">
+    <div class="mb-8 flex justify-center relative input-wrapper" class:focused={isInputFocused}>
       <Input
         type="text"
         placeholder="Add a new recipe..."
         class="w-full max-w-xl rounded-full transition-all duration-300"
+        on:focus={handleFocus}
+        on:blur={handleBlur}
       />
     </div>
 
-    <div class="blur-content">
+    <div class="content" class:blurred={isInputFocused}>
       <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
     {#each recipes as recipe}
       <Card.Root>
@@ -55,3 +66,23 @@
   </div>
   </div>
 </MainLayout>
+
+<style>
+  .input-wrapper {
+    z-index: 10;
+    transition: all 0.3s ease-in-out;
+  }
+
+  .input-wrapper.focused :global(input) {
+    transform: scale(1.2);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+
+  .content {
+    transition: filter 0.3s ease-in-out;
+  }
+
+  .content.blurred {
+    filter: blur(5px);
+  }
+</style>
