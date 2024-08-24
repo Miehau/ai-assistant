@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
-  import ResizableInput from "$lib/components/ui/resizableinput/resizableinput.svelte";
   import * as Card from "$lib/components/ui/card";
 
   // Sample data for recipes (replace with actual data later)
@@ -26,7 +25,7 @@
 <MainLayout>
   <div class="container mx-auto py-8">
   <div class="mb-8 flex justify-center">
-      <ResizableInput type="text" placeholder="Add a new recipe..." class="w-full max-w-xl rounded-full" />
+      <Input type="text" placeholder="Add a new recipe..." class="w-full max-w-xl rounded-full" />
   </div>
 
   <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
