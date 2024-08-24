@@ -20,6 +20,9 @@
     // Add more recipes as needed
   ];
   import MainLayout from "$lib/components/MainLayout.svelte";
+</script>
+
+<style>
   .input-focused .container {
     filter: blur(5px);
   }
