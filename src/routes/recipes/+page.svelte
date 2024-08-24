@@ -103,15 +103,7 @@
           <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
         </Card.Header>
         <Card.Content class="p-4">
-          <Card.Title class="text-2xl mb-3">{recipe.title}</Card.Title>
-          <div class="mt-2 mb-2">
-            <h4 class="font-semibold">Method:</h4>
-            <ol class="list-decimal list-inside">
-              {#each recipe.method as step}
-                <li>{step}</li>
-              {/each}
-            </ol>
-          </div>
+          <Card.Title class="text-2xl mb-3 justify-end">{recipe.title}</Card.Title>
           <div class="mt-2 flex flex-wrap justify-end gap-2">
             {#each recipe.tags as tag}
               <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
