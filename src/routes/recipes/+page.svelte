@@ -24,8 +24,14 @@
 
 <MainLayout>
   <div class="container mx-auto py-8">
-  <div class="mb-8 flex justify-center">
-      <Input type="text" placeholder="Add a new recipe..." class="w-full max-w-xl rounded-full" />
+  <div class="mb-8 flex justify-center relative">
+      <Input
+        type="text"
+        placeholder="Add a new recipe..."
+        class="w-full max-w-xl rounded-full transition-all duration-300"
+        on:focus={() => document.body.classList.add('input-focused')}
+        on:blur={() => document.body.classList.remove('input-focused')}
+      />
   </div>
 
   <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
