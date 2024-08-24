@@ -3,6 +3,7 @@
   import { Input } from "$lib/components/ui/input";
   import * as Card from "$lib/components/ui/card";
   import MainLayout from "$lib/components/MainLayout.svelte";
+  import { config } from "$lib/config";
 
   // Sample data for recipes (replace with actual data later)
   const recipes = [
@@ -36,7 +37,7 @@
     event.preventDefault();
     if (inputValue.trim()) {
       try {
-        const response = await fetch('/api/recipes', {
+        const response = await fetch(`${config.apiUrl}/api/recipes`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
