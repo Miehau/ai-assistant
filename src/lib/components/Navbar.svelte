@@ -20,29 +20,33 @@
   <nav class="grid gap-1 p-2">
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
-        <Button
-          variant="ghost"
-          size="icon"
-          class="rounded-lg bg-muted"
-          aria-label="Playground"
-          builders={[builder]}
-        >
-          <SquareTerminal class="size-5" />
-        </Button>
+        <a href="/">
+          <Button
+            variant="ghost"
+            size="icon"
+            class="rounded-lg bg-muted"
+            aria-label="Playground"
+            builders={[builder]}
+          >
+            <SquareTerminal class="size-5" />
+          </Button>
+        </a>
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Playground</Tooltip.Content>
     </Tooltip.Root>
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
-        <Button
-          variant="ghost"
-          size="icon"
-          class="rounded-lg"
-          aria-label="Models"
-          builders={[builder]}
-        >
-          <Bot class="size-5" />
-        </Button>
+        <a href="/recipes">
+          <Button
+            variant="ghost"
+            size="icon"
+            class="rounded-lg"
+            aria-label="Models"
+            builders={[builder]}
+          >
+            <Bot class="size-5" />
+          </Button>
+        </a>
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Models</Tooltip.Content>
     </Tooltip.Root>
