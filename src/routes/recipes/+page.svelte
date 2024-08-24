@@ -37,6 +37,7 @@
 
   let isInputFocused = false;
   let inputValue = "";
+  let isLoading = false;
 
   function handleFocus() {
     isInputFocused = true;
@@ -49,6 +50,7 @@
   async function handleSubmit(event: Event) {
     event.preventDefault();
     if (inputValue.trim()) {
+      isLoading = true;
       try {
         const response = await fetch(`${config.apiUrl}/api/recipes`, {
           method: 'POST',
@@ -77,6 +79,8 @@
         }
       } catch (error) {
         console.error('Error submitting recipe:', error);
+      } finally {
+        isLoading = false;
       }
     }
   }
@@ -92,7 +96,11 @@
         on:focus={handleFocus}
         on:blur={handleBlur}
         bind:value={inputValue}
+        disabled={isLoading}
       />
+      {#if isLoading}
+        <div class="spinner absolute right-4 top-1/2 transform -translate-y-1/2"></div>
+      {/if}
     </form>
 
     <div class="content" class:blurred={isInputFocused}>
@@ -135,5 +143,19 @@
 
   .content.blurred {
     filter: blur(5px);
+  }
+
+  .spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #3498db;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
   }
 </style>
