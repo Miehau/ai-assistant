@@ -5,21 +5,43 @@
   import MainLayout from "$lib/components/MainLayout.svelte";
   import { config } from "$lib/config";
 
-  // Sample data for recipes (replace with actual data later)
-  const recipes = [
+  interface Ingredient {
+    name: string;
+    unit: string;
+  }
+
+  interface Recipe {
+    id: number;
+    title: string;
+    image: string;
+    ingredients: Ingredient[];
+    method: string[];
+    tags: string[];
+  }
+
+  let recipes: Recipe[] = [
     {
       id: 1,
       title: "Spaghetti Carbonara",
       image: "https://example.com/carbonara.jpg",
+      ingredients: [
+        { name: "Spaghetti", unit: "500g" },
+        { name: "Eggs", unit: "4" }
+      ],
+      method: ["Boil pasta", "Mix eggs and cheese"],
       tags: ["Italian", "Pasta", "Quick"]
     },
     {
       id: 2,
       title: "Chicken Stir Fry",
       image: "https://example.com/stir-fry.jpg",
+      ingredients: [
+        { name: "Chicken breast", unit: "500g" },
+        { name: "Mixed vegetables", unit: "300g" }
+      ],
+      method: ["Cut chicken", "Stir fry vegetables"],
       tags: ["Asian", "Chicken", "Healthy"]
     },
-    // Add more recipes as needed
   ];
 
   let isInputFocused = false;
@@ -46,6 +68,18 @@
         });
 
         if (response.ok) {
+          const newRecipe = await response.json();
+          const imageUrl = URL.createObjectURL(new Blob([newRecipe.image], { type: 'image/jpeg' }));
+          
+          recipes = [...recipes, {
+            id: recipes.length + 1,
+            title: inputValue,
+            image: imageUrl,
+            ingredients: newRecipe.ingredients,
+            method: newRecipe.method,
+            tags: [] // You might want to generate tags based on ingredients or method
+          }];
+
           console.log('Recipe submitted successfully');
           inputValue = ""; // Clear the input after successful submission
         } else {
@@ -78,8 +112,24 @@
         <Card.Header class="p-0">
           <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
         </Card.Header>
-        <Card.Content class="p-4 text-right">
+        <Card.Content class="p-4">
           <Card.Title class="text-2xl mb-3">{recipe.title}</Card.Title>
+          <div class="mt-2 mb-2">
+            <h4 class="font-semibold">Ingredients:</h4>
+            <ul class="list-disc list-inside">
+              {#each recipe.ingredients as ingredient}
+                <li>{ingredient.name} - {ingredient.unit}</li>
+              {/each}
+            </ul>
+          </div>
+          <div class="mt-2 mb-2">
+            <h4 class="font-semibold">Method:</h4>
+            <ol class="list-decimal list-inside">
+              {#each recipe.method as step}
+                <li>{step}</li>
+              {/each}
+            </ol>
+          </div>
           <div class="mt-2 flex flex-wrap justify-end gap-2">
             {#each recipe.tags as tag}
               <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
