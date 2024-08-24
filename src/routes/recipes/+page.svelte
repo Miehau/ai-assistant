@@ -22,26 +22,6 @@
   import MainLayout from "$lib/components/MainLayout.svelte";
 </script>
 
-<style>
-  .input-wrapper {
-    position: relative;
-    z-index: 10;
-  }
-
-  .input-focused .blur-content {
-    filter: blur(5px);
-    transition: filter 0.3s ease;
-  }
-
-  .input-wrapper input[type="text"] {
-    transition: all 0.3s ease;
-  }
-
-  .input-wrapper.focused input[type="text"] {
-    transform: scale(1.05);
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
-  }
-</style>
 
 <MainLayout>
   <div class="container mx-auto py-8">
@@ -50,14 +30,6 @@
         type="text"
         placeholder="Add a new recipe..."
         class="w-full max-w-xl rounded-full transition-all duration-300"
-        on:focus={() => {
-          document.body.classList.add('input-focused');
-          document.getElementById('inputWrapper').classList.add('focused');
-        }}
-        on:blur={() => {
-          document.body.classList.remove('input-focused');
-          document.getElementById('inputWrapper').classList.remove('focused');
-        }}
       />
     </div>
 
