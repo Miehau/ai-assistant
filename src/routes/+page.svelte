@@ -1,21 +1,12 @@
 <script lang="ts">
-  import Triangle from "lucide-svelte/icons/triangle";
-  import Bot from "lucide-svelte/icons/bot";
-  import SquareTerminal from "lucide-svelte/icons/square-terminal";
-  import CodeXML from "lucide-svelte/icons/code-xml";
-  import Settings2 from "lucide-svelte/icons/settings-2";
-  import LifeBuoy from "lucide-svelte/icons/life-buoy";
-  import Book from "lucide-svelte/icons/book";
-  import SquareUser from "lucide-svelte/icons/square-user";
   import Settings from "lucide-svelte/icons/settings";
   import Share from "lucide-svelte/icons/share";
 
-  import { Button } from "$lib/components/ui/button/index.js";
-  import * as Tooltip from "$lib/components/ui/tooltip/index.js";
-  import * as Drawer from "$lib/components/ui/drawer/index.js";
-  import SettingsComponent from "$lib/components/Settings.svelte";
   import Chat from "$lib/components/Chat.svelte";
   import MainLayout from "$lib/components/MainLayout.svelte";
+  import SettingsComponent from "$lib/components/Settings.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import * as Drawer from "$lib/components/ui/drawer/index.js";
 </script>
 
 <MainLayout>
