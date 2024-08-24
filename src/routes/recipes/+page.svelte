@@ -23,39 +23,46 @@
 </script>
 
 <style>
-  .input-focused .container,
-  .input-focused .container * {
+  .input-wrapper {
+    position: relative;
+    z-index: 10;
+  }
+
+  .input-focused .blur-content {
     filter: blur(5px);
     transition: filter 0.3s ease;
   }
 
-  .input-focused input[type="text"] {
+  .input-wrapper input[type="text"] {
     transition: all 0.3s ease;
-    z-index: 100;
-    position: relative;
-    transform: scale(1.5);
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
   }
 
-  .input-wrapper {
-    position: relative;
-    z-index: 10;
+  .input-wrapper.focused input[type="text"] {
+    transform: scale(1.05);
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
   }
 </style>
 
 <MainLayout>
   <div class="container mx-auto py-8">
-  <div class="mb-8 flex justify-center relative input-wrapper">
+    <div class="mb-8 flex justify-center relative input-wrapper" id="inputWrapper">
       <Input
         type="text"
         placeholder="Add a new recipe..."
         class="w-full max-w-xl rounded-full transition-all duration-300"
-        on:focus={() => document.body.classList.add('input-focused')}
-        on:blur={() => document.body.classList.remove('input-focused')}
+        on:focus={() => {
+          document.body.classList.add('input-focused');
+          document.getElementById('inputWrapper').classList.add('focused');
+        }}
+        on:blur={() => {
+          document.body.classList.remove('input-focused');
+          document.getElementById('inputWrapper').classList.remove('focused');
+        }}
       />
-  </div>
+    </div>
 
-  <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <div class="blur-content">
+      <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
     {#each recipes as recipe}
       <Card.Root>
         <Card.Header class="p-0">
