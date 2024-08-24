@@ -27,7 +27,7 @@
     filter: blur(5px);
   }
 
-  .input-focused input {
+  .input-focused input[type="text"] {
     z-index: 10;
     transform: scale(1.1);
   }
