@@ -73,7 +73,6 @@
           }];
 
           console.log('Recipe submitted successfully');
-          inputValue = ""; // Clear the input after successful submission
         } else {
           console.error('Failed to submit recipe');
         }
@@ -81,6 +80,7 @@
         console.error('Error submitting recipe:', error);
       } finally {
         isLoading = false;
+        inputValue = ""; // Clear the input after processing (success or failure)
       }
     }
   }
@@ -89,18 +89,21 @@
 <MainLayout>
   <div class="container mx-auto py-8">
     <form on:submit={handleSubmit} class="mb-8 flex justify-center relative input-wrapper" class:focused={isInputFocused}>
-      <Input
-        type="text"
-        placeholder="Add a new recipe..."
-        class="w-full max-w-xl rounded-full transition-all duration-300"
-        on:focus={handleFocus}
-        on:blur={handleBlur}
-        bind:value={inputValue}
-        disabled={isLoading}
-      />
-      {#if isLoading}
-        <div class="spinner absolute right-4 top-1/2 transform -translate-y-1/2"></div>
-      {/if}
+      <div class="relative w-full max-w-xl">
+        <Input
+          type="text"
+          placeholder="Add a new recipe..."
+          class="w-full rounded-full transition-all duration-300 pr-10"
+          class:pr-12={isLoading}
+          on:focus={handleFocus}
+          on:blur={handleBlur}
+          bind:value={inputValue}
+          disabled={isLoading}
+        />
+        {#if isLoading}
+          <div class="spinner absolute right-4 top-1/2 transform -translate-y-1/2"></div>
+        {/if}
+      </div>
     </form>
 
     <div class="content" class:blurred={isInputFocused}>
@@ -146,8 +149,8 @@
   }
 
   .spinner {
-    width: 20px;
-    height: 20px;
+    width: 16px;
+    height: 16px;
     border: 2px solid #f3f3f3;
     border-top: 2px solid #3498db;
     border-radius: 50%;
