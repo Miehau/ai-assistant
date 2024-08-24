@@ -29,7 +29,7 @@
 
   .input-focused input[type="text"] {
     z-index: 10;
-    transform: scale(1.1);
+    transform: scale(1.2);
   }
 </style>
 
