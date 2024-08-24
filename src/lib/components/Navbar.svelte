@@ -9,6 +9,7 @@
   import SquareUser from "lucide-svelte/icons/square-user";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
+    import { CookingPot } from "lucide-svelte";
 </script>
 
 <aside class="inset-y fixed left-0 z-20 flex h-full flex-col border-r">
@@ -44,7 +45,7 @@
             aria-label="Recipes"
             builders={[builder]}
           >
-            <Bot class="size-5" />
+            <CookingPot class="size-5" />
           </Button>
         </a>
       </Tooltip.Trigger>
