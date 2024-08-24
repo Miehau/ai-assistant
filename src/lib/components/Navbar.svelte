@@ -42,14 +42,14 @@
             variant="ghost"
             size="icon"
             class="rounded-lg"
-            aria-label="Recipes"
+            aria-label="Models"
             builders={[builder]}
           >
-            <CookingPot class="size-5" />
+            <Bot class="size-5" />
           </Button>
         </a>
       </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Recipes</Tooltip.Content>
+      <Tooltip.Content side="right" sideOffset={5}>Models</Tooltip.Content>
     </Tooltip.Root>
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
