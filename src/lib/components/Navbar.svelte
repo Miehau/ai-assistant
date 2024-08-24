@@ -96,7 +96,6 @@
   <nav class="mt-auto grid gap-1 p-2">
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
-        <a href="/">
           <Button
             variant="ghost"
             size="icon"
@@ -106,7 +105,6 @@
           >
             <LifeBuoy class="size-5" />
           </Button>
-        </a>
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Help</Tooltip.Content>
     </Tooltip.Root>
