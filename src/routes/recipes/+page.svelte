@@ -24,7 +24,7 @@
 
 <Navbar />
 
-<div class="container mx-auto py-8">
+<div class="container mx-auto py-8 pl-[53px]">
   <div class="mb-8 flex justify-center">
       <Input type="text" placeholder="Add a new recipe..." class="w-full max-w-xl rounded-full" />
   </div>
