@@ -20,7 +20,15 @@
     // Add more recipes as needed
   ];
   import MainLayout from "$lib/components/MainLayout.svelte";
-</script>
+  .input-focused .container {
+    filter: blur(5px);
+  }
+
+  .input-focused input {
+    z-index: 10;
+    transform: scale(1.1);
+  }
+</style>
 
 <MainLayout>
   <div class="container mx-auto py-8">
