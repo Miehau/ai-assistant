@@ -19,12 +19,11 @@
     },
     // Add more recipes as needed
   ];
-  import Navbar from "$lib/components/Navbar.svelte";
+  import MainLayout from "$lib/components/MainLayout.svelte";
 </script>
 
-<Navbar />
-
-<div class="container mx-auto py-8 pl-[53px]">
+<MainLayout>
+  <div class="container mx-auto py-8">
   <div class="mb-8 flex justify-center">
       <Input type="text" placeholder="Add a new recipe..." class="w-full max-w-xl rounded-full" />
   </div>
@@ -48,4 +47,5 @@
       </Card.Root>
     {/each}
   </div>
-</div>
+  </div>
+</MainLayout>
