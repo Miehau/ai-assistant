@@ -25,7 +25,7 @@
 <MainLayout>
   <div class="container mx-auto py-8">
   <div class="mb-8 flex justify-center">
-      <Input type="text" placeholder="Add a new recipe..." class="w-full max-w-xl rounded-full" />
+      <ResizableInput type="text" placeholder="Add a new recipe..." class="w-full max-w-xl rounded-full" />
   </div>
 
   <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
