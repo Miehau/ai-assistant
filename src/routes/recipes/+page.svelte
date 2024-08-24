@@ -14,7 +14,6 @@
     id: number;
     title: string;
     image: string;
-    ingredients: Ingredient[];
     method: string[];
     tags: string[];
   }
@@ -24,10 +23,6 @@
       id: 1,
       title: "Spaghetti Carbonara",
       image: "https://example.com/carbonara.jpg",
-      ingredients: [
-        { name: "Spaghetti", unit: "500g" },
-        { name: "Eggs", unit: "4" }
-      ],
       method: ["Boil pasta", "Mix eggs and cheese"],
       tags: ["Italian", "Pasta", "Quick"]
     },
@@ -35,10 +30,6 @@
       id: 2,
       title: "Chicken Stir Fry",
       image: "https://example.com/stir-fry.jpg",
-      ingredients: [
-        { name: "Chicken breast", unit: "500g" },
-        { name: "Mixed vegetables", unit: "300g" }
-      ],
       method: ["Cut chicken", "Stir fry vegetables"],
       tags: ["Asian", "Chicken", "Healthy"]
     },
@@ -73,11 +64,10 @@
           
           recipes = [...recipes, {
             id: recipes.length + 1,
-            title: inputValue,
+            title: newRecipe.title,
             image: imageUrl,
-            ingredients: newRecipe.ingredients,
             method: newRecipe.method,
-            tags: [] // You might want to generate tags based on ingredients or method
+            tags: [] // You might want to generate tags based on method
           }];
 
           console.log('Recipe submitted successfully');
@@ -114,14 +104,6 @@
         </Card.Header>
         <Card.Content class="p-4">
           <Card.Title class="text-2xl mb-3">{recipe.title}</Card.Title>
-          <div class="mt-2 mb-2">
-            <h4 class="font-semibold">Ingredients:</h4>
-            <ul class="list-disc list-inside">
-              {#each recipe.ingredients as ingredient}
-                <li>{ingredient.name} - {ingredient.unit}</li>
-              {/each}
-            </ul>
-          </div>
           <div class="mt-2 mb-2">
             <h4 class="font-semibold">Method:</h4>
             <ol class="list-decimal list-inside">
