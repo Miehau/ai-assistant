@@ -115,7 +115,7 @@
           <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
         </Card.Header>
         <Card.Content class="p-4">
-          <Card.Title class="text-2xl mb-3 justify-end">{recipe.title}</Card.Title>
+          <Card.Title class="text-2xl mb-3 text-right">{recipe.title}</Card.Title>
           <div class="mt-2 flex flex-wrap justify-end gap-2">
             {#each recipe.tags as tag}
               <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
