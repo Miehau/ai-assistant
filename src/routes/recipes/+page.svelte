@@ -223,16 +223,6 @@
               </div>
             </div>
           </div>
-          <div class="mt-4">
-            <h3 class="font-semibold mb-2">Tags:</h3>
-            <div class="flex flex-wrap gap-2">
-              {#each selectedRecipe?.tags || [] as tag}
-                <span class="rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground">
-                  {tag}
-                </span>
-              {/each}
-            </div>
-          </div>
         </div>
       {/if}
       <Dialog.Footer class="mt-4">
