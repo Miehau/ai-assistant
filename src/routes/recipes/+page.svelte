@@ -201,10 +201,10 @@
       {:else}
         <div class="flex-grow overflow-hidden flex flex-col">
           <img src={selectedRecipe?.image} alt={selectedRecipe?.title} class="w-full h-48 object-cover rounded-md mb-4" />
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 flex-grow overflow-scroll">
-            <div class="overflow-hidden flex flex-col">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 flex-grow">
+            <div class="flex flex-col">
               <h3 class="font-semibold mb-2">Ingredients:</h3>
-              <div class="overflow-y-auto flex-grow pr-2">
+              <div class="overflow-y-auto pr-2 flex-grow" style="max-height: 300px;">
                 <ul class="list-disc list-inside pb-4">
                   {#each selectedRecipe?.ingredients || [] as ingredient}
                     <li class="mb-1">{ingredient.amount} {ingredient.unit} {ingredient.name}</li>
@@ -212,9 +212,9 @@
                 </ul>
               </div>
             </div>
-            <div class="overflow-hidden flex flex-col">
+            <div class="flex flex-col">
               <h3 class="font-semibold mb-2">Method:</h3>
-              <div class="overflow-y-auto flex-grow pr-2">
+              <div class="overflow-y-auto pr-2 flex-grow" style="max-height: 300px;">
                 <ol class="list-decimal list-inside pb-4">
                   {#each selectedRecipe?.method || [] as step}
                     <li class="mb-2">{step}</li>
