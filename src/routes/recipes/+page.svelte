@@ -29,6 +29,7 @@
   let selectedRecipe: Recipe | null = null;
   let isModalLoading = false;
   let isInitialLoading = true;
+  let error: string | null = null;
 
   onMount(async () => {
     await fetchAllRecipes();
@@ -41,10 +42,15 @@
         throw new Error('Failed to fetch recipes');
       }
       const fetchedRecipes = await response.json();
-      console.log(fetchedRecipes)
-      recipes = fetchedRecipes
+      console.log(fetchedRecipes);
+      if (Array.isArray(fetchedRecipes)) {
+        recipes = fetchedRecipes;
+      } else {
+        throw new Error('Fetched data is not an array');
+      }
     } catch (error) {
       console.error('Error fetching recipes:', error);
+      error = 'Failed to load recipes. Please try again later.';
     } finally {
       isInitialLoading = false;
     }
@@ -150,11 +156,13 @@
         <div class="flex justify-center items-center h-64">
           <div class="spinner"></div>
         </div>
-      {:else if recipes.length === 0}
+      {:else if error}
+        <p class="text-center text-red-500">{error}</p>
+      {:else if !recipes || recipes.length === 0}
         <p class="text-center text-gray-500">No recipes available. Add a new recipe to get started!</p>
       {:else}
         <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {#each recipes as recipe}
+          {#each recipes as recipe (recipe.id)}
             <Card on:click={() => openRecipeModal(recipe)} class="cursor-pointer hover:shadow-lg transition-shadow duration-300">
               <CardHeader class="p-0">
                 <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
@@ -162,11 +170,13 @@
               <CardContent class="p-4">
                 <CardTitle class="text-2xl mb-3 text-right">{recipe.title}</CardTitle>
                 <div class="mt-2 flex flex-wrap justify-end gap-2">
-                  {#each recipe.tags as tag}
-                    <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
-                      {tag}
-                    </span>
-                  {/each}
+                  {#if recipe.tags && recipe.tags.length > 0}
+                    {#each recipe.tags as tag}
+                      <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                        {tag}
+                      </span>
+                    {/each}
+                  {/if}
                 </div>
               </CardContent>
             </Card>
