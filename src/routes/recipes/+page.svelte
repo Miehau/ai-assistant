@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Card from "$lib/components/ui/card";
@@ -27,6 +28,27 @@
   let isLoading = false;
   let selectedRecipe: Recipe | null = null;
   let isModalLoading = false;
+  let isInitialLoading = true;
+
+  onMount(async () => {
+    await fetchAllRecipes();
+  });
+
+  async function fetchAllRecipes() {
+    try {
+      const response = await fetch(`${config.apiUrl}/api/recipes/`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch recipes');
+      }
+      const fetchedRecipes = await response.json();
+      console.log(fetchedRecipes)
+      recipes = fetchedRecipes
+    } catch (error) {
+      console.error('Error fetching recipes:', error);
+    } finally {
+      isInitialLoading = false;
+    }
+  }
 
   function handleFocus() {
     isInputFocused = true;
@@ -84,7 +106,8 @@
             title: newRecipe.title,
             image: imageUrl,
             method: newRecipe.method,
-            tags: newRecipe.tags || []
+            tags: newRecipe.tags || [],
+            ingredients: newRecipe.ingredients || []
           }];
 
           console.log('Recipe submitted successfully');
@@ -123,25 +146,33 @@
     </form>
 
     <div class="content" class:blurred={isInputFocused}>
-      <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {#each recipes as recipe}
-          <Card.Root on:click={() => openRecipeModal(recipe)} class="cursor-pointer hover:shadow-lg transition-shadow duration-300">
-            <Card.Header class="p-0">
-              <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
-            </Card.Header>
-            <Card.Content class="p-4">
-              <Card.Title class="text-2xl mb-3 text-right">{recipe.title}</Card.Title>
-              <div class="mt-2 flex flex-wrap justify-end gap-2">
-                {#each recipe.tags as tag}
-                  <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
-                    {tag}
-                  </span>
-                {/each}
-              </div>
-            </Card.Content>
-          </Card.Root>
-        {/each}
-      </div>
+      {#if isInitialLoading}
+        <div class="flex justify-center items-center h-64">
+          <div class="spinner"></div>
+        </div>
+      {:else if recipes.length === 0}
+        <p class="text-center text-gray-500">No recipes available. Add a new recipe to get started!</p>
+      {:else}
+        <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {#each recipes as recipe}
+            <Card.Root on:click={() => openRecipeModal(recipe)} class="cursor-pointer hover:shadow-lg transition-shadow duration-300">
+              <Card.Header class="p-0">
+                <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
+              </Card.Header>
+              <Card.Content class="p-4">
+                <Card.Title class="text-2xl mb-3 text-right">{recipe.title}</Card.Title>
+                <div class="mt-2 flex flex-wrap justify-end gap-2">
+                  {#each recipe.tags as tag}
+                    <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                      {tag}
+                    </span>
+                  {/each}
+                </div>
+              </Card.Content>
+            </Card.Root>
+          {/each}
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -158,12 +189,12 @@
           <div class="spinner"></div>
         </div>
       {:else}
-        <div class="flex-grow overflow-hidden">
+        <div class="flex-grow overflow-hidden flex flex-col">
           <img src={selectedRecipe?.image} alt={selectedRecipe?.title} class="w-full h-48 object-cover rounded-md mb-4" />
-          <div class="grid grid-cols-2 gap-4 h-[calc(100%-13rem)] overflow-hidden">
+          <div class="grid grid-cols-2 gap-4 flex-grow overflow-hidden">
             <div class="overflow-hidden flex flex-col">
               <h3 class="font-semibold mb-2">Ingredients:</h3>
-              <ul class="list-disc list-inside overflow-y-auto flex-grow pr-2">
+              <ul class="list-disc list-inside pr-2">
                 {#each selectedRecipe?.ingredients || [] as ingredient}
                   <li class="mb-1">{ingredient.amount} {ingredient.unit} {ingredient.name}</li>
                 {/each}
