@@ -11,10 +11,17 @@
     unit: string;
   }
 
+  interface Ingredient {
+    name: string;
+    amount: string;
+    unit: string;
+  }
+
   interface Recipe {
     id: string;
     title: string;
     image: string;
+    ingredients: Ingredient[];
     method: string[];
     tags: string[];
   }
@@ -24,14 +31,26 @@
       id: "1",
       title: "Spaghetti Carbonara",
       image: "https://example.com/carbonara.jpg",
-      method: ["Boil pasta", "Mix eggs and cheese"],
+      ingredients: [
+        { name: "Spaghetti", amount: "400", unit: "g" },
+        { name: "Pancetta", amount: "150", unit: "g" },
+        { name: "Eggs", amount: "3", unit: "large" },
+        { name: "Parmesan cheese", amount: "50", unit: "g" },
+      ],
+      method: ["Boil pasta", "Fry pancetta", "Mix eggs and cheese", "Combine all ingredients"],
       tags: ["Italian", "Pasta", "Quick"]
     },
     {
       id: "2",
       title: "Chicken Stir Fry",
       image: "https://example.com/stir-fry.jpg",
-      method: ["Cut chicken", "Stir fry vegetables"],
+      ingredients: [
+        { name: "Chicken breast", amount: "500", unit: "g" },
+        { name: "Mixed vegetables", amount: "400", unit: "g" },
+        { name: "Soy sauce", amount: "2", unit: "tbsp" },
+        { name: "Vegetable oil", amount: "1", unit: "tbsp" },
+      ],
+      method: ["Cut chicken", "Prepare vegetables", "Heat oil in wok", "Stir fry chicken and vegetables", "Add soy sauce"],
       tags: ["Asian", "Chicken", "Healthy"]
     },
   ];
@@ -141,7 +160,7 @@
   </div>
 
   <Dialog.Root open={!!selectedRecipe} onOpenChange={closeRecipeModal}>
-    <Dialog.Content class="sm:max-w-[425px]">
+    <Dialog.Content class="sm:max-w-[600px]">
       <Dialog.Header>
         <Dialog.Title>{selectedRecipe?.title}</Dialog.Title>
         <Dialog.Description>
@@ -150,13 +169,23 @@
       </Dialog.Header>
       <div class="grid gap-4 py-4">
         <img src={selectedRecipe?.image} alt={selectedRecipe?.title} class="w-full h-48 object-cover rounded-md" />
-        <div>
-          <h3 class="font-semibold mb-2">Method:</h3>
-          <ol class="list-decimal list-inside">
-            {#each selectedRecipe?.method || [] as step}
-              <li>{step}</li>
-            {/each}
-          </ol>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <h3 class="font-semibold mb-2">Ingredients:</h3>
+            <ul class="list-disc list-inside">
+              {#each selectedRecipe?.ingredients || [] as ingredient}
+                <li>{ingredient.amount} {ingredient.unit} {ingredient.name}</li>
+              {/each}
+            </ul>
+          </div>
+          <div>
+            <h3 class="font-semibold mb-2">Method:</h3>
+            <ol class="list-decimal list-inside">
+              {#each selectedRecipe?.method || [] as step}
+                <li>{step}</li>
+              {/each}
+            </ol>
+          </div>
         </div>
         <div>
           <h3 class="font-semibold mb-2">Tags:</h3>
