@@ -2,6 +2,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Card from "$lib/components/ui/card";
+  import * as Dialog from "$lib/components/ui/dialog";
   import MainLayout from "$lib/components/MainLayout.svelte";
   import { config } from "$lib/config";
 
@@ -11,7 +12,7 @@
   }
 
   interface Recipe {
-    id: number;
+    id: string;
     title: string;
     image: string;
     method: string[];
@@ -20,14 +21,14 @@
 
   let recipes: Recipe[] = [
     {
-      id: 1,
+      id: "1",
       title: "Spaghetti Carbonara",
       image: "https://example.com/carbonara.jpg",
       method: ["Boil pasta", "Mix eggs and cheese"],
       tags: ["Italian", "Pasta", "Quick"]
     },
     {
-      id: 2,
+      id: "2",
       title: "Chicken Stir Fry",
       image: "https://example.com/stir-fry.jpg",
       method: ["Cut chicken", "Stir fry vegetables"],
@@ -38,6 +39,7 @@
   let isInputFocused = false;
   let inputValue = "";
   let isLoading = false;
+  let selectedRecipe: Recipe | null = null;
 
   function handleFocus() {
     isInputFocused = true;
@@ -45,6 +47,14 @@
 
   function handleBlur() {
     isInputFocused = false;
+  }
+
+  function openRecipeModal(recipe: Recipe) {
+    selectedRecipe = recipe;
+  }
+
+  function closeRecipeModal() {
+    selectedRecipe = null;
   }
 
   async function handleSubmit(event: Event) {
@@ -65,11 +75,11 @@
           const imageUrl = URL.createObjectURL(new Blob([newRecipe.image], { type: 'image/jpeg' }));
           
           recipes = [...recipes, {
-            id: recipes.length + 1,
+            id: newRecipe.id,
             title: newRecipe.title,
             image: imageUrl,
             method: newRecipe.method,
-            tags: [] // You might want to generate tags based on method
+            tags: newRecipe.tags || []
           }];
 
           console.log('Recipe submitted successfully');
@@ -109,25 +119,61 @@
 
     <div class="content" class:blurred={isInputFocused}>
       <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-    {#each recipes as recipe}
-      <Card.Root>
-        <Card.Header class="p-0">
-          <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
-        </Card.Header>
-        <Card.Content class="p-4">
-          <Card.Title class="text-2xl mb-3 text-right">{recipe.title}</Card.Title>
-          <div class="mt-2 flex flex-wrap justify-end gap-2">
-            {#each recipe.tags as tag}
-              <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
+        {#each recipes as recipe}
+          <Card.Root on:click={() => openRecipeModal(recipe)} class="cursor-pointer hover:shadow-lg transition-shadow duration-300">
+            <Card.Header class="p-0">
+              <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
+            </Card.Header>
+            <Card.Content class="p-4">
+              <Card.Title class="text-2xl mb-3 text-right">{recipe.title}</Card.Title>
+              <div class="mt-2 flex flex-wrap justify-end gap-2">
+                {#each recipe.tags as tag}
+                  <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                    {tag}
+                  </span>
+                {/each}
+              </div>
+            </Card.Content>
+          </Card.Root>
+        {/each}
+      </div>
+    </div>
+  </div>
+
+  <Dialog.Root open={!!selectedRecipe} onOpenChange={closeRecipeModal}>
+    <Dialog.Content class="sm:max-w-[425px]">
+      <Dialog.Header>
+        <Dialog.Title>{selectedRecipe?.title}</Dialog.Title>
+        <Dialog.Description>
+          Recipe details
+        </Dialog.Description>
+      </Dialog.Header>
+      <div class="grid gap-4 py-4">
+        <img src={selectedRecipe?.image} alt={selectedRecipe?.title} class="w-full h-48 object-cover rounded-md" />
+        <div>
+          <h3 class="font-semibold mb-2">Method:</h3>
+          <ol class="list-decimal list-inside">
+            {#each selectedRecipe?.method || [] as step}
+              <li>{step}</li>
+            {/each}
+          </ol>
+        </div>
+        <div>
+          <h3 class="font-semibold mb-2">Tags:</h3>
+          <div class="flex flex-wrap gap-2">
+            {#each selectedRecipe?.tags || [] as tag}
+              <span class="rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground">
                 {tag}
               </span>
             {/each}
           </div>
-        </Card.Content>
-      </Card.Root>
-    {/each}
-  </div>
-  </div>
+        </div>
+      </div>
+      <Dialog.Footer>
+        <Button on:click={closeRecipeModal}>Close</Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
 </MainLayout>
 
 <style>
