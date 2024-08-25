@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
-  import * as Card from "$lib/components/ui/card";
+  import { Card, CardHeader, CardContent, CardTitle } from "$lib/components/ui/card";
   import * as Dialog from "$lib/components/ui/dialog";
   import MainLayout from "$lib/components/MainLayout.svelte";
   import { config } from "$lib/config";
@@ -155,12 +155,12 @@
       {:else}
         <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {#each recipes as recipe}
-            <Card.Root on:click={() => openRecipeModal(recipe)} class="cursor-pointer hover:shadow-lg transition-shadow duration-300">
-              <Card.Header class="p-0">
+            <Card on:click={() => openRecipeModal(recipe)} class="cursor-pointer hover:shadow-lg transition-shadow duration-300">
+              <CardHeader class="p-0">
                 <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
-              </Card.Header>
-              <Card.Content class="p-4">
-                <Card.Title class="text-2xl mb-3 text-right">{recipe.title}</Card.Title>
+              </CardHeader>
+              <CardContent class="p-4">
+                <CardTitle class="text-2xl mb-3 text-right">{recipe.title}</CardTitle>
                 <div class="mt-2 flex flex-wrap justify-end gap-2">
                   {#each recipe.tags as tag}
                     <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
@@ -168,8 +168,8 @@
                     </span>
                   {/each}
                 </div>
-              </Card.Content>
-            </Card.Root>
+              </CardContent>
+            </Card>
           {/each}
         </div>
       {/if}
