@@ -205,7 +205,7 @@
             <div class="overflow-hidden flex flex-col">
               <h3 class="font-semibold mb-2">Ingredients:</h3>
               <div class="overflow-y-auto flex-grow pr-2">
-                <ul class="list-disc list-inside">
+                <ul class="list-disc list-inside pb-4">
                   {#each selectedRecipe?.ingredients || [] as ingredient}
                     <li class="mb-1">{ingredient.amount} {ingredient.unit} {ingredient.name}</li>
                   {/each}
@@ -215,7 +215,7 @@
             <div class="overflow-hidden flex flex-col">
               <h3 class="font-semibold mb-2">Method:</h3>
               <div class="overflow-y-auto flex-grow pr-2">
-                <ol class="list-decimal list-inside">
+                <ol class="list-decimal list-inside pb-4">
                   {#each selectedRecipe?.method || [] as step}
                     <li class="mb-2">{step}</li>
                   {/each}
@@ -225,7 +225,7 @@
           </div>
         </div>
       {/if}
-      <Dialog.Footer class="mt-4">
+      <Dialog.Footer class="sm:mt-4">
         <Button on:click={closeRecipeModal}>Close</Button>
       </Dialog.Footer>
     </Dialog.Content>
