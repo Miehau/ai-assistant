@@ -8,11 +8,6 @@
 
   interface Ingredient {
     name: string;
-    unit: string;
-  }
-
-  interface Ingredient {
-    name: string;
     amount: string;
     unit: string;
   }
@@ -26,39 +21,12 @@
     tags: string[];
   }
 
-  let recipes: Recipe[] = [
-    {
-      id: "1",
-      title: "Spaghetti Carbonara",
-      image: "https://example.com/carbonara.jpg",
-      ingredients: [
-        { name: "Spaghetti", amount: "400", unit: "g" },
-        { name: "Pancetta", amount: "150", unit: "g" },
-        { name: "Eggs", amount: "3", unit: "large" },
-        { name: "Parmesan cheese", amount: "50", unit: "g" },
-      ],
-      method: ["Boil pasta", "Fry pancetta", "Mix eggs and cheese", "Combine all ingredients"],
-      tags: ["Italian", "Pasta", "Quick"]
-    },
-    {
-      id: "2",
-      title: "Chicken Stir Fry",
-      image: "https://example.com/stir-fry.jpg",
-      ingredients: [
-        { name: "Chicken breast", amount: "500", unit: "g" },
-        { name: "Mixed vegetables", amount: "400", unit: "g" },
-        { name: "Soy sauce", amount: "2", unit: "tbsp" },
-        { name: "Vegetable oil", amount: "1", unit: "tbsp" },
-      ],
-      method: ["Cut chicken", "Prepare vegetables", "Heat oil in wok", "Stir fry chicken and vegetables", "Add soy sauce"],
-      tags: ["Asian", "Chicken", "Healthy"]
-    },
-  ];
-
+  let recipes: Recipe[] = [];
   let isInputFocused = false;
   let inputValue = "";
   let isLoading = false;
   let selectedRecipe: Recipe | null = null;
+  let isModalLoading = false;
 
   function handleFocus() {
     isInputFocused = true;
@@ -68,8 +36,26 @@
     isInputFocused = false;
   }
 
-  function openRecipeModal(recipe: Recipe) {
-    selectedRecipe = recipe;
+  async function fetchRecipeDetails(recipeId: string): Promise<Recipe> {
+    const response = await fetch(`${config.apiUrl}/api/recipe/${recipeId}`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch recipe details');
+    }
+    return await response.json();
+  }
+
+  async function openRecipeModal(recipe: Recipe) {
+    isModalLoading = true;
+    try {
+      const fullRecipe = await fetchRecipeDetails(recipe.id);
+      selectedRecipe = fullRecipe;
+    } catch (error) {
+      console.error('Error fetching recipe details:', error);
+      // Fallback to using the basic recipe info if fetch fails
+      selectedRecipe = recipe;
+    } finally {
+      isModalLoading = false;
+    }
   }
 
   function closeRecipeModal() {
@@ -167,37 +153,43 @@
           Recipe details
         </Dialog.Description>
       </Dialog.Header>
-      <div class="flex-grow overflow-hidden">
-        <img src={selectedRecipe?.image} alt={selectedRecipe?.title} class="w-full h-48 object-cover rounded-md mb-4" />
-        <div class="grid grid-cols-2 gap-4 h-[calc(100%-13rem)] overflow-hidden">
-          <div class="overflow-hidden flex flex-col">
-            <h3 class="font-semibold mb-2">Ingredients:</h3>
-            <ul class="list-disc list-inside overflow-y-auto flex-grow pr-2">
-              {#each selectedRecipe?.ingredients || [] as ingredient}
-                <li class="mb-1">{ingredient.amount} {ingredient.unit} {ingredient.name}</li>
-              {/each}
-            </ul>
+      {#if isModalLoading}
+        <div class="flex justify-center items-center flex-grow">
+          <div class="spinner"></div>
+        </div>
+      {:else}
+        <div class="flex-grow overflow-hidden">
+          <img src={selectedRecipe?.image} alt={selectedRecipe?.title} class="w-full h-48 object-cover rounded-md mb-4" />
+          <div class="grid grid-cols-2 gap-4 h-[calc(100%-13rem)] overflow-hidden">
+            <div class="overflow-hidden flex flex-col">
+              <h3 class="font-semibold mb-2">Ingredients:</h3>
+              <ul class="list-disc list-inside overflow-y-auto flex-grow pr-2">
+                {#each selectedRecipe?.ingredients || [] as ingredient}
+                  <li class="mb-1">{ingredient.amount} {ingredient.unit} {ingredient.name}</li>
+                {/each}
+              </ul>
+            </div>
+            <div class="overflow-hidden flex flex-col">
+              <h3 class="font-semibold mb-2">Method:</h3>
+              <ol class="list-decimal list-inside overflow-y-auto flex-grow pr-2">
+                {#each selectedRecipe?.method || [] as step}
+                  <li class="mb-2">{step}</li>
+                {/each}
+              </ol>
+            </div>
           </div>
-          <div class="overflow-hidden flex flex-col">
-            <h3 class="font-semibold mb-2">Method:</h3>
-            <ol class="list-decimal list-inside overflow-y-auto flex-grow pr-2">
-              {#each selectedRecipe?.method || [] as step}
-                <li class="mb-2">{step}</li>
+          <div class="mt-4">
+            <h3 class="font-semibold mb-2">Tags:</h3>
+            <div class="flex flex-wrap gap-2">
+              {#each selectedRecipe?.tags || [] as tag}
+                <span class="rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground">
+                  {tag}
+                </span>
               {/each}
-            </ol>
+            </div>
           </div>
         </div>
-        <div class="mt-4">
-          <h3 class="font-semibold mb-2">Tags:</h3>
-          <div class="flex flex-wrap gap-2">
-            {#each selectedRecipe?.tags || [] as tag}
-              <span class="rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground">
-                {tag}
-              </span>
-            {/each}
-          </div>
-        </div>
-      </div>
+      {/if}
       <Dialog.Footer class="mt-4">
         <Button on:click={closeRecipeModal}>Close</Button>
       </Dialog.Footer>
