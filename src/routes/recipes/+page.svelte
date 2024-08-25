@@ -37,7 +37,7 @@
   }
 
   async function fetchRecipeDetails(recipeId: string): Promise<Recipe> {
-    const response = await fetch(`${config.apiUrl}/api/recipe/${recipeId}`);
+    const response = await fetch(`${config.apiUrl}/api/recipes/${recipeId}`);
     if (!response.ok) {
       throw new Error('Failed to fetch recipe details');
     }
