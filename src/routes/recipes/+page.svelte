@@ -160,34 +160,34 @@
   </div>
 
   <Dialog.Root open={!!selectedRecipe} onOpenChange={closeRecipeModal}>
-    <Dialog.Content class="sm:max-w-[600px]">
+    <Dialog.Content class="sm:max-w-[600px] max-h-[90vh] flex flex-col">
       <Dialog.Header>
         <Dialog.Title>{selectedRecipe?.title}</Dialog.Title>
         <Dialog.Description>
           Recipe details
         </Dialog.Description>
       </Dialog.Header>
-      <div class="grid gap-4 py-4">
-        <img src={selectedRecipe?.image} alt={selectedRecipe?.title} class="w-full h-48 object-cover rounded-md" />
-        <div class="grid grid-cols-2 gap-4">
-          <div>
+      <div class="flex-grow overflow-hidden">
+        <img src={selectedRecipe?.image} alt={selectedRecipe?.title} class="w-full h-48 object-cover rounded-md mb-4" />
+        <div class="grid grid-cols-2 gap-4 h-[calc(100%-13rem)] overflow-hidden">
+          <div class="overflow-hidden flex flex-col">
             <h3 class="font-semibold mb-2">Ingredients:</h3>
-            <ul class="list-disc list-inside">
+            <ul class="list-disc list-inside overflow-y-auto flex-grow pr-2">
               {#each selectedRecipe?.ingredients || [] as ingredient}
-                <li>{ingredient.amount} {ingredient.unit} {ingredient.name}</li>
+                <li class="mb-1">{ingredient.amount} {ingredient.unit} {ingredient.name}</li>
               {/each}
             </ul>
           </div>
-          <div>
+          <div class="overflow-hidden flex flex-col">
             <h3 class="font-semibold mb-2">Method:</h3>
-            <ol class="list-decimal list-inside">
+            <ol class="list-decimal list-inside overflow-y-auto flex-grow pr-2">
               {#each selectedRecipe?.method || [] as step}
-                <li>{step}</li>
+                <li class="mb-2">{step}</li>
               {/each}
             </ol>
           </div>
         </div>
-        <div>
+        <div class="mt-4">
           <h3 class="font-semibold mb-2">Tags:</h3>
           <div class="flex flex-wrap gap-2">
             {#each selectedRecipe?.tags || [] as tag}
@@ -198,7 +198,7 @@
           </div>
         </div>
       </div>
-      <Dialog.Footer>
+      <Dialog.Footer class="mt-4">
         <Button on:click={closeRecipeModal}>Close</Button>
       </Dialog.Footer>
     </Dialog.Content>
