@@ -15,13 +15,22 @@
   import { Button } from "$lib/components/ui/button";
   import { Paperclip } from "lucide-svelte";
   import { Mic } from "lucide-svelte";
-  import { CornerDownLeft } from "lucide-svelte";
+  import { Send } from "lucide-svelte";
+  import * as Select from "$lib/components/ui/select";
 
   let conversations = [];
   let currentConversationId = null;
   let chatContainer; // Declare chatContainer variable
   let message = ""; // Declare the message variable
   let messages = []; // Declare the messages array
+  const models = [
+    { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
+    { value: "gpt-4o-mini", label: "GPT-4o mini" },
+  ];
+  $: selectedModel = {
+    value: models[0].value,
+    label: models[0].label,
+  };
 
   onMount(async () => {
     conversations = await getConversations();
@@ -47,6 +56,7 @@
       const response = await sendChatMessage(
         sentMessage,
         currentConversationId,
+        selectedModel.value
       );
       if (response && typeof response.text === "string") {
         messages = [...messages, { type: "received", content: response.text }];
@@ -123,14 +133,25 @@
         </Tooltip.Trigger>
         <Tooltip.Content side="top">Use Microphone</Tooltip.Content>
       </Tooltip.Root>
+      <!-- <div class="flex items-center p-3 pb-0"> -->
+        <Select.Root bind:selected={selectedModel}>
+          <Select.Trigger class="w-[180px]">
+            <Select.Value placeholder="Select a model" />
+          </Select.Trigger>
+          <Select.Content>
+            {#each models as model}
+              <Select.Item value={model.value}>{model.label}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      <!-- </div> -->
       <Button
         type="button"
         on:click={handleSendMessage}
         size="sm"
         class="ml-auto gap-1.5"
       >
-        Send Message
-        <CornerDownLeft class="size-3.5" />
+        <Send class="size-3.5" />
       </Button>
     </div>
   </form>

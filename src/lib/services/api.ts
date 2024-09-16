@@ -26,11 +26,15 @@ export async function sendEchoRequest(message: string, correlationId: string | n
   return await response.json();
 }
 
-export async function sendChatMessage(message: string, conversationId: string | null): Promise<{ text: string, conversationId: string | null }> {
+export async function sendChatMessage(
+  message: string,
+  conversationId: string | null,
+  model: string
+): Promise<{ text: string; conversationId: string | null }> {
   const response = await fetch(`${API_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ input: message, conversationId }), // Ensure conversationId is sent
+    body: JSON.stringify({ input: message, conversationId, model }),
   });
 
   if (!response.ok) {
