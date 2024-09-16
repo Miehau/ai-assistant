@@ -30,7 +30,7 @@ export async function sendChatMessage(
   message: string,
   conversationId: string | null,
   model: string
-): Promise<{ text: string; conversationId: string | null }> {
+) {
   const response = await fetch(`${API_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -42,7 +42,16 @@ export async function sendChatMessage(
     throw new Error('Failed to send chat message');
   }
 
-  return response.json(); // Ensure response includes conversationId
+  if (response.headers.get('Content-Type')?.includes('text/event-stream')) {
+    return {
+      text: '',
+      conversationId: null,
+      stream: response.body,
+    };
+  } else {
+    const data = await response.json();
+    return { text: data.text, conversationId: data.conversationId };
+  }
 }
 
 export async function createConversation(name: string) {

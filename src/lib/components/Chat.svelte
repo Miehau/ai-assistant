@@ -17,7 +17,7 @@
     content: string;
   };
 
-  let conversations = [];
+
   let currentConversationId: string | null = null;
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
@@ -31,10 +31,7 @@
     label: models[0].label,
   };
 
-  onMount(async () => {
-    conversations = await getConversations();
-  });
-
+  
   afterUpdate(() => {
     scrollToBottom();
   });
@@ -54,17 +51,54 @@
       const response = await sendChatMessage(
         sentMessage,
         currentConversationId,
-        selectedModel.value,
+        selectedModel.value
       );
-      if (response && typeof response.text === "string") {
+
+      if (response.stream) {
+        await handleStreamResponse(response.stream);
+      } else if (response && typeof response.text === "string") {
         messages = [...messages, { type: "received", content: response.text }];
-        currentConversationId = response.conversationId; // Update currentConversationId with the returned value
-        // scrollToBottom(); // Scroll after receiving a message
+        currentConversationId = response.conversationId;
       } else {
         throw new Error("Invalid response format");
       }
     } catch (error) {
       console.error("Failed to send chat message:", error);
+    }
+  }
+
+  async function handleStreamResponse(stream: ReadableStream) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let receivedMessage = { type: "received", content: "" };
+    messages = [...messages, receivedMessage];
+
+    try {
+      for await (const chunk of readStream(reader)) {
+        const lines = decoder.decode(chunk).split('\n').filter(line => line.trim() !== '');
+        
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6));
+            if (data.type === 'message') {
+              receivedMessage.content += data.content;
+              messages = [...messages]; // Trigger Svelte reactivity
+            } else if (data.type === 'end') {
+              currentConversationId = data.conversationId;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error parsing SSE data:', error);
+    }
+  }
+
+  async function* readStream(reader: ReadableStreamDefaultReader): AsyncGenerator<Uint8Array, void, unknown> {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      yield value;
     }
   }
 
