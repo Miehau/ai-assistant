@@ -1,91 +1,101 @@
 <script lang="ts">
-  import Share from "lucide-svelte/icons/share";
-  import Paperclip from "lucide-svelte/icons/paperclip";
-  import Mic from "lucide-svelte/icons/mic";
-  import CornerDownLeft from "lucide-svelte/icons/corner-down-left";
-  import { fly } from 'svelte/transition';
-  import { onMount, afterUpdate, setContext } from 'svelte';
+  import { onMount, afterUpdate } from "svelte"; // Add afterUpdate to the import
+  import {
+    getConversations,
+    createConversation,
+    deleteConversation,
+    updateConversationName,
+    sendChatMessage,
+  } from "$lib/services/api";
+  import { fly } from "svelte/transition"; // Add this import
+  import ChatMessage from "./ChatMessage.svelte";
+  import { Label } from "$lib/components/ui/label";
+  import { Textarea } from "$lib/components/ui/textarea";
+  import * as Tooltip from "$lib/components/ui/tooltip";
+  import { Button } from "$lib/components/ui/button";
+  import { Paperclip } from "lucide-svelte";
+  import { Mic } from "lucide-svelte";
+  import { CornerDownLeft } from "lucide-svelte";
 
-  import { Badge } from "$lib/components/ui/badge/index.js";
-  import { Button } from "$lib/components/ui/button/index.js";
-  import * as Tooltip from "$lib/components/ui/tooltip/index.js";
-  import { Textarea } from "$lib/components/ui/textarea/index.js";
-  import { Label } from "$lib/components/ui/label/index.js";
-  import { writable } from 'svelte/store';
-  import ChatMessage from './ChatMessage.svelte';
-  import { sendChatMessage } from '$lib/services/api';
+  let conversations = [];
+  let currentConversationId = null;
+  let chatContainer; // Declare chatContainer variable
+  let message = ""; // Declare the message variable
+  let messages = []; // Declare the messages array
 
-  let message = '';
-  let correlationId = writable<string | null>(null);
-  let messages: Array<{ type: 'sent' | 'received', content: string, intent?: string, slider?: string }> = [];
-  let chatContainer: HTMLElement;
-  let currentSlider = writable<string | null>(null);
-
-  setContext('currentSlider', currentSlider);
-
-  function scrollToBottom() {
-    if (chatContainer) {
-      chatContainer.scrollTop = chatContainer.scrollHeight;
-    }
-  }
-
-  onMount(() => {
-    scrollToBottom();
+  onMount(async () => {
+    conversations = await getConversations();
   });
 
   afterUpdate(() => {
     scrollToBottom();
   });
 
-  async function handleSendMessage() {
-    const sentMessage = message;
-    message = ''; // Clear the input immediately
-    messages = [...messages, { type: 'sent', content: sentMessage }];
-    
-    try {
-        const response = await sendChatMessage(sentMessage);
-        // Check if response is valid
-        if (response && typeof response.text === 'string') {
-            messages = [...messages, { 
-                type: 'received', 
-                content: response.text
-            }];
-        } else {
-            throw new Error('Invalid response format');
-        }
-    } catch (error) {
-        console.error('Failed to send chat message:', error);
-        // Handle error (e.g., show an error message to the user)
+  function scrollToBottom() {
+    if (chatContainer) {
+      chatContainer.scrollTop = chatContainer.scrollHeight; // Scroll to the bottom
     }
   }
 
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      handleSendMessage();
+  async function handleSendMessage() {
+    const sentMessage = message;
+    message = "";
+    messages = [...messages, { type: "sent", content: sentMessage }];
+    // scrollToBottom(); // Scroll after sending a message
+
+    try {
+      const response = await sendChatMessage(
+        sentMessage,
+        currentConversationId,
+      );
+      if (response && typeof response.text === "string") {
+        messages = [...messages, { type: "received", content: response.text }];
+        currentConversationId = response.conversationId; // Update currentConversationId with the returned value
+        // scrollToBottom(); // Scroll after receiving a message
+      } else {
+        throw new Error("Invalid response format");
+      }
+    } catch (error) {
+      console.error("Failed to send chat message:", error);
+    }
+  }
+
+  function handleKeydown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault(); // Prevent default behavior
+      handleSendMessage(); // Call the send message function
     }
   }
 </script>
 
-<div class="relative flex flex-col h-full min-h-[50vh] rounded-xl bg-muted/50 p-4 lg:col-span-2">
-  <Badge variant="outline" class="absolute right-3 top-3">Output</Badge>
-  
+<!-- ... existing chat UI ... -->
+<div
+  class="relative flex flex-col h-full min-h-[50vh] rounded-xl bg-muted/50 p-4 lg:col-span-2"
+>
+  <!-- <Badge variant="outline" class="absolute right-3 top-3">Output</Badge> -->
+  <!-- Remove this line -->
+
   <div class="flex-1 overflow-hidden">
-    <div bind:this={chatContainer} class="h-full overflow-y-auto pr-4 space-y-4">
+    <div
+      bind:this={chatContainer}
+      class="h-full overflow-y-auto pr-4 space-y-4"
+    >
       {#each messages as msg}
-        <div transition:fly="{{ y: 20, duration: 300 }}">
-          <ChatMessage 
-            type={msg.type} 
-            content={msg.content} 
-            intent={msg.intent} 
+        <div transition:fly={{ y: 20, duration: 300 }}>
+          <ChatMessage
+            type={msg.type}
+            content={msg.content}
+            intent={msg.intent}
             slider={msg.slider}
           />
         </div>
       {/each}
     </div>
   </div>
-  
-  <form class="mt-4 relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring">
+
+  <form
+    class="mt-4 relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring"
+  >
     <Label for="message" class="sr-only">Message</Label>
     <Textarea
       id="message"
@@ -113,7 +123,12 @@
         </Tooltip.Trigger>
         <Tooltip.Content side="top">Use Microphone</Tooltip.Content>
       </Tooltip.Root>
-      <Button type="button" on:click={handleSendMessage} size="sm" class="ml-auto gap-1.5">
+      <Button
+        type="button"
+        on:click={handleSendMessage}
+        size="sm"
+        class="ml-auto gap-1.5"
+      >
         Send Message
         <CornerDownLeft class="size-3.5" />
       </Button>
