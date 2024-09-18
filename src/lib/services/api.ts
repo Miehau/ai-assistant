@@ -80,3 +80,51 @@ export async function updateConversationName(id: string, name: string) {
   });
   return response.json();
 }
+
+export async function getAllRecipes() {
+  const response = await fetch(`${API_URL}/api/recipes`);
+  return response.json();
+}
+
+export async function getRecipe(id: string) {
+  const response = await fetch(`${API_URL}/api/recipes/${id}`);
+  return response.json();
+}
+
+export async function createRecipe(recipeData: FormData | object) {
+  const options: RequestInit = {
+    method: 'POST',
+    headers: {},
+  };
+
+  if (recipeData instanceof FormData) {
+    options.body = recipeData;
+  } else {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(recipeData);
+  }
+
+  const response = await fetch(`${API_URL}/api/recipes`, options);
+  return response.json();
+}
+
+export async function updateRecipe(id: string, recipeData: FormData | object) {
+  const options: RequestInit = {
+    method: 'PUT',
+    headers: {},
+  };
+
+  if (recipeData instanceof FormData) {
+    options.body = recipeData;
+  } else {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(recipeData);
+  }
+
+  const response = await fetch(`${API_URL}/api/recipes/${id}`, options);
+  return response.json();
+}
+
+export async function deleteRecipe(id: string) {
+  await fetch(`${API_URL}/api/recipes/${id}`, { method: 'DELETE' });
+}

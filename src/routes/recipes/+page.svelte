@@ -6,19 +6,27 @@
   import MainLayout from "$lib/components/MainLayout.svelte";
   import RecipeModal from "$lib/components/RecipeModal.svelte";
   import { config } from "$lib/config";
+  import { getAllRecipes, createRecipe, updateRecipe, deleteRecipe } from "$lib/services/api";
 
   interface Ingredient {
+    id: string;
     name: string;
-    amount: string;
-    unit: string;
+    amount: number;
+  }
+
+  interface MethodStep {
+    id: string;
+    stepNumber: number;
+    description: string;
   }
 
   interface Recipe {
     id: string;
     title: string;
     image: string;
+    source?: string;
     ingredients: Ingredient[];
-    method: string[];
+    methodSteps: MethodStep[];
     tags: string[];
   }
 
@@ -30,6 +38,7 @@
   let isModalLoading = false;
   let isInitialLoading = true;
   let error: string | null = null;
+  let file: File | null = null;
 
   onMount(async () => {
     await fetchAllRecipes();
@@ -37,19 +46,10 @@
 
   async function fetchAllRecipes() {
     try {
-      const response = await fetch(`${config.apiUrl}/api/recipes/`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch recipes');
-      }
-      const fetchedRecipes = await response.json();
-      console.log(fetchedRecipes);
-      if (Array.isArray(fetchedRecipes)) {
-        recipes = fetchedRecipes;
-      } else {
-        throw new Error('Fetched data is not an array');
-      }
-    } catch (error) {
-      console.error('Error fetching recipes:', error);
+      isInitialLoading = true;
+      recipes = await getAllRecipes();
+    } catch (err) {
+      console.error('Error fetching recipes:', err);
       error = 'Failed to load recipes. Please try again later.';
     } finally {
       isInitialLoading = false;
@@ -64,23 +64,12 @@
     isInputFocused = false;
   }
 
-  async function fetchRecipeDetails(recipeId: string): Promise<Recipe> {
-    const response = await fetch(`${config.apiUrl}/api/recipes/${recipeId}`);
-    if (!response.ok) {
-      throw new Error('Failed to fetch recipe details');
-    }
-    return await response.json();
-  }
-
   async function openRecipeModal(recipe: Recipe) {
     isModalLoading = true;
     try {
-      const fullRecipe = await fetchRecipeDetails(recipe.id);
-      selectedRecipe = fullRecipe;
-    } catch (error) {
-      console.error('Error fetching recipe details:', error);
-      // Fallback to using the basic recipe info if fetch fails
       selectedRecipe = recipe;
+    } catch (err) {
+      console.error('Error fetching recipe details:', err);
     } finally {
       isModalLoading = false;
     }
@@ -92,40 +81,65 @@
 
   async function handleSubmit(event: Event) {
     event.preventDefault();
-    if (inputValue.trim()) {
+    await submitRecipe();
+  }
+
+  async function handleFileChange(event: Event) {
+    const target = event.target as HTMLInputElement;
+    if (target.files) {
+      file = target.files[0];
+      await submitRecipe(); // Automatically submit when a file is selected
+    }
+  }
+
+  async function submitRecipe() {
+    if (file || inputValue.trim()) {
       isLoading = true;
       try {
-        const response = await fetch(`${config.apiUrl}/api/recipes`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ recipe: inputValue }),
-        });
-
-        if (response.ok) {
-          const newRecipe = await response.json();
-          const imageUrl = URL.createObjectURL(new Blob([newRecipe.image], { type: 'image/jpeg' }));
-          
-          recipes = [...recipes, {
-            id: newRecipe.id,
-            title: newRecipe.title,
-            image: imageUrl,
-            method: newRecipe.method,
-            tags: newRecipe.tags || [],
-            ingredients: newRecipe.ingredients || []
-          }];
-
-          console.log('Recipe submitted successfully');
+        let recipeData: FormData | object;
+        if (file) {
+          recipeData = new FormData();
+          (recipeData as FormData).append('image', file);
+          (recipeData as FormData).append('title', inputValue || file.name); // Use file name if no title is provided
+        } else if (inputValue.startsWith('http')) {
+          recipeData = { source: inputValue };
         } else {
-          console.error('Failed to submit recipe');
+          recipeData = { title: inputValue };
         }
-      } catch (error) {
-        console.error('Error submitting recipe:', error);
+
+        const newRecipe = await createRecipe(recipeData);
+        recipes = [...recipes, newRecipe];
+        console.log('Recipe submitted successfully');
+      } catch (err) {
+        console.error('Error submitting recipe:', err);
+        error = 'Failed to submit recipe. Please try again.';
       } finally {
         isLoading = false;
-        inputValue = ""; // Clear the input after processing (success or failure)
+        inputValue = "";
+        file = null;
       }
+    }
+  }
+
+  async function handleUpdateRecipe(updatedRecipe: Recipe) {
+    try {
+      const updated = await updateRecipe(updatedRecipe.id, updatedRecipe);
+      recipes = recipes.map(r => r.id === updated.id ? updated : r);
+      closeRecipeModal();
+    } catch (err) {
+      console.error('Error updating recipe:', err);
+      error = 'Failed to update recipe. Please try again.';
+    }
+  }
+
+  async function handleDeleteRecipe(id: string) {
+    try {
+      await deleteRecipe(id);
+      recipes = recipes.filter(r => r.id !== id);
+      closeRecipeModal();
+    } catch (err) {
+      console.error('Error deleting recipe:', err);
+      error = 'Failed to delete recipe. Please try again.';
     }
   }
 </script>
@@ -134,16 +148,20 @@
   <div class="container mx-auto py-8">
     <form on:submit={handleSubmit} class="mb-8 flex justify-center relative input-wrapper" class:focused={isInputFocused}>
       <div class="relative w-full max-w-xl">
-        <div class:pr-12={isLoading} class="w-full">
+        <div class:pr-12={isLoading} class="w-full flex">
           <Input
             type="text"
-            placeholder="Add a new recipe..."
-            class="w-full rounded-full transition-all duration-300 pr-10"
+            placeholder="Add a new recipe or paste a URL..."
+            class="w-full rounded-l-full transition-all duration-300"
             on:focus={handleFocus}
             on:blur={handleBlur}
             bind:value={inputValue}
             disabled={isLoading}
           />
+          <input type="file" id="recipeImage" on:change={handleFileChange} class="hidden" accept="image/*" />
+          <label for="recipeImage" class="cursor-pointer bg-primary text-primary-foreground px-4 rounded-r-full flex items-center">
+            📷
+          </label>
         </div>
         {#if isLoading}
           <div class="spinner absolute right-4 top-1/2 transform -translate-y-1/2"></div>
@@ -151,13 +169,15 @@
       </div>
     </form>
 
+    {#if error}
+      <p class="text-center text-red-500 mb-4">{error}</p>
+    {/if}
+
     <div class="content" class:blurred={isInputFocused}>
       {#if isInitialLoading}
         <div class="flex justify-center items-center h-64">
           <div class="spinner"></div>
         </div>
-      {:else if error}
-        <p class="text-center text-red-500">{error}</p>
       {:else if !recipes || recipes.length === 0}
         <p class="text-center text-gray-500">No recipes available. Add a new recipe to get started!</p>
       {:else}
@@ -165,18 +185,16 @@
           {#each recipes as recipe (recipe.id)}
             <Card on:click={() => openRecipeModal(recipe)} class="cursor-pointer hover:shadow-lg transition-shadow duration-300">
               <CardHeader class="p-0">
-                <img src={recipe.image} alt={recipe.title} class="h-48 w-full object-cover" />
+                <img src={`data:image/jpeg;base64,${recipe.image}`} alt={recipe.title} class="h-48 w-full object-cover" />
               </CardHeader>
               <CardContent class="p-4">
                 <CardTitle class="text-2xl mb-3 text-right">{recipe.title}</CardTitle>
                 <div class="mt-2 flex flex-wrap justify-end gap-2">
-                  {#if recipe.tags && recipe.tags.length > 0}
-                    {#each recipe.tags as tag}
-                      <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
-                        {tag}
-                      </span>
-                    {/each}
-                  {/if}
+                  {#each recipe.tags as tag}
+                    <span class="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                      {tag}
+                    </span>
+                  {/each}
                 </div>
               </CardContent>
             </Card>
@@ -190,6 +208,8 @@
     bind:selectedRecipe
     {isModalLoading}
     {closeRecipeModal}
+    {handleUpdateRecipe}
+    {handleDeleteRecipe}
   />
 </MainLayout>
 

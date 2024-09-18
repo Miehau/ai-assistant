@@ -9,7 +9,6 @@
   interface Ingredient {
     name: string;
     amount: string;
-    unit: string;
   }
 
   interface Recipe {
@@ -17,8 +16,13 @@
     title: string;
     image: string;
     ingredients: Ingredient[];
-    method: string[];
+    methodSteps: string[];
     tags: string[];
+  }
+
+  function getImageSrc(image: string | null): string {
+    if (!image) return ''; // or a default image URL
+    return image.startsWith('data:') ? image : `data:image/png;base64,${image}`;
   }
 </script>
 
@@ -36,14 +40,18 @@
       </div>
     {:else}
       <div class="flex-grow overflow-hidden flex flex-col">
-        <img src={selectedRecipe?.image} alt={selectedRecipe?.title} class="w-full h-48 object-cover rounded-md mb-4" />
+        <img 
+          src={getImageSrc(selectedRecipe?.image)} 
+          alt={selectedRecipe?.title} 
+          class="w-full h-48 object-cover rounded-md mb-4" 
+        />
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 flex-grow">
           <div class="flex flex-col">
             <h3 class="font-semibold mb-2">Ingredients:</h3>
             <div class="overflow-y-auto pr-2 flex-grow" style="max-height: 300px;">
               <ul class="list-disc list-inside pb-4">
                 {#each selectedRecipe?.ingredients || [] as ingredient}
-                  <li class="mb-1">{ingredient.amount} {ingredient.unit} {ingredient.name}</li>
+                  <li class="mb-1">{ingredient.amount} {ingredient.name}</li>
                 {/each}
               </ul>
             </div>
@@ -52,8 +60,8 @@
             <h3 class="font-semibold mb-2">Method:</h3>
             <div class="overflow-y-auto pr-2 flex-grow" style="max-height: 300px;">
               <ol class="list-decimal list-inside pb-4">
-                {#each selectedRecipe?.method || [] as step}
-                  <li class="mb-2">{step}</li>
+                {#each selectedRecipe?.methodSteps || [] as step}
+                  <li class="mb-2">{step.description}</li>
                 {/each}
               </ol>
             </div>
