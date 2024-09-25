@@ -7,6 +7,7 @@
   import RecipeModal from "$lib/components/RecipeModal.svelte";
   import { config } from "$lib/config";
   import { getAllRecipes, createRecipe, updateRecipe, deleteRecipe } from "$lib/services/api";
+  import { localDB } from "$lib/db/pouchdb";
 
   interface Ingredient {
     id: string;
@@ -42,6 +43,16 @@
 
   onMount(async () => {
     await fetchAllRecipes();
+    
+    if (localDB) {
+      localDB.changes({
+        since: 'now',
+        live: true
+      }).on('change', function(change) {
+        console.log('Change detected:', change);
+        fetchAllRecipes();
+      });
+    }
   });
 
   async function fetchAllRecipes() {
