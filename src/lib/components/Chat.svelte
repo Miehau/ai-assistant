@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, afterUpdate } from "svelte";
-  import { getConversations, sendChatMessage } from "$lib/services/api";
+  import { sendChatMessage } from "$lib/services/chat";
   import { fly } from "svelte/transition";
   import ChatMessage from "./ChatMessage.svelte";
   import { Label } from "$lib/components/ui/label";
@@ -17,10 +17,13 @@
     content: string;
   };
 
-
   let currentConversationId: string | null = null;
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
+  let currentStreamedMessage: Message | null = {
+    type: "received",
+    content: "",
+  };
   let messages: Message[] = [];
   const models = [
     { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
@@ -30,8 +33,8 @@
     value: models[0].value,
     label: models[0].label,
   };
+  $: streamResponse = true;
 
-  
   afterUpdate(() => {
     scrollToBottom();
   });
@@ -47,15 +50,39 @@
     currentMessage = "";
     messages = [...messages, { type: "sent", content: sentMessage }];
 
+    let isFirstChunk = true;
+
+    let onStreamResponse = (chunk: string) => {
+      console.log(chunk);
+      if (isFirstChunk) {
+        // Add a new "received" message when we get the first chunk
+        messages = [...messages, { type: "received", content: chunk }];
+        isFirstChunk = false;
+      } else {
+        // Update the last message with the new chunk
+        messages[messages.length - 1].content += chunk;
+      }
+      messages = [...messages]; // Trigger Svelte reactivity
+    };
+
     try {
       const response = await sendChatMessage(
         sentMessage,
         currentConversationId,
-        selectedModel.value
+        selectedModel.value,
+        streamResponse,
+        onStreamResponse,
       );
-
-      if (response.stream) {
-        await handleStreamResponse(response.stream);
+      if (!streamResponse && response && typeof response.text === "string") {
+        messages[messages.length - 1] = {
+          type: "received",
+          content: response.text,
+        };
+      }
+      currentConversationId = response.conversationId;
+      currentStreamedMessage = null;
+      if (streamResponse) {
+        handleStreamResponse(response.text);
       } else if (response && typeof response.text === "string") {
         messages = [...messages, { type: "received", content: response.text }];
         currentConversationId = response.conversationId;
@@ -67,39 +94,8 @@
     }
   }
 
-  async function handleStreamResponse(stream: ReadableStream) {
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let receivedMessage = { type: "received", content: "" };
-    messages = [...messages, receivedMessage];
-
-    try {
-      for await (const chunk of readStream(reader)) {
-        const lines = decoder.decode(chunk).split('\n').filter(line => line.trim() !== '');
-        
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === 'message') {
-              receivedMessage.content += data.content;
-              messages = [...messages]; // Trigger Svelte reactivity
-            } else if (data.type === 'end') {
-              currentConversationId = data.conversationId;
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Error parsing SSE data:', error);
-    }
-  }
-
-  async function* readStream(reader: ReadableStreamDefaultReader): AsyncGenerator<Uint8Array, void, unknown> {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      yield value;
-    }
+  function handleStreamResponse(chunk: string) {
+    // messages = [...messages, { type: "received", content: chunk }];
   }
 
   function handleKeydown(event: KeyboardEvent) {

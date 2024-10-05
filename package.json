@@ -13,6 +13,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@langchain/openai": "^0.3.5",
     "@sveltejs/adapter-auto": "^3.2.4",
     "@tauri-apps/api": "^1",
     "@types/pouchdb": "^6.4.2",

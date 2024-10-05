@@ -6,6 +6,10 @@ export default defineConfig(async () => ({
   plugins: [sveltekit()],
   define: {global: "window"},
 
+  build: {
+    sourcemap: true,
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent vite from obscuring rust errors

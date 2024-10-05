@@ -41,10 +41,10 @@
         Share
       </Button>
     </header>
-    <main class="grid flex-1 gap-4 overflow-auto p-4 md:grid-cols-2 lg:grid-cols-3">
-      <div class="relative hidden flex-col items-start gap-8 md:flex">
+    <main class="grid flex-1 gap-4 overflow-auto p-4 ">
+      <!-- <div class="hidden flex-col items-start gap-8 md:flex">
         <SettingsComponent />
-      </div>
+      </div> -->
       <Chat />
     </main>
   </div>
