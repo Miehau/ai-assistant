@@ -24,8 +24,22 @@
   };
 </script>
 
-<div
-  class={`mb-2 p-3 rounded-lg ${type === "sent" ? "bg-primary text-primary-foreground ml-auto" : "bg-secondary text-secondary-foreground"} max-w-[80%]`}
->
-  {@html parsedContent}
+<div class={`flex mb-4 ${type === "sent" ? "bg-primary justify-end" : "bg-secondary"}`}>
+  <div class="w-14 flex-shrink-0 flex items-center justify-center">
+    {#if type === "received"}
+      <div class="w-8 h-8 rounded-full flex items-center justify-center">
+        <span>🤖</span>
+      </div>
+    {/if}
+  </div>
+  <div class="flex-grow px-4 py-3 max-w-[calc(100%-7rem)]">
+    {@html parsedContent}
+  </div>
+  <div class="w-14 flex-shrink-0 flex items-center justify-center">
+    {#if type === "sent"}
+      <div class="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center">
+        <span>👤</span>
+      </div>
+    {/if}
+  </div>
 </div>
