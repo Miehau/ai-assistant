@@ -20,13 +20,16 @@
     "bits-ui": "^0.21.13",
     "clsx": "^2.1.1",
     "events": "^3.3.0",
+    "formsnap": "^1.0.1",
     "lucide-svelte": "^0.407.0",
     "marked": "^14.1.2",
     "pouchdb": "^9.0.0",
     "svelte-radix": "^1.1.1",
+    "sveltekit-superforms": "^2.19.1",
     "tailwind-merge": "^2.4.0",
     "tailwind-variants": "^0.2.1",
-    "vaul-svelte": "^0.3.2"
+    "vaul-svelte": "^0.3.2",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.1",

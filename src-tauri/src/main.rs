@@ -4,10 +4,22 @@
 mod db;
 
 use tauri::Manager;
-use db::{Db, Conversation, Message};
+use db::{Db, Conversation, Message, Model};
 use std::fs;
 use tauri::State;
 use uuid::Uuid;
+
+// Update the get_models function
+#[tauri::command]
+fn get_models(state: State<'_, Db>) -> Result<Vec<Model>, String> {
+    state.get_models().map_err(|e| e.to_string())
+}
+
+// Update the add_model function
+#[tauri::command]
+fn add_model(state: State<'_, Db>, model: Model) -> Result<(), String> {
+    state.add_model(&model).map_err(|e| e.to_string())
+}
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
@@ -61,7 +73,9 @@ fn main() {
             get_or_create_conversation,
             save_message,
             get_conversation_history,
-            get_conversations
+            get_conversations,
+            get_models,
+            add_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

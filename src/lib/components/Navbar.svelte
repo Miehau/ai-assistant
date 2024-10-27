@@ -9,7 +9,6 @@
   import SquareUser from "lucide-svelte/icons/square-user";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
-    import { CookingPot } from "lucide-svelte";
 </script>
 
 <aside class="inset-y fixed left-0 z-20 flex h-full flex-col border-r">
@@ -42,7 +41,7 @@
             variant="ghost"
             size="icon"
             class="rounded-lg"
-            aria-label="Models"
+            aria-label="Recipes"
             builders={[builder]}
           >
             <Bot class="size-5" />
@@ -53,15 +52,17 @@
     </Tooltip.Root>
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
-        <Button
-          variant="ghost"
-          size="icon"
-          class="rounded-lg"
-          aria-label="API"
-          builders={[builder]}
-        >
-          <CodeXML class="size-5" />
-        </Button>
+        <a href="/models">
+          <Button
+            variant="ghost"
+            size="icon"
+            class="rounded-lg"
+            aria-label="Models"
+            builders={[builder]}
+          >
+            <CodeXML class="size-5" />
+          </Button>
+        </a>
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>API</Tooltip.Content>
     </Tooltip.Root>
@@ -77,7 +78,9 @@
           <Book class="size-5" />
         </Button>
       </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Documentation</Tooltip.Content>
+      <Tooltip.Content side="right" sideOffset={5}
+        >Documentation</Tooltip.Content
+      >
     </Tooltip.Root>
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
@@ -97,15 +100,15 @@
   <nav class="mt-auto grid gap-1 p-2">
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
-          <Button
-            variant="ghost"
-            size="icon"
-            class="mt-auto rounded-lg"
-            aria-label="Help"
-            builders={[builder]}
-          >
-            <LifeBuoy class="size-5" />
-          </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="mt-auto rounded-lg"
+          aria-label="Help"
+          builders={[builder]}
+        >
+          <LifeBuoy class="size-5" />
+        </Button>
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Help</Tooltip.Content>
     </Tooltip.Root>

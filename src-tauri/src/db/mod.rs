@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc, TimeZone};
 use uuid::Uuid;
+use serde_json::Value as JsonValue;
 
 // Define a custom error type
 #[derive(Debug)]
@@ -38,6 +39,18 @@ pub struct Message {
 pub struct Conversation {
     pub id: String,
     pub name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Model {
+    pub id: String,
+    pub provider: String,
+    pub api_key: Option<String>,
+    pub model_name: String,
+    pub alias: String,
+    pub url: Option<String>,
+    pub deployment_name: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -76,6 +89,16 @@ impl Db {
                 conversation_id TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+            );"),
+            M::up("CREATE TABLE IF NOT EXISTS models (
+                id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                api_key TEXT,
+                model_name TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                url TEXT,
+                deployment_name TEXT,
+                created_at INTEGER NOT NULL
             );"),
         ]);
 
@@ -175,5 +198,46 @@ impl Db {
             }
             Err(e) => Err(e),
         }
+    }
+
+    pub fn add_model(&self, model: &Model) -> RusqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO models (id, provider, api_key, model_name, alias, url, deployment_name, created_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                model.id,
+                model.provider,
+                model.api_key,
+                model.model_name,
+                model.alias,
+                model.url,
+                model.deployment_name,
+                model.created_at.timestamp()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_models(&self) -> RusqliteResult<Vec<Model>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, provider, api_key, model_name, alias, url, deployment_name, created_at FROM models"
+        )?;
+        let model_iter = stmt.query_map([], |row| {
+            let timestamp: i64 = row.get(7)?;
+            let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
+            Ok(Model {
+                id: row.get(0)?,
+                provider: row.get(1)?,
+                api_key: row.get(2)?,
+                model_name: row.get(3)?,
+                alias: row.get(4)?,
+                url: row.get(5)?,
+                deployment_name: row.get(6)?,
+                created_at,
+            })
+        })?;
+        model_iter.collect()
     }
 }

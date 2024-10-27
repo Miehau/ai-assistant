@@ -23,10 +23,10 @@ export async function sendChatMessage(
     const history: { role: string, content: string }[] = await invoke('get_conversation_history', { conversationId: conversation.id });
 
     // Prepare messages for OpenAI
-    const messages = [
+    const messages: ChatCompletionMessageParam[] = [
       { role: 'system', content: "You are a helpful assistant." },
       ...history.map((msg) => ({
-        role: msg.role as 'user' | 'assistant',
+        role: msg.role as ChatCompletionRequestMessageRoleEnum,
         content: msg.content
       })),
       { role: 'user', content: message }

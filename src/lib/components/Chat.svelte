@@ -53,7 +53,6 @@
     let isFirstChunk = true;
 
     let onStreamResponse = (chunk: string) => {
-      console.log(chunk);
       if (isFirstChunk) {
         // Add a new "received" message when we get the first chunk
         messages = [...messages, { type: "received", content: chunk }];
