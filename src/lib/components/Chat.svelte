@@ -11,6 +11,9 @@
   import { Mic } from "lucide-svelte";
   import { Send } from "lucide-svelte";
   import * as Select from "$lib/components/ui/select";
+  import type { Model } from "$lib/types/models";
+  import { invoke } from "@tauri-apps/api/tauri";
+    import type { Selected } from "bits-ui";
 
   type Message = {
     type: "sent" | "received";
@@ -25,13 +28,10 @@
     content: "",
   };
   let messages: Message[] = [];
-  const models = [
-    { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
-    { value: "gpt-4o-mini", label: "GPT-4o mini" },
-  ];
+  let availableModels: Model[] = [];
   $: selectedModel = {
-    value: models[0].value,
-    label: models[0].label,
+    value: availableModels[0]?.model_name ?? "",
+    label: `${availableModels[0]?.model_name ?? "No models"} • ${availableModels[0]?.provider ?? ""}`
   };
   $: streamResponse = true;
 
@@ -45,7 +45,6 @@
   function preserveScrollFromBottom() {
     if (chatContainer) {
       const newScrollHeight = chatContainer.scrollHeight;
-      const newScrollTop = chatContainer.scrollTop;
       const visibleHeight = chatContainer.clientHeight;
       
       // Calculate distance from bottom before resize
@@ -82,6 +81,14 @@
       lastScrollHeight = chatContainer.scrollHeight;
       lastScrollTop = newScrollTop;
     }
+  }
+  
+  function selectModel(v: Selected<{ value: string; label: string }>) {
+    console.log(v.value);
+    selectedModel = {
+      value: v.value,
+      label: v.label
+    };
   }
 
   async function handleSendMessage() {
@@ -142,6 +149,28 @@
       handleSendMessage(); // Call the send message function
     }
   }
+
+  async function loadModels() {
+    try {
+      const models = await invoke<Model[]>("get_models");
+      // Only show enabled models
+      availableModels = models.filter(model => model.enabled);
+      
+      // Update selected model if we have available models
+      if (availableModels.length > 0) {
+        selectedModel = {
+          value: availableModels[0].model_name,
+          label: `${availableModels[0].model_name} • ${availableModels[0].provider}`
+        };
+      }
+    } catch (error) {
+      console.error("Failed to load models:", error);
+    }
+  }
+
+  onMount(() => {
+    loadModels();
+  });
 </script>
 
 <div
@@ -191,14 +220,32 @@
         <Tooltip.Content side="top">Use Microphone</Tooltip.Content>
       </Tooltip.Root>
       <!-- <div class="flex items-center p-3 pb-0"> -->
-      <Select.Root bind:selected={selectedModel}>
-        <Select.Trigger class="w-[180px]">
-          <Select.Value placeholder="Select a model" />
+      <Select.Root onSelectedChange={selectModel} selected={selectedModel}>
+        <Select.Trigger class="min-w-[180px] w-fit">
+          <Select.Value placeholder="Select a model">
+            {#if selectedModel}
+              <div class="flex items-center gap-2">
+                <span>{selectedModel.value}</span>
+                <span class="text-sm text-muted-foreground">•</span>
+                <span class="text-sm text-muted-foreground">{selectedModel.label.split(' • ')[1]}</span>
+              </div>
+            {/if}
+          </Select.Value>
         </Select.Trigger>
         <Select.Content>
-          {#each models as model}
-            <Select.Item value={model.value}>{model.label}</Select.Item>
-          {/each}
+          {#if availableModels.length === 0}
+            <Select.Item value="" disabled>No models available</Select.Item>
+          {:else}
+            {#each availableModels as model}
+              <Select.Item value={model.model_name}>
+                <div class="flex items-center gap-2 whitespace-nowrap">
+                  <span>{model.model_name}</span>
+                  <span class="text-sm text-muted-foreground">•</span>
+                  <span class="text-sm text-muted-foreground">{model.provider}</span>
+                </div>
+              </Select.Item>
+            {/each}
+          {/if}
         </Select.Content>
       </Select.Root>
       <!-- </div> -->

@@ -44,14 +44,21 @@ pub struct Conversation {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Model {
-    pub id: String,
     pub provider: String,
-    pub api_key: Option<String>,
     pub model_name: String,
-    pub alias: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub deployment_name: Option<String>,
-    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+// Add this new struct after the Model struct
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiKey {
+    pub provider: String,
+    pub key: String,
 }
 
 pub struct Db {
@@ -65,7 +72,6 @@ impl Db {
     }
 
     pub fn run_migrations(&mut self) -> Result<(), DatabaseError> {
-        // Define your migrations
         let migrations = Migrations::new(vec![
             M::up("CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,14 +97,16 @@ impl Db {
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
             );"),
             M::up("CREATE TABLE IF NOT EXISTS models (
-                id TEXT PRIMARY KEY,
                 provider TEXT NOT NULL,
-                api_key TEXT,
                 model_name TEXT NOT NULL,
-                alias TEXT NOT NULL,
                 url TEXT,
                 deployment_name TEXT,
-                created_at INTEGER NOT NULL
+                enabled BOOLEAN NOT NULL DEFAULT 0,
+                PRIMARY KEY (provider, model_name)
+            );"),
+            M::up("CREATE TABLE IF NOT EXISTS api_keys (
+                provider TEXT PRIMARY KEY,
+                key TEXT NOT NULL
             );"),
         ]);
 
@@ -203,17 +211,13 @@ impl Db {
     pub fn add_model(&self, model: &Model) -> RusqliteResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO models (id, provider, api_key, model_name, alias, url, deployment_name, created_at) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO models (provider, model_name, url, deployment_name, enabled) 
+             VALUES (?1, ?2, ?3, ?4, 1)",  // Set enabled to 1 (true) by default
             params![
-                model.id,
                 model.provider,
-                model.api_key,
                 model.model_name,
-                model.alias,
                 model.url,
                 model.deployment_name,
-                model.created_at.timestamp()
             ],
         )?;
         Ok(())
@@ -222,22 +226,66 @@ impl Db {
     pub fn get_models(&self) -> RusqliteResult<Vec<Model>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, provider, api_key, model_name, alias, url, deployment_name, created_at FROM models"
+            "SELECT provider, model_name, url, deployment_name, enabled FROM models"
         )?;
         let model_iter = stmt.query_map([], |row| {
-            let timestamp: i64 = row.get(7)?;
-            let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
             Ok(Model {
-                id: row.get(0)?,
-                provider: row.get(1)?,
-                api_key: row.get(2)?,
-                model_name: row.get(3)?,
-                alias: row.get(4)?,
-                url: row.get(5)?,
-                deployment_name: row.get(6)?,
-                created_at,
+                provider: row.get(0)?,
+                model_name: row.get(1)?,
+                url: row.get(2)?,
+                deployment_name: row.get(3)?,
+                enabled: row.get(4)?,
             })
         })?;
         model_iter.collect()
+    }
+
+    pub fn toggle_model(&self, provider: &str, model_name: &str) -> RusqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE models SET enabled = NOT enabled 
+             WHERE provider = ?1 AND model_name = ?2",
+            params![provider, model_name],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_api_key(&self, provider: &str, key: &str) -> RusqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO api_keys (provider, key) VALUES (?1, ?2)",
+            params![provider, key],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_api_key(&self, provider: &str) -> RusqliteResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT key FROM api_keys WHERE provider = ?1")?;
+        let result = stmt.query_row(params![provider], |row| row.get(0));
+        match result {
+            Ok(key) => Ok(Some(key)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    // Add these new methods to the impl block
+    pub fn delete_model(&self, provider: &str, model_name: &str) -> RusqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM models WHERE provider = ?1 AND model_name = ?2",
+            params![provider, model_name],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_api_key(&self, provider: &str) -> RusqliteResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM api_keys WHERE provider = ?1",
+            params![provider],
+        )?;
+        Ok(())
     }
 }

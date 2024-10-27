@@ -2,11 +2,13 @@ import { invoke } from '@tauri-apps/api/tauri';
 import OpenAI from 'openai';
 import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages';
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: "key", // Make sure to set this environment variable
-  dangerouslyAllowBrowser: true // This is needed for client-side usage
-});
+async function getApiKeyForProvider(provider: string): Promise<string> {
+  const apiKey = await invoke<string | null>('get_api_key', { provider });
+  if (!apiKey) {
+    throw new Error(`No API key found for provider: ${provider}`);
+  }
+  return apiKey;
+}
 
 export async function sendChatMessage(
   message: string,
@@ -15,6 +17,7 @@ export async function sendChatMessage(
   streamResponse: boolean,
   onStream?: (chunk: string) => void
 ) {
+  console.log("Using model:", model);
   try {
     // Get or create conversation
     const conversation: { id: string } = await invoke('get_or_create_conversation', { conversationId });
@@ -22,11 +25,31 @@ export async function sendChatMessage(
     // Get conversation history
     const history: { role: string, content: string }[] = await invoke('get_conversation_history', { conversationId: conversation.id });
 
+    // Get all models to find the provider for the selected model
+    const models = await invoke<Array<{ model_name: string, provider: string }>>('get_models');
+    const selectedModel = models.find(m => m.model_name === model);
+    
+    if (!selectedModel) {
+      throw new Error(`Model ${model} not found`);
+    }
+
+    // Get the API key for the provider
+    const apiKey = await getApiKeyForProvider(selectedModel.provider);
+
+    // Initialize OpenAI client with the fetched API key
+    const openai = new OpenAI({
+      apiKey: apiKey,
+      dangerouslyAllowBrowser: true
+    });
+
     // Prepare messages for OpenAI
-    const messages: ChatCompletionMessageParam[] = [
-      { role: 'system', content: "You are a helpful assistant." },
+    const messages = [
+      { 
+        role: 'system', 
+        content: "You will act as a Senior Software Recruitment Specialist. You will be given candidate's skills together with job description. You task is to select most relevant skills from candidate's skills that will match the job description, increasing candidate's chances of getting the job. You will output them in JSON object containing fields: 'company', 'roleName', 'keyPoints', the last one being array of strings with most relevant experience for the description. \n\n"
+      },
       ...history.map((msg) => ({
-        role: msg.role as ChatCompletionRequestMessageRoleEnum,
+        role: msg.role,
         content: msg.content
       })),
       { role: 'user', content: message }
@@ -34,7 +57,7 @@ export async function sendChatMessage(
 
     // Call OpenAI API with streaming
     const stream = await openai.chat.completions.create({
-      model: model || 'gpt-3.5-turbo',
+      model: model,
       messages: messages,
       stream: streamResponse,
     });
@@ -66,7 +89,7 @@ export async function sendChatMessage(
     };
   } catch (error) {
     console.error('Failed to send chat message:', error);
-    throw new Error('Failed to send chat message');
+    throw error; // Re-throw to handle in the UI
   }
 }
 
@@ -89,4 +112,3 @@ export async function getConversations() {
     throw new Error('Failed to get conversations');
   }
 }
-

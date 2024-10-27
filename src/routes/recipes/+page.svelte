@@ -23,7 +23,7 @@
   }
 
   interface Recipe {
-    _id: string; // Change this from 'id' to '_id'
+    _id: string;
     title: string;
     image: string;
     source?: string;
@@ -104,7 +104,7 @@
     }));
 
     const recipeData = {
-      _id: selectedRecipe?._id || 'temp_id', // Change 'id' to '_id'
+      _id: selectedRecipe?._id || 'temp_id',
       title: formData.title,
       image: formData.image || '',
       ingredients,

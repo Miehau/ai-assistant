@@ -17,7 +17,7 @@
     "@sveltejs/adapter-auto": "^3.2.4",
     "@tauri-apps/api": "^1",
     "@types/pouchdb": "^6.4.2",
-    "bits-ui": "^0.21.13",
+    "bits-ui": "^0.21.16",
     "clsx": "^2.1.1",
     "events": "^3.3.0",
     "formsnap": "^1.0.1",

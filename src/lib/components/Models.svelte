@@ -9,38 +9,62 @@
     import { slide } from 'svelte/transition';
     import { cubicOut } from 'svelte/easing';
     import ApiKeyInput from "./ApiKeyInput.svelte";
+    import { onMount } from "svelte";
+    import { Switch } from "$lib/components/ui/switch";
+    import type { Model } from "$lib/types/models";
+    import { Trash2 } from "lucide-svelte";
+
+    let models: Model[] = [];
 
     // Define the options for the Select component
     const providers = [
         { value: "openai", label: "OpenAI" },
         { value: "anthropic", label: "Anthropic" },
         { value: "azure", label: "Azure" },
-    ];
+    ] as const;
 
     let selectedProvider = providers[0];
     let modelName = "";
     let deploymentName = "";
     let deploymentUrl = "";
 
+    async function loadModels() {
+        try {
+            models = await invoke<Model[]>("get_models");
+        } catch (error) {
+            console.error("Failed to load models:", error);
+        }
+    }
+
+    onMount(() => {
+        loadModels();
+    });
+
     $: formData = {
-        name: modelName,
         provider: selectedProvider.value,
-        deploymentName: deploymentName,
-        deploymentUrl: deploymentUrl,
+        model_name: modelName,
+        // Include Azure-specific fields conditionally
+        ...(selectedProvider.value === "azure" && {
+            deployment_name: deploymentName,
+            url: deploymentUrl
+        })
     };
+
     let isSubmitting = false;
 
-    // Handle form submission
     async function handleSubmit(event: Event) {
         event.preventDefault();
         isSubmitting = true;
 
         try {
-            // Invoke the Tauri command to handle form submission
-            const response = await invoke<string>("add_model", formData);
-
-            // Reset the form
-            formData = { name: "", provider: "openai", deploymentName: "", deploymentUrl: "" };
+            console.log(formData);
+            await invoke<string>("add_model", {model: formData});
+            await loadModels();
+            
+            // Reset form
+            modelName = "";
+            deploymentName = "";
+            deploymentUrl = "";
             selectedProvider = providers[0];
         } catch (error: any) {
             console.error(error);
@@ -48,10 +72,31 @@
             isSubmitting = false;
         }
     }
+    function handleFormModelUpdate(v: Selected<{ value: string; label: string }> | undefined) {
+        if (v) {
+            selectedProvider = providers.find(p => p.value === v.value) || providers[0];
+        }
+    }
 
-    function handleFormModelUpdate(v: Selected<(typeof providers)[number]> | undefined) {
-        console.log(v);
-        if (v) selectedProvider = v.value;
+    async function toggleModel(model: Model) {
+        try {
+            await invoke("toggle_model", { model: { 
+                provider: model.provider, 
+                model_name: model.model_name 
+            }});
+            await loadModels();  // Refresh the list
+        } catch (error) {
+            console.error("Failed to toggle model:", error);
+        }
+    }
+
+    async function deleteModel(model: Model) {
+        try {
+            await invoke("delete_model", { model: model });
+            await loadModels();  // Refresh the list
+        } catch (error) {
+            console.error("Failed to delete model:", error);
+        }
     }
 </script>
 
@@ -120,6 +165,44 @@
 
 <Card.Root class="mt-6">
     <Card.Header>
+        <Card.Title>Configured Models</Card.Title>
+    </Card.Header>
+    <Card.Content>
+        {#if models.length === 0}
+            <p class="text-muted-foreground">No models configured yet.</p>
+        {:else}
+            <div class="space-y-2">
+                {#each models as model}
+                    <div class="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors">
+                        <div class="flex items-center gap-2">
+                            <h4 class="font-medium">{model.model_name}</h4>
+                            <span class="text-sm text-muted-foreground">•</span>
+                            <span class="text-sm text-muted-foreground">{model.provider}</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <Switch 
+                                checked={model.enabled} 
+                                onCheckedChange={() => toggleModel(model)}
+                            />
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                class="text-destructive hover:text-destructive/90"
+                                on:click={() => deleteModel(model)}
+                                aria-label={`Delete model ${model.model_name}`}
+                            >
+                                <Trash2 class="h-4 w-4" />
+                            </Button>
+                        </div>
+                    </div>
+                {/each}
+            </div>
+        {/if}
+    </Card.Content>
+</Card.Root>
+
+<Card.Root class="mt-6">
+    <Card.Header>
         <Card.Title>API Keys</Card.Title>
     </Card.Header>
     <Card.Content>
@@ -128,8 +211,3 @@
         {/each}
     </Card.Content>
 </Card.Root>
-
-<!-- Debugging Output (Optional) -->
-{#if browser}
-    <pre class="mt-4 p-4 bg-muted rounded-md">{JSON.stringify(formData, null, 2)}</pre>
-{/if}
