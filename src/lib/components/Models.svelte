@@ -49,8 +49,9 @@
         }
     }
 
-    function handleFormModelUpdate(v: Selected<typeof providers[number]>) {
-        if (v) selectedProvider = v;
+    function handleFormModelUpdate(v: Selected<(typeof providers)[number]> | undefined) {
+        console.log(v);
+        if (v) selectedProvider = v.value;
     }
 </script>
 
