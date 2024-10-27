@@ -9,6 +9,9 @@
   import SquareUser from "lucide-svelte/icons/square-user";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
+  import { page } from "$app/stores";
+
+  $: currentPath = $page.url.pathname;
 </script>
 
 <aside class="inset-y fixed left-0 z-20 flex h-full flex-col border-r">
@@ -24,7 +27,7 @@
           <Button
             variant="ghost"
             size="icon"
-            class="rounded-lg bg-muted"
+            class="rounded-lg {currentPath === '/' ? 'bg-muted' : ''}"
             aria-label="Playground"
             builders={[builder]}
           >
@@ -40,7 +43,7 @@
           <Button
             variant="ghost"
             size="icon"
-            class="rounded-lg"
+            class="rounded-lg {currentPath === '/recipes' ? 'bg-muted' : ''}"
             aria-label="Recipes"
             builders={[builder]}
           >
@@ -56,7 +59,7 @@
           <Button
             variant="ghost"
             size="icon"
-            class="rounded-lg"
+            class="rounded-lg {currentPath === '/models' ? 'bg-muted' : ''}"
             aria-label="Models"
             builders={[builder]}
           >
