@@ -35,13 +35,52 @@
   };
   $: streamResponse = true;
 
+  let lastScrollHeight = 0;
+  let lastScrollTop = 0;  // Added this declaration
+
   afterUpdate(() => {
     scrollToBottom();
   });
 
+  function preserveScrollFromBottom() {
+    if (chatContainer) {
+      const newScrollHeight = chatContainer.scrollHeight;
+      const newScrollTop = chatContainer.scrollTop;
+      const visibleHeight = chatContainer.clientHeight;
+      
+      // Calculate distance from bottom before resize
+      const distanceFromBottom = lastScrollHeight - (lastScrollTop + visibleHeight);
+      
+      // Restore the same distance from bottom after resize
+      chatContainer.scrollTop = newScrollHeight - (distanceFromBottom + visibleHeight);
+      
+      // Update values for next resize
+      lastScrollHeight = newScrollHeight;
+      lastScrollTop = chatContainer.scrollTop;
+    }
+  }
+
+  // Add resize observer
+  onMount(() => {
+    if (chatContainer) {
+      const resizeObserver = new ResizeObserver(() => {
+        preserveScrollFromBottom();
+      });
+      
+      resizeObserver.observe(chatContainer);
+      
+      return () => {
+        resizeObserver.disconnect();
+      };
+    }
+  });
+
   function scrollToBottom() {
     if (chatContainer) {
-      chatContainer.scrollTop = chatContainer.scrollHeight; // Scroll to the bottom
+      const newScrollTop = chatContainer.scrollHeight - chatContainer.clientHeight;
+      chatContainer.scrollTop = newScrollTop;
+      lastScrollHeight = chatContainer.scrollHeight;
+      lastScrollTop = newScrollTop;
     }
   }
 
@@ -106,15 +145,15 @@
 </script>
 
 <div
-  class="relative flex flex-col h-full min-h-[50vh] rounded-xl bg-muted/50 p-4 lg:col-span-2"
+  class="relative flex flex-col h-full min-h-[50vh] rounded-xl bg-muted/50 p-4 lg:col-span-2 w-full"
 >
   <div class="flex-1 overflow-hidden">
     <div
       bind:this={chatContainer}
-      class="h-full overflow-y-auto pr-4 space-y-4"
+      class="h-full overflow-y-auto pr-4 space-y-4 w-full"
     >
       {#each messages as msg}
-        <div transition:fly={{ y: 20, duration: 300 }}>
+        <div transition:fly={{ y: 20, duration: 300 }} class="w-full">
           <ChatMessage type={msg.type} content={msg.content} />
         </div>
       {/each}
