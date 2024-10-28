@@ -51,6 +51,7 @@ This application prioritizes user privacy:
 ## Development
 
 ### Project Structure
+```
 src/
 ├── lib/
 │   ├── components/    # Reusable UI components
@@ -59,6 +60,7 @@ src/
 │   └── utils/         # Helper functions
 ├── routes/            # SvelteKit pages
 └── app.html           # Base HTML template
+```
 
 ### Key Technologies
 - Frontend: SvelteKit, TypeScript, TailwindCSS
