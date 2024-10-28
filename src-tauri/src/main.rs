@@ -4,7 +4,7 @@
 mod db;
 
 use tauri::Manager;
-use db::{Db, Conversation, Message, Model};
+use db::{Db, Conversation, Message, Model, SystemPrompt};
 use std::fs;
 use tauri::State;
 use uuid::Uuid;
@@ -88,6 +88,37 @@ fn delete_api_key(state: State<'_, Db>, provider: String) -> Result<(), String> 
         .map_err(|e| e.to_string())
 }
 
+// Add these new commands after the existing ones
+#[tauri::command]
+async fn save_system_prompt(state: State<'_, Db>, name: String, content: String) -> Result<SystemPrompt, String> {
+    state.save_system_prompt(&name, &content)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_system_prompt(state: State<'_, Db>, id: String, name: String, content: String) -> Result<SystemPrompt, String> {
+    state.update_system_prompt(&id, &name, &content)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_system_prompt(state: State<'_, Db>, id: String) -> Result<Option<SystemPrompt>, String> {
+    state.get_system_prompt(&id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_all_system_prompts(state: State<'_, Db>) -> Result<Vec<SystemPrompt>, String> {
+    state.get_all_system_prompts()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_system_prompt(state: State<'_, Db>, id: String) -> Result<(), String> {
+    state.delete_system_prompt(&id)
+        .map_err(|e| e.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -115,7 +146,12 @@ fn main() {
             set_api_key,
             get_api_key,
             delete_model,
-            delete_api_key
+            delete_api_key,
+            save_system_prompt,
+            update_system_prompt,
+            get_system_prompt,
+            get_all_system_prompts,
+            delete_system_prompt,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

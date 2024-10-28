@@ -7,6 +7,7 @@
   import LifeBuoy from "lucide-svelte/icons/life-buoy";
   import Book from "lucide-svelte/icons/book";
   import SquareUser from "lucide-svelte/icons/square-user";
+  import Users from "lucide-svelte/icons/users";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import { page } from "$app/stores";
@@ -68,6 +69,22 @@
         </a>
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>API</Tooltip.Content>
+    </Tooltip.Root>
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild let:builder>
+        <a href="/assistants">
+          <Button
+            variant="ghost"
+            size="icon"
+            class="rounded-lg {currentPath === '/assistants' ? 'bg-muted' : ''}"
+            aria-label="Assistants"
+            builders={[builder]}
+          >
+            <Users class="size-5" />
+          </Button>
+        </a>
+      </Tooltip.Trigger>
+      <Tooltip.Content side="right" sideOffset={5}>Assistants</Tooltip.Content>
     </Tooltip.Root>
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>

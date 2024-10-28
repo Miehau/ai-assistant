@@ -13,10 +13,11 @@
   import * as Select from "$lib/components/ui/select";
   import type { Model } from "$lib/types/models";
   import { invoke } from "@tauri-apps/api/tauri";
-    import type { Selected } from "bits-ui";
+  import type { Selected } from "bits-ui";
+  import type { SystemPrompt } from "$lib/types";
 
   type Message = {
-    type: "sent" | "received";
+    type: "sent" | "received" | "system";
     content: string;
   };
 
@@ -29,10 +30,12 @@
   };
   let messages: Message[] = [];
   let availableModels: Model[] = [];
-  $: selectedModel = {
+  let systemPrompts: SystemPrompt[] = [];
+  let selectedModel: Selected<{ value: string; label: string }> = {
     value: availableModels[0]?.model_name ?? "",
     label: `${availableModels[0]?.model_name ?? "No models"} • ${availableModels[0]?.provider ?? ""}`
   };
+  let selectedSystemPrompt: SystemPrompt | null = null;
   $: streamResponse = true;
 
   let lastScrollHeight = 0;
@@ -94,17 +97,16 @@
   async function handleSendMessage() {
     const sentMessage = currentMessage;
     currentMessage = "";
+    
     messages = [...messages, { type: "sent", content: sentMessage }];
 
     let isFirstChunk = true;
 
     let onStreamResponse = (chunk: string) => {
       if (isFirstChunk) {
-        // Add a new "received" message when we get the first chunk
         messages = [...messages, { type: "received", content: chunk }];
         isFirstChunk = false;
       } else {
-        // Update the last message with the new chunk
         messages[messages.length - 1].content += chunk;
       }
       messages = [...messages]; // Trigger Svelte reactivity
@@ -117,6 +119,7 @@
         selectedModel.value,
         streamResponse,
         onStreamResponse,
+        selectedSystemPrompt?.content // Pass the selected system prompt content
       );
       if (!streamResponse && response && typeof response.text === "string") {
         messages[messages.length - 1] = {
@@ -168,8 +171,23 @@
     }
   }
 
+  async function loadSystemPrompts() {
+    try {
+      systemPrompts = await invoke('get_all_system_prompts');
+    } catch (error) {
+      console.error("Failed to load system prompts:", error);
+    }
+  }
+
+  function selectSystemPrompt(prompt: SystemPrompt) {
+    selectedSystemPrompt = prompt;
+    // You might want to add the system prompt to the messages array here
+    // or handle it when sending the next message
+  }
+
   onMount(() => {
     loadModels();
+    loadSystemPrompts();
   });
 </script>
 
@@ -220,6 +238,38 @@
         <Tooltip.Content side="top">Use Microphone</Tooltip.Content>
       </Tooltip.Root>
       <!-- <div class="flex items-center p-3 pb-0"> -->
+      <Select.Root 
+        onSelectedChange={(v) => {
+          if (v) {
+            const prompt = systemPrompts.find(p => p.id === v.value);
+            if (prompt) selectSystemPrompt(prompt);
+          }
+        }}
+      >
+        <Select.Trigger class="min-w-[180px] w-fit mr-2">
+          <Select.Value placeholder="Select system prompt">
+            {#if selectedSystemPrompt}
+              <div class="flex items-center gap-2">
+                <span class="truncate max-w-[150px]">{selectedSystemPrompt.name}</span>
+              </div>
+            {/if}
+          </Select.Value>
+        </Select.Trigger>
+        <Select.Content>
+          {#if systemPrompts.length === 0}
+            <Select.Item value="" disabled>No system prompts available</Select.Item>
+          {:else}
+            {#each systemPrompts as prompt}
+              <Select.Item value={prompt.id}>
+                <div class="flex items-center gap-2">
+                  <span>{prompt.name}</span>
+                </div>
+              </Select.Item>
+            {/each}
+          {/if}
+        </Select.Content>
+      </Select.Root>
+
       <Select.Root onSelectedChange={selectModel} selected={selectedModel}>
         <Select.Trigger class="min-w-[180px] w-fit">
           <Select.Value placeholder="Select a model">

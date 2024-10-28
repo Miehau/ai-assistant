@@ -15,7 +15,8 @@ export async function sendChatMessage(
   conversationId: string | null,
   model: string,
   streamResponse: boolean,
-  onStream?: (chunk: string) => void
+  onStream?: (chunk: string) => void,
+  systemPrompt?: string // Add system prompt parameter
 ) {
   console.log("Using model:", model);
   try {
@@ -46,7 +47,7 @@ export async function sendChatMessage(
     const messages = [
       { 
         role: 'system', 
-        content: "You will act as a Senior Software Recruitment Specialist. You will be given candidate's skills together with job description. You task is to select most relevant skills from candidate's skills that will match the job description, increasing candidate's chances of getting the job. You will output them in JSON object containing fields: 'company', 'roleName', 'keyPoints', the last one being array of strings with most relevant experience for the description. \n\n"
+        content: systemPrompt || "You are a helpful AI assistant." // Use provided system prompt or fallback
       },
       ...history.map((msg) => ({
         role: msg.role,
