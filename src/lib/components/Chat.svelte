@@ -94,11 +94,19 @@
     };
   }
 
+  function isValidMessage(message: string): boolean {
+    return message.trim().length > 0;
+  }
+
   async function handleSendMessage() {
-    const sentMessage = currentMessage;
+    if (!isValidMessage(currentMessage)) {
+      return;
+    }
+
+    const trimmedMessage = currentMessage.trim();
     currentMessage = "";
     
-    messages = [...messages, { type: "sent", content: sentMessage }];
+    messages = [...messages, { type: "sent", content: trimmedMessage }];
 
     let isFirstChunk = true;
 
@@ -114,7 +122,7 @@
 
     try {
       const response = await sendChatMessage(
-        sentMessage,
+        trimmedMessage,
         currentConversationId,
         selectedModel.value,
         streamResponse,
@@ -148,8 +156,10 @@
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault(); // Prevent default behavior
-      handleSendMessage(); // Call the send message function
+      event.preventDefault();
+      if (isValidMessage(currentMessage)) {
+        handleSendMessage();
+      }
     }
   }
 
