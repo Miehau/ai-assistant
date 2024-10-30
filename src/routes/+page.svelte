@@ -1,6 +1,5 @@
 <script lang="ts">
   import Settings from "lucide-svelte/icons/settings";
-  import Share from "lucide-svelte/icons/share";
 
   import Chat from "$lib/components/Chat.svelte";
   import MainLayout from "$lib/components/MainLayout.svelte";
@@ -36,10 +35,6 @@
           </div>
         </Drawer.Content>
       </Drawer.Root>
-      <Button variant="outline" size="sm" class="ml-auto gap-1.5 text-sm">
-        <Share class="size-3.5" />
-        Share
-      </Button>
     </header>
     <main class="grid flex-1 gap-4 overflow-auto p-4 ">
       <!-- <div class="hidden flex-col items-start gap-8 md:flex">
