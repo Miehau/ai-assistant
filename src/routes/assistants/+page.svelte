@@ -126,6 +126,10 @@
                                 <div class="text-sm text-muted-foreground">
                                     Last updated: {new Date(prompt.updated_at).toLocaleString()}
                                 </div>
+                                <p class="mt-2 text-sm text-muted-foreground">
+                                    {prompt.content.split('.')[0]}
+                                    {prompt.content.split('.')[1] ? '.' + prompt.content.split('.')[1] + '...' : '...'}
+                                </p>
                             </div>
                             <div class="flex gap-2">
                                 <Button 
@@ -145,7 +149,6 @@
                                 </Button>
                             </div>
                         </div>
-                        <div class="whitespace-pre-wrap">{prompt.content}</div>
                     </div>
                 {/each}
             </div>
