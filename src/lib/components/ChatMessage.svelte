@@ -2,7 +2,8 @@
   import { marked } from "marked";
   import { onMount } from "svelte";
   import { shell } from "@tauri-apps/api";
-  import type { Link } from "marked";
+  import type { Link, Code } from "marked";
+  import { Check, Copy } from "lucide-svelte";
 
   export let type: "sent" | "received";
   export let content: string;
@@ -12,7 +13,27 @@
   onMount(() => {
     const renderer = new marked.Renderer();
     
-    renderer.link = ({ href, title, text }: Link) => {
+    // Custom code block renderer with correct types
+    renderer.code = function({ text, lang }: Code) {
+      return `
+        <div class="code-block-wrapper relative group">
+          <pre><code class="language-${lang}">${text}</code></pre>
+          <button
+            class="copy-button opacity-0 group-hover:opacity-100 absolute top-2 right-2 
+                   p-1.5 rounded-md bg-background/90 hover:bg-background 
+                   shadow-sm border border-border transition-all duration-200"
+            data-copy="${encodeURIComponent(text)}"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+        </div>
+      `;
+    };
+
+    renderer.link = function({ href, title, text }: Link) {
       if (!href) return text;
       return `<a href="#" 
                 data-href="${href}"
@@ -27,8 +48,33 @@
     });
   });
 
-  async function handleLinkClick(event: MouseEvent) {
+  async function handleClick(event: MouseEvent) {
     const target = event.target as HTMLElement;
+    
+    // Handle copy button clicks
+    const copyButton = target.closest('.copy-button');
+    if (copyButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const code = copyButton.getAttribute('data-copy');
+      if (code) {
+        try {
+          await navigator.clipboard.writeText(decodeURIComponent(code));
+          const icon = copyButton.querySelector('svg');
+          if (icon) {
+            icon.outerHTML = '<svg class="w-4 h-4 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+            setTimeout(() => {
+              icon.outerHTML = '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+            }, 2000);
+          }
+        } catch (err) {
+          console.error('Failed to copy:', err);
+        }
+      }
+      return;
+    }
+
+    // Handle link clicks
     if (target.tagName.toLowerCase() === 'a') {
       event.preventDefault();
       const href = target.getAttribute('data-href');
@@ -57,14 +103,14 @@
   {/if}
   
   <div class={`
-    rounded-lg px-4 py-2 max-w-[80%] 
+    rounded-lg px-4 py-2 max-w-[80%] relative
     ${type === "sent" 
       ? "bg-primary text-primary-foreground" 
       : "bg-muted"
     }`}
   >
     <div class="prose prose-sm dark:prose-invert max-w-none">
-      <div class="markdown-content" on:click={handleLinkClick}>
+      <div class="markdown-content" on:click={handleClick}>
         {@html parsedContent}
       </div>
     </div>
@@ -199,5 +245,25 @@
   /* Adjust first header margin */
   :global(.markdown-content > *:first-child) {
     margin-top: 0;
+  }
+
+  :global(.markdown-content) {
+    position: relative;
+  }
+
+  :global(.copy-button) {
+    z-index: 10;
+  }
+
+  :global(.copy-button:focus) {
+    opacity: 1;
+  }
+
+  :global(.code-block-wrapper) {
+    position: relative;
+  }
+
+  :global(.code-block-wrapper:hover .copy-button) {
+    opacity: 1;
   }
 </style>
