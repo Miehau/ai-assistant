@@ -56,7 +56,6 @@ export async function sendChatMessage(
       { role: 'user', content: message }
     ];
 
-    // Call OpenAI API with streaming
     const stream = await openai.chat.completions.create({
       model: model,
       messages: messages,
@@ -83,7 +82,6 @@ export async function sendChatMessage(
       role: 'assistant', 
       content: fullResponse 
     });
-
     return {
       text: fullResponse,
       conversationId: conversation.id,

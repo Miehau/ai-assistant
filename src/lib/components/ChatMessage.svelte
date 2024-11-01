@@ -2,7 +2,7 @@
   import { marked } from "marked";
   import { onMount } from "svelte";
   import { shell } from "@tauri-apps/api";
-  import type { Link, Code } from "marked";
+  import type { Link } from "marked";
   import { Check, Copy } from "lucide-svelte";
 
   export let type: "sent" | "received";
@@ -13,11 +13,12 @@
   onMount(() => {
     const renderer = new marked.Renderer();
     
-    // Custom code block renderer with correct types
-    renderer.code = function({ text, lang }: Code) {
+    // Fix the code block renderer to use the correct type signature
+    renderer.code = ({ text, lang, escaped }: { text: string, lang: string | undefined, escaped: boolean }) => {
+      const code = escaped ? text : escapeHtml(text);
       return `
         <div class="code-block-wrapper relative group">
-          <pre><code class="language-${lang}">${text}</code></pre>
+          <pre><code class="language-${lang || ''}">${code}</code></pre>
           <button
             class="copy-button opacity-0 group-hover:opacity-100 absolute top-2 right-2 
                    p-1.5 rounded-md bg-background/90 hover:bg-background 
@@ -33,7 +34,18 @@
       `;
     };
 
-    renderer.link = function({ href, title, text }: Link) {
+    // Helper function to escape HTML
+    function escapeHtml(text: string): string {
+      return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    // Fix the link renderer to use the correct type signature
+    renderer.link = ({ href, title, text }: Link) => {
       if (!href) return text;
       return `<a href="#" 
                 data-href="${href}"
@@ -47,6 +59,19 @@
       renderer: renderer
     });
   });
+
+  function getCopyIcon() {
+    return `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>`;
+  }
+
+  function getCheckIcon() {
+    return `<svg class="w-4 h-4 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>`;
+  }
 
   async function handleClick(event: MouseEvent) {
     const target = event.target as HTMLElement;
@@ -62,9 +87,15 @@
           await navigator.clipboard.writeText(decodeURIComponent(code));
           const icon = copyButton.querySelector('svg');
           if (icon) {
-            icon.outerHTML = '<svg class="w-4 h-4 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+            // Show check icon
+            icon.outerHTML = getCheckIcon();
+            
+            // Reset to copy icon after 2 seconds
             setTimeout(() => {
-              icon.outerHTML = '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+              const updatedIcon = copyButton.querySelector('svg');
+              if (updatedIcon) {
+                updatedIcon.outerHTML = getCopyIcon();
+              }
             }, 2000);
           }
         } catch (err) {
@@ -135,10 +166,13 @@
 
   /* Code block styles */
   :global(.markdown-content pre) {
-    background-color: rgb(var(--background) / 0.8);
+    background-color: hsl(var(--muted));
+    border: 1px solid hsl(var(--border));
     border-radius: 0.5rem;
     padding: 1rem;
     overflow-x: auto;
+    margin: 0.5rem 0;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
 
   :global(.markdown-content pre code) {
@@ -146,6 +180,7 @@
     font-size: 0.875rem;
     line-height: 1.5;
     white-space: pre-wrap;
+    background-color: transparent;
   }
 
   /* Inline code styles */
@@ -261,9 +296,21 @@
 
   :global(.code-block-wrapper) {
     position: relative;
+    margin: 1rem 0;
   }
 
   :global(.code-block-wrapper:hover .copy-button) {
     opacity: 1;
+  }
+
+  /* When inside a received message (which has muted background) */
+  :global(.bg-muted .markdown-content pre) {
+    background-color: hsl(var(--background));
+  }
+
+  /* When inside a sent message (which has primary background) */
+  :global(.bg-primary .markdown-content pre) {
+    background-color: hsl(var(--primary-foreground));
+    border-color: rgba(255, 255, 255, 0.2);
   }
 </style>

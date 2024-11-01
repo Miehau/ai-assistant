@@ -24,11 +24,8 @@
   let currentConversationId: string | null = null;
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
-  let currentStreamedMessage: Message | null = {
-    type: "received",
-    content: "",
-  };
-  let messages: Message[] = [];
+  let currentStreamedMessage = "";
+  let messages: Array<{ type: "sent" | "received"; content: string }> = [];
   let availableModels: Model[] = [];
   let systemPrompts: SystemPrompt[] = [];
   let selectedModel: Selected<{ value: string; label: string }> = {
@@ -111,6 +108,7 @@
     let isFirstChunk = true;
 
     let onStreamResponse = (chunk: string) => {
+      console.log("saving chunk", chunk);
       if (isFirstChunk) {
         messages = [...messages, { type: "received", content: chunk }];
         isFirstChunk = false;
@@ -136,7 +134,7 @@
         };
       }
       currentConversationId = response.conversationId;
-      currentStreamedMessage = null;
+      currentStreamedMessage = "";
       if (streamResponse) {
         handleStreamResponse(response.text);
       } else if (response && typeof response.text === "string") {
@@ -148,10 +146,20 @@
     } catch (error) {
       console.error("Failed to send chat message:", error);
     }
+    currentStreamedMessage = "";
   }
 
   function handleStreamResponse(chunk: string) {
-    // messages = [...messages, { type: "received", content: chunk }];
+    currentStreamedMessage += chunk;
+    if (messages.length > 0 && messages[messages.length - 1].type === "received") {
+      // Update existing message if it's from assistant
+      messages[messages.length - 1].content = currentStreamedMessage;
+      messages = messages; // Trigger Svelte reactivity
+      console.log("updated message", messages[messages.length - 1].content);
+    } else {
+      // Add new message if there's no existing received message
+      messages = [...messages, { type: "received", content: currentStreamedMessage }];
+    }
   }
 
   function handleKeydown(event: KeyboardEvent) {
