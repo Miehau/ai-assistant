@@ -4,7 +4,7 @@
 mod db;
 
 use tauri::Manager;
-use db::{Db, Conversation, Message, Model, SystemPrompt};
+use db::{Db, Conversation, Message, Model, SystemPrompt, MessageAttachment};
 use std::fs;
 use tauri::State;
 use uuid::Uuid;
@@ -119,6 +119,18 @@ async fn delete_system_prompt(state: State<'_, Db>, id: String) -> Result<(), St
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn save_message_with_attachments(
+    state: State<'_, Db>,
+    conversation_id: String,
+    role: String,
+    content: String,
+    attachments: Vec<MessageAttachment>,
+) -> Result<(), String> {
+    state.save_message_with_attachments(&conversation_id, &role, &content, &attachments)
+        .map_err(|e| e.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -152,6 +164,7 @@ fn main() {
             get_system_prompt,
             get_all_system_prompts,
             delete_system_prompt,
+            save_message_with_attachments,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

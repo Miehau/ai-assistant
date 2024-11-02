@@ -4,11 +4,16 @@
   import { shell } from "@tauri-apps/api";
   import type { Link } from "marked";
   import { Check, Copy } from "lucide-svelte";
+  import { cn } from "$lib/utils";
+  import type { Attachment } from "$lib/types";
 
   export let type: "sent" | "received";
   export let content: string;
+  export let attachments: Attachment[] | undefined = undefined;
 
   let parsedContent: string;
+
+  $: isUser = type === "sent";
 
   onMount(() => {
     const renderer = new marked.Renderer();
@@ -144,6 +149,19 @@
       <div class="markdown-content" on:click={handleClick}>
         {@html parsedContent}
       </div>
+      {#if attachments && attachments.length > 0}
+        <div class="mt-2 space-y-2">
+          {#each attachments as attachment}
+            {#if attachment.type === 'image'}
+              <img 
+                src={attachment.data} 
+                alt={attachment.name}
+                class="max-w-full rounded-lg"
+              />
+            {/if}
+          {/each}
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -153,7 +171,6 @@
     </div>
   {/if}
 </div>
-
 <style>
   /* Base markdown styles */
   :global(.markdown-content p) {
@@ -314,3 +331,4 @@
     border-color: rgba(255, 255, 255, 0.2);
   }
 </style>
+

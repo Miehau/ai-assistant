@@ -15,17 +15,28 @@
   import { invoke } from "@tauri-apps/api/tauri";
   import type { Selected } from "bits-ui";
   import type { SystemPrompt } from "$lib/types";
+  import { open } from '@tauri-apps/api/dialog';
+  import { readTextFile } from '@tauri-apps/api/fs';
+  import { Image } from "lucide-svelte";
+
+  type Attachment = {
+    type: 'image';
+    name: string;
+    data: string;
+    description?: string;
+  };
 
   type Message = {
-    type: "sent" | "received" | "system";
+    type: "sent" | "received";
     content: string;
+    attachments?: Attachment[];
   };
 
   let currentConversationId: string | null = null;
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
   let currentStreamedMessage = "";
-  let messages: Array<{ type: "sent" | "received"; content: string }> = [];
+  let messages: Message[] = [];
   let availableModels: Model[] = [];
   let systemPrompts: SystemPrompt[] = [];
   let selectedModel: Selected<{ value: string; label: string }> = {
@@ -37,6 +48,17 @@
 
   let lastScrollHeight = 0;
   let lastScrollTop = 0;  // Added this declaration
+
+  let fileInput: HTMLInputElement;
+
+  let attachments: FileAttachment[] = [];
+
+  type FileAttachment = {
+    type: 'image';
+    name: string;
+    data: string;
+    position?: number; // Optional position in the message
+  };
 
   afterUpdate(() => {
     scrollToBottom();
@@ -100,32 +122,54 @@
       return;
     }
 
-    const trimmedMessage = currentMessage.trim();
-    currentMessage = "";
+    const messageToSend: Message = {
+      type: "sent",
+      content: currentMessage,
+      attachments: attachments.length > 0 ? attachments : undefined
+    };
+    console.log(messageToSend);
+
+    messages = [...messages, messageToSend];
     
-    messages = [...messages, { type: "sent", content: trimmedMessage }];
+
+    // Save message with attachments to database if we have a conversation
+    if (currentConversationId) {
+      await invoke('save_message_with_attachments', {
+        conversationId: currentConversationId,
+        role: 'user',
+        content: currentMessage,
+        attachments: attachments.map(att => ({
+          type: att.type,
+          name: att.name,
+          data: att.data,
+          attachment_type: 'image'
+        }))
+      });
+    }
+
+    currentMessage = "";
+    attachments = []; // Clear attachments after sending
 
     let isFirstChunk = true;
 
     let onStreamResponse = (chunk: string) => {
-      console.log("saving chunk", chunk);
       if (isFirstChunk) {
         messages = [...messages, { type: "received", content: chunk }];
         isFirstChunk = false;
       } else {
         messages[messages.length - 1].content += chunk;
       }
-      messages = [...messages]; // Trigger Svelte reactivity
+      messages = [...messages];
     };
 
     try {
       const response = await sendChatMessage(
-        trimmedMessage,
+        messageToSend,
         currentConversationId,
         selectedModel.value,
         streamResponse,
         onStreamResponse,
-        selectedSystemPrompt?.content // Pass the selected system prompt content
+        selectedSystemPrompt?.content,
       );
       if (!streamResponse && response && typeof response.text === "string") {
         messages[messages.length - 1] = {
@@ -207,6 +251,49 @@
     loadModels();
     loadSystemPrompts();
   });
+
+  async function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleFileChange(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    
+    if (file) {
+      try {
+        if (file.type.startsWith('image/')) {
+          // Handle image files
+          const base64 = await fileToBase64(file);
+          const attachment: FileAttachment = {
+            type: 'image',
+            name: file.name,
+            data: base64,
+            position: input.selectionStart || currentMessage.length
+          };
+          console.log(attachment);
+          attachments = [...attachments, attachment];
+        } else {
+          // Handle text files
+          const text = await file.text();
+          currentMessage += text;
+        }
+      } catch (error) {
+        console.error('Error reading file:', error);
+      }
+    }
+    // Reset the input so the same file can be selected again
+    input.value = '';
+  }
+
+  function handleFileUpload() {
+    fileInput?.click();
+  }
 </script>
 
 <div
@@ -219,7 +306,11 @@
     >
       {#each messages as msg}
         <div transition:fly={{ y: 20, duration: 300 }} class="w-full">
-          <ChatMessage type={msg.type} content={msg.content} />
+          <ChatMessage 
+            type={msg.type} 
+            content={msg.content}
+            attachments={msg.attachments}
+          />
         </div>
       {/each}
     </div>
@@ -228,6 +319,13 @@
   <form
     class="mt-4 relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring"
   >
+    <input 
+      type="file"
+      accept=".txt,.md,.json,.js,.ts,.py,.rs,.svelte,image/*"
+      bind:this={fileInput}
+      style="display: none;"
+      on:change={handleFileChange}
+    />
     <Label for="message" class="sr-only">Message</Label>
     <Textarea
       id="message"
@@ -236,15 +334,33 @@
       placeholder="Type your message here..."
       class="min-h-12 resize-none border-0 p-3 shadow-none focus-visible:ring-0"
     />
+    {#if attachments.length > 0}
+      <div class="flex flex-wrap gap-2 px-3 pb-2">
+        {#each attachments as attachment, index}
+          {#if attachment.type === 'image'}
+            <div class="flex items-center gap-2 bg-muted px-2 py-1 rounded-md">
+              <Image class="size-4" />
+              <span class="text-sm">{attachment.name}</span>
+            </div>
+          {/if}
+        {/each}
+      </div>
+    {/if}
     <div class="flex items-center p-3 pt-0">
       <Tooltip.Root>
         <Tooltip.Trigger asChild let:builder>
-          <Button builders={[builder]} variant="ghost" size="icon">
+          <Button 
+            builders={[builder]} 
+            variant="ghost" 
+            size="icon"
+            type="button"
+            on:click={handleFileUpload}
+          >
             <Paperclip class="size-4" />
-            <span class="sr-only">Attach file</span>
+            <span class="sr-only">Upload File</span>
           </Button>
         </Tooltip.Trigger>
-        <Tooltip.Content side="top">Attach File</Tooltip.Content>
+        <Tooltip.Content side="top">Upload File (Text or Image)</Tooltip.Content>
       </Tooltip.Root>
       <Tooltip.Root>
         <Tooltip.Trigger asChild>

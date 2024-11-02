@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc, TimeZone};
 use uuid::Uuid;
-use serde_json::Value as JsonValue;
 
 // Define a custom error type
 #[derive(Debug)]
@@ -27,12 +26,24 @@ impl From<rusqlite_migration::Error> for DatabaseError {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MessageAttachment {
+    pub id: String,
+    pub message_id: String,
+    pub name: String,
+    pub data: String,
+    pub attachment_type: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub id: String,
     pub content: String,
     pub role: String,
     pub conversation_id: String,
     pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub attachments: Vec<MessageAttachment>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -125,6 +136,15 @@ impl Db {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );"),
+            M::up("CREATE TABLE IF NOT EXISTS message_attachments (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                data TEXT NOT NULL,
+                attachment_type TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (message_id) REFERENCES messages(id)
+            );"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();
@@ -153,24 +173,25 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, created_at FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC"
-        )?;
-        let message_iter = stmt.query_map(params![conversation_id], |row| {
-            let timestamp: i64 = row.get(4)?;
-            let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
-            Ok(Message {
-                id: row.get(0)?,
-                conversation_id: row.get(1)?,
-                role: row.get(2)?,
-                content: row.get(3)?,
-                created_at,
-            })
-        })?;
-        message_iter.collect()
-    }
+    // pub fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {
+    //     let conn = self.conn.lock().unwrap();
+    //     let mut stmt = conn.prepare(
+    //         "SELECT id, conversation_id, role, content, created_at FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC"
+    //     )?;
+    //     let message_iter = stmt.query_map(params![conversation_id], |row| {
+    //         let timestamp: i64 = row.get(4)?;
+    //         let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
+    //         Ok(Message {
+    //             id: row.get(0)?,
+    //             conversation_id: row.get(1)?,
+    //             role: row.get(2)?,
+    //             content: row.get(3)?,
+    //             created_at,
+    //             attachments: Vec::new(),
+    //         })
+    //     })?;
+    //     message_iter.collect()
+    // }
 
     pub fn get_conversations(&self) -> RusqliteResult<Vec<Conversation>> {
         let conn = self.conn.lock().unwrap();
@@ -400,5 +421,107 @@ impl Db {
             params![id],
         )?;
         Ok(())
+    }
+
+    pub fn save_message_with_attachments(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        attachments: &[MessageAttachment],
+    ) -> RusqliteResult<()> {
+        let message_id = Uuid::new_v4().to_string();
+        let created_at = Utc::now();
+        let created_at_timestamp = created_at.timestamp();
+        
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        
+        // Insert message
+        tx.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, created_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![message_id, conversation_id, role, content, created_at_timestamp],
+        )?;
+        
+        // Insert attachments
+        for attachment in attachments {
+            tx.execute(
+                "INSERT INTO message_attachments (id, message_id, name, data, attachment_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    message_id,
+                    attachment.name,
+                    attachment.data,
+                    attachment.attachment_type,
+                    created_at_timestamp
+                ],
+            )?;
+        }
+        
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT m.id, m.conversation_id, m.role, m.content, m.created_at,
+                    a.id, a.name, a.data, a.attachment_type, a.created_at
+             FROM messages m
+             LEFT JOIN message_attachments a ON m.id = a.message_id
+             WHERE m.conversation_id = ?1
+             ORDER BY m.created_at ASC"
+        )?;
+
+        let rows = stmt.query_map(params![conversation_id], |row| {
+            let message_id: String = row.get(0)?;
+            let timestamp: i64 = row.get(4)?;
+            let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
+            
+            let attachment = if let Ok(attachment_id) = row.get::<_, String>(5) {
+                Some(MessageAttachment {
+                    id: attachment_id,
+                    message_id: message_id.clone(),
+                    name: row.get(6)?,
+                    data: row.get(7)?,
+                    attachment_type: row.get(8)?,
+                    created_at,
+                })
+            } else {
+                None
+            };
+
+            Ok((
+                Message {
+                    id: message_id,
+                    conversation_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    created_at,
+                    attachments: Vec::new(),
+                },
+                attachment,
+            ))
+        })?;
+
+        // Group messages with their attachments
+        let mut messages_map: std::collections::HashMap<String, Message> = std::collections::HashMap::new();
+        for row in rows {
+            let (mut message, attachment) = row?;
+            if let Some(att) = attachment {
+                if let Some(existing_message) = messages_map.get_mut(&message.id) {
+                    existing_message.attachments.push(att);
+                } else {
+                    message.attachments.push(att);
+                    messages_map.insert(message.id.clone(), message);
+                }
+            } else if !messages_map.contains_key(&message.id) {
+                messages_map.insert(message.id.clone(), message);
+            }
+        }
+
+        Ok(messages_map.into_values().collect())
     }
 }

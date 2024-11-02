@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import OpenAI from 'openai';
 import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages';
+import type { Message } from '$lib/types';
 
 async function getApiKeyForProvider(provider: string): Promise<string> {
   const apiKey = await invoke<string | null>('get_api_key', { provider });
@@ -10,13 +11,20 @@ async function getApiKeyForProvider(provider: string): Promise<string> {
   return apiKey;
 }
 
+// Add new interface for attachment
+interface Attachment {
+  type: string;
+  base64Data: string;
+}
+
 export async function sendChatMessage(
-  message: string,
+  message: Message,
   conversationId: string | null,
   model: string,
   streamResponse: boolean,
   onStream?: (chunk: string) => void,
-  systemPrompt?: string // Add system prompt parameter
+  systemPrompt?: string,
+  attachment?: Attachment
 ) {
   console.log("Using model:", model);
   try {
@@ -47,14 +55,27 @@ export async function sendChatMessage(
     const messages = [
       { 
         role: 'system', 
-        content: systemPrompt || "You are a helpful AI assistant." // Use provided system prompt or fallback
+        content: systemPrompt || "You are a helpful AI assistant."
       },
       ...history.map((msg) => ({
         role: msg.role,
         content: msg.content
       })),
-      { role: 'user', content: message }
+      { 
+        role: 'user', 
+        content: message.attachments ? [
+          { type: "text", text: message.content },
+          ...message.attachments.map((att) => ({
+            type: "image_url",
+            image_url: {
+              url: `${att.data}`,
+              detail: "auto"
+            }
+          }))
+        ] : message.content
+      }
     ];
+    console.log('message ', messages);
 
     const stream = await openai.chat.completions.create({
       model: model,
