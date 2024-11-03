@@ -68,6 +68,7 @@ export class OpenAIService {
     onStream?: (chunk: string) => void,
   ) {
     const messages = this.formatMessages(history, message, systemPrompt);
+    console.log(messages);
     
     const stream = await this.client.chat.completions.create({
       model,

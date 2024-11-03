@@ -492,93 +492,87 @@ impl Db {
             .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
         let attachments_dir = app_dir.join("com.tauri.dev").join("attachments");
 
-        let mut stmt = conn.prepare(
-            "SELECT m.id, m.conversation_id, m.role, m.content, m.created_at,
-                    a.id, a.name, a.file_path, a.attachment_type, a.created_at
-             FROM messages m
-             LEFT JOIN message_attachments a ON m.id = a.message_id
-             WHERE m.conversation_id = ?1
-             ORDER BY m.created_at ASC"
+        // First, get all messages ordered by created_at
+        let mut messages_stmt = conn.prepare(
+            "SELECT id, conversation_id, role, content, created_at 
+             FROM messages 
+             WHERE conversation_id = ?1 
+             ORDER BY created_at ASC"
         )?;
 
-        let rows = stmt.query_map(params![conversation_id], |row| {
-            let message_id: String = row.get(0)?;
+        let mut messages: Vec<Message> = messages_stmt.query_map(params![conversation_id], |row| {
             let timestamp: i64 = row.get(4)?;
+            Ok(Message {
+                id: row.get(0)?,
+                conversation_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
+                attachments: Vec::new(),
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        // Then, get and add attachments for each message
+        let mut attachments_stmt = conn.prepare(
+            "SELECT message_id, id, name, file_path, attachment_type, created_at 
+             FROM message_attachments 
+             WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)"
+        )?;
+
+        let attachments = attachments_stmt.query_map(params![conversation_id], |row| {
+            let message_id: String = row.get(0)?;
+            let timestamp: i64 = row.get(5)?;
             let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
             
-            let attachment = if let Ok(attachment_id) = row.get::<_, String>(5) {
-                let file_path = row.get::<_, String>(7)?;
-                let full_path = attachments_dir.join(&file_path);
-                
-                // Read the file content as bytes and encode to base64
-                let file_content = fs::read(&full_path)
-                    .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+            let file_path = row.get::<_, String>(3)?;
+            let full_path = attachments_dir.join(&file_path);
+            
+            // Read the file content as bytes and encode to base64
+            let file_content = fs::read(&full_path)
+                .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
 
-                // Get file extension from the filename
-                let extension = std::path::Path::new(&file_path)
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .unwrap_or("jpeg"); // fallback to jpeg if no extension found
+            // Get file extension from the filename
+            let extension = std::path::Path::new(&file_path)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("jpeg");
 
-                // Use the correct mime type based on extension
-                let mime_type = match extension.to_lowercase().as_str() {
-                    "png" => "image/png",
-                    "jpg" | "jpeg" => "image/jpeg",
-                    "gif" => "image/gif",
-                    "webp" => "image/webp",
-                    _ => "application/octet-stream", // fallback for unknown types
-                };
-
-                let base64_content = format!(
-                    "data:{};base64,{}",
-                    mime_type,
-                    Engine::encode(&base64::engine::general_purpose::STANDARD, &file_content)
-                );
-
-                Some(MessageAttachment {
-                    id: Some(attachment_id),
-                    message_id: Some(message_id.clone()),
-                    name: row.get(6)?,
-                    file_path: base64_content,  // Store base64 encoded content
-                    attachment_type: row.get(8)?,
-                    description: None,
-                    created_at: Some(created_at),
-                })
-            } else {
-                None
+            let mime_type = match extension.to_lowercase().as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                _ => "application/octet-stream",
             };
-            if let Some(attachment) = &attachment {
-                println!("Attachment path: {:?}", attachment);
-            }
-            Ok((
-                Message {
-                    id: message_id,
-                    conversation_id: row.get(1)?,
-                    role: row.get(2)?,
-                    content: row.get(3)?,
-                    created_at,
-                    attachments: Vec::new(),
-                },
-                attachment,
-            ))
+
+            let base64_content = format!(
+                "data:{};base64,{}",
+                mime_type,
+                Engine::encode(&base64::engine::general_purpose::STANDARD, &file_content)
+            );
+
+            Ok(MessageAttachment {
+                id: Some(row.get(1)?),
+                message_id: Some(message_id),
+                name: row.get(2)?,
+                file_path: base64_content,
+                attachment_type: row.get(4)?,
+                description: None,
+                created_at: Some(created_at),
+            })
         })?;
 
-        // Group messages with their attachments
-        let mut messages_map: std::collections::HashMap<String, Message> = std::collections::HashMap::new();
-        for row in rows {
-            let (mut message, attachment) = row?;
-            if let Some(att) = attachment {
-                if let Some(existing_message) = messages_map.get_mut(&message.id) {
-                    existing_message.attachments.push(att);
-                } else {
-                    message.attachments.push(att);
-                    messages_map.insert(message.id.clone(), message);
+        // Add attachments to their respective messages while maintaining message order
+        for attachment in attachments {
+            if let Ok(att) = attachment {
+                if let Some(message_id) = &att.message_id {
+                    if let Some(message) = messages.iter_mut().find(|m| m.id == *message_id) {
+                        message.attachments.push(att);
+                    }
                 }
-            } else if !messages_map.contains_key(&message.id) {
-                messages_map.insert(message.id.clone(), message);
             }
         }
 
-        Ok(messages_map.into_values().collect())
+        Ok(messages)
     }
 }

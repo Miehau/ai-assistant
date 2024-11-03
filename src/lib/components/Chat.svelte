@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, afterUpdate } from "svelte";
-  import { sendChatMessage } from "$lib/services/chat";
+  import { chatService } from "$lib/services/chat";
   import { fly } from "svelte/transition";
   import ChatMessage from "./ChatMessage.svelte";
   import { Label } from "$lib/components/ui/label";
@@ -17,23 +17,21 @@
   import type { SystemPrompt } from "$lib/types";
   import { Image } from "lucide-svelte";
   import type { Message } from "$lib/types";
+  import { conversationService } from "$lib/services/conversation";
 
-  let currentConversationId: string | null = null;
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
-  let currentStreamedMessage = "";
   let messages: Message[] = [];
   let availableModels: Model[] = [];
   let systemPrompts: SystemPrompt[] = [];
-  let selectedModel: Selected<{ value: string; label: string }> = {
-    value: availableModels[0]?.model_name ?? "",
-    label: `${availableModels[0]?.model_name ?? "No models"} • ${availableModels[0]?.provider ?? ""}`
+  let selectedModel: Selected<string> = {
+    value: "",
+    label: "No models"
   };
   let selectedSystemPrompt: SystemPrompt | null = null;
-  $: streamResponse = true;
 
   let lastScrollHeight = 0;
-  let lastScrollTop = 0;  // Added this declaration
+  let lastScrollTop = 0; 
 
   let fileInput: HTMLInputElement;
 
@@ -45,6 +43,26 @@
     data: string;
     position?: number; 
   };
+
+  let unsubscribe: () => void;
+
+  onMount(async () => {
+    loadModels();
+    loadSystemPrompts();
+    
+    // Initial load of messages if there's a current conversation
+    const currentConversation = conversationService.getCurrentConversation();
+    if (currentConversation) {
+      const loadedMessages = await conversationService.getDisplayHistory(currentConversation.id);
+      messages = loadedMessages;
+    }
+  });
+
+  onMount(() => {
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  });
 
   afterUpdate(() => {
     scrollToBottom();
@@ -91,104 +109,55 @@
     }
   }
   
-  function selectModel(v: Selected<{ value: string; label: string }>) {
-    console.log(v.value);
-    selectedModel = {
-      value: v.value,
-      label: v.label
-    };
-  }
-
-  function isValidMessage(message: string): boolean {
-    return message.trim().length > 0;
+  function selectModel(v: Selected<string> | undefined) {
+    if (v) {
+      selectedModel = {
+        value: v.value,
+        label: `${v.value} • ${availableModels.find(m => m.model_name === v.value)?.provider ?? ""}`
+      };
+    }
   }
 
   async function handleSendMessage() {
-    if (!isValidMessage(currentMessage)) {
-      return;
-    }
+    if (!currentMessage.trim()) return;
 
-    const messageToSend: Message = {
+    // Create and display user message immediately
+    const userMessage: Message = {
       type: "sent",
       content: currentMessage,
       attachments: attachments.length > 0 ? attachments : undefined
     };
+    messages = [...messages, userMessage];
 
-    messages = [...messages, messageToSend];
-
-
+    // Clear input fields
+    const messageToSend = currentMessage;
     currentMessage = "";
-    attachments = []; // Clear attachments after sending
+    attachments = [];
 
-    let isFirstChunk = true;
-
-    let onStreamResponse = (chunk: string) => {
-      if (isFirstChunk) {
-        messages = [...messages, { type: "received", content: chunk }];
-        isFirstChunk = false;
-      } else {
-        messages[messages.length - 1].content += chunk;
-      }
-      messages = [...messages];
-    };
-
-    console.log(selectedModel)
     try {
-      const response = await sendChatMessage(
+      await chatService.handleSendMessage(
         messageToSend,
         selectedModel.value,
-        streamResponse,
-        onStreamResponse,
+        (chunk: string) => {
+          if (!messages[messages.length - 1] || messages[messages.length - 1].type !== "received") {
+            messages = [...messages, { type: "received", content: chunk }];
+          } else {
+            const updatedMessages = [...messages];
+            updatedMessages[updatedMessages.length - 1].content += chunk;
+            messages = updatedMessages;
+          }
+        },
         selectedSystemPrompt?.content,
+        userMessage.attachments
       );
-      if (!streamResponse && response && typeof response.text === "string") {
-        messages[messages.length - 1] = {
-          type: "received",
-          content: response.text,
-        };
-      }
-      currentConversationId = response.conversationId;
-      currentStreamedMessage = "";
-      if (streamResponse) {
-        handleStreamResponse(response.text);
-      } else if (response && typeof response.text === "string") {
-        messages = [...messages, { type: "received", content: response.text }];
-        currentConversationId = response.conversationId;
-      } else {
-        throw new Error("Invalid response format");
-      }
     } catch (error) {
-      console.error("Failed to send chat message:", error);
-    }
-    currentStreamedMessage = "";
-  }
-
-  function handleStreamResponse(chunk: string) {
-    currentStreamedMessage += chunk;
-    if (messages.length > 0 && messages[messages.length - 1].type === "received") {
-      // Update existing message if it's from assistant
-      messages[messages.length - 1].content = currentStreamedMessage;
-      messages = messages; // Trigger Svelte reactivity
-      console.log("updated message", messages[messages.length - 1].content);
-    } else {
-      // Add new message if there's no existing received message
-      messages = [...messages, { type: "received", content: currentStreamedMessage }];
-    }
-  }
-
-  function handleKeydown(event: KeyboardEvent) {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      if (isValidMessage(currentMessage)) {
-        handleSendMessage();
-      }
+      console.error(error);
     }
   }
 
   async function loadModels() {
     try {
       const models = await invoke<Model[]>("get_models");
-      // Only show enabled models
       availableModels = models.filter(model => model.enabled);
       
       // Update selected model if we have available models
@@ -213,14 +182,7 @@
 
   function selectSystemPrompt(prompt: SystemPrompt) {
     selectedSystemPrompt = prompt;
-    // You might want to add the system prompt to the messages array here
-    // or handle it when sending the next message
   }
-
-  onMount(() => {
-    loadModels();
-    loadSystemPrompts();
-  });
 
   async function fileToBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -263,6 +225,14 @@
 
   function handleFileUpload() {
     fileInput?.click();
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    // Send message on Enter (but not with Shift+Enter)
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleSendMessage();
+    }
   }
 </script>
 
@@ -403,8 +373,12 @@
             {#if selectedModel}
               <div class="flex items-center gap-2">
                 <span>{selectedModel.value}</span>
-                <span class="text-sm text-muted-foreground">•</span>
-                <span class="text-sm text-muted-foreground">{selectedModel.label.split(' • ')[1]}</span>
+                {#if selectedModel.label}
+                  <span class="text-sm text-muted-foreground">•</span>
+                  <span class="text-sm text-muted-foreground">
+                    {selectedModel.label.split(' • ')[1] ?? ''}
+                  </span>
+                {/if}
               </div>
             {/if}
           </Select.Value>

@@ -1,16 +1,6 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { writable, get } from 'svelte/store';
-import type { Message } from '$lib/types';
-
-interface Conversation {
-  id: string;
-  name: string;
-}
-
-interface ConversationState {
-  currentConversationId: string | null;
-  currentConversation: Conversation | null;
-}
+import type { Message, APIMessage, Attachment, Conversation, ConversationState, DBMessage } from '$lib/types';
 
 export class ConversationService {
   private state = writable<ConversationState>({
@@ -32,22 +22,47 @@ export class ConversationService {
   }
 
   getCurrentConversation(): Conversation | null {
+    console.log(get(this.state));
     return get(this.state).currentConversation;
   }
 
   async getOrCreate(conversationId: string | null): Promise<Conversation> {
-    const conversation = await invoke('get_or_create_conversation', { conversationId });
+    const conversation = await invoke<Conversation>('get_or_create_conversation', { conversationId });
     return conversation;
   }
 
-  async getHistory(conversationId: string): Promise<Message[]> {
-    return await invoke('get_conversation_history', { conversationId });
+  async getDisplayHistory(conversationId: string): Promise<Message[]> {
+    const history = await invoke<DBMessage[]>('get_conversation_history', { conversationId });
+    
+    return history
+      .sort((a, b) => {
+        return (a.timestamp ?? 0) - (b.timestamp ?? 0);
+      })
+      .map(msg => ({
+        type: msg.role === 'user' ? 'sent' : 'received',
+        content: msg.content,
+        attachments: msg.attachments
+      }));
+  }
+
+  async getAPIHistory(conversationId: string): Promise<APIMessage[]> {
+    const history = await invoke<DBMessage[]>('get_conversation_history', { conversationId });
+    
+    return history
+      .sort((a, b) => {
+        return (a.timestamp ?? 0) - (b.timestamp ?? 0);
+      })
+      .map(msg => ({
+        role: msg.role,
+        content: msg.content,
+        attachments: msg.attachments
+      }));
   }
 
   async saveMessage(
     role: 'user' | 'assistant', 
     content: string,
-    attachments: any[] = [],
+    attachments: Attachment[] = [],
     conversationId?: string
   ): Promise<void> {
     const currentState = get(this.state);
