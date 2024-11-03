@@ -113,7 +113,6 @@
       content: currentMessage,
       attachments: attachments.length > 0 ? attachments : undefined
     };
-    console.log(messageToSend);
 
     messages = [...messages, messageToSend];
 
@@ -133,10 +132,10 @@
       messages = [...messages];
     };
 
+    console.log(selectedModel)
     try {
       const response = await sendChatMessage(
         messageToSend,
-        currentConversationId,
         selectedModel.value,
         streamResponse,
         onStreamResponse,

@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { OpenAIService } from './openai';
 import type { Message } from '$lib/types';
+import { conversationService } from './conversation';
 
 async function getApiKeyForProvider(provider: string): Promise<string> {
   const apiKey = await invoke<string | null>('get_api_key', { provider });
@@ -10,26 +11,25 @@ async function getApiKeyForProvider(provider: string): Promise<string> {
   return apiKey;
 }
 
-// Add new interface for attachment
-interface Attachment {
-  type: string;
-  base64Data: string;
-}
 
 export async function sendChatMessage(
   message: Message,
-  conversationId: string | null,
   model: string,
   streamResponse: boolean,
   onStream?: (chunk: string) => void,
   systemPrompt?: string,
-  attachment?: Attachment
 ) {
   try {
-    const conversation = await invoke('get_or_create_conversation', { conversationId });
-    const history = await invoke('get_conversation_history', { conversationId: conversation.id });
+    const currentConversation = conversationService.getCurrentConversation();
+    if (!currentConversation) {
+      await conversationService.setCurrentConversation(null); // Creates new conversation
+    }
+    
+    const conversation = conversationService.getCurrentConversation()!;
+    const history = await conversationService.getHistory(conversation.id);
     
     const models = await invoke<Array<{ model_name: string, provider: string }>>('get_models');
+    console.log(model);
     const selectedModel = models.find(m => m.model_name === model);
     
     if (!selectedModel) {
@@ -48,19 +48,18 @@ export async function sendChatMessage(
       onStream
     );
 
-    // Save messages
-    await invoke('save_message', { 
-      conversationId: conversation.id, 
-      role: 'user', 
-      content: message.content,
-      attachments: message.attachments || []
-    });
-    await invoke('save_message', { 
-      conversationId: conversation.id, 
-      role: 'assistant', 
-      content: fullResponse,
-      attachments: []
-    });
+    // Simpler message saving
+    await conversationService.saveMessage(
+      'user', 
+      message.content,
+      message.attachments || []
+    );
+    
+    await conversationService.saveMessage(
+      'assistant', 
+      fullResponse,
+      []
+    );
 
     return {
       text: fullResponse,
@@ -69,25 +68,5 @@ export async function sendChatMessage(
   } catch (error) {
     console.error('Failed to send chat message:', error);
     throw error;
-  }
-}
-
-export async function getConversationHistory(conversationId: string) {
-  try {
-    const history: { role: string, content: string }[] = await invoke('get_conversation_history', { conversationId });
-    return history;
-  } catch (error) {
-    console.error('Failed to get conversation history:', error);
-    throw new Error('Failed to get conversation history');
-  }
-}
-
-export async function getConversations() {
-  try {
-    const conversations: { id: string, name: string }[] = await invoke('get_conversations');
-    return conversations;
-  } catch (error) {
-    console.error('Failed to get conversations:', error);
-    throw new Error('Failed to get conversations');
   }
 }
