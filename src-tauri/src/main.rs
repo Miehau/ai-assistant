@@ -4,7 +4,7 @@
 mod db;
 
 use tauri::Manager;
-use db::{Db, Conversation, Message, Model, SystemPrompt, MessageAttachment};
+use db::{Db, Conversation, Message, Model, SystemPrompt, MessageAttachment, IncomingAttachment};
 use std::fs;
 use tauri::State;
 use uuid::Uuid;
@@ -48,8 +48,15 @@ fn get_or_create_conversation(state: State<'_, Db>, conversation_id: Option<Stri
 }
 
 #[tauri::command]
-fn save_message(state: State<'_, Db>, conversation_id: String, role: String, content: String) -> Result<(), String> {
-    state.save_message(&conversation_id, &role, &content).map_err(|e| e.to_string())
+fn save_message(
+    state: State<'_, Db>, 
+    conversation_id: String, 
+    role: String, 
+    content: String,
+    attachments: Vec<IncomingAttachment>
+) -> Result<(), String> {
+    state.save_message(&conversation_id, &role, &content, &attachments)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -119,18 +126,6 @@ async fn delete_system_prompt(state: State<'_, Db>, id: String) -> Result<(), St
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn save_message_with_attachments(
-    state: State<'_, Db>,
-    conversation_id: String,
-    role: String,
-    content: String,
-    attachments: Vec<MessageAttachment>,
-) -> Result<(), String> {
-    state.save_message_with_attachments(&conversation_id, &role, &content, &attachments)
-        .map_err(|e| e.to_string())
-}
-
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -164,7 +159,6 @@ fn main() {
             get_system_prompt,
             get_all_system_prompts,
             delete_system_prompt,
-            save_message_with_attachments,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

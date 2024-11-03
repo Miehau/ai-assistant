@@ -5,6 +5,10 @@ use std::sync::{Arc, Mutex};
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc, TimeZone};
 use uuid::Uuid;
+use std::fs;
+use std::path::PathBuf;
+use tauri::api::path;
+use base64::Engine;
 
 // Define a custom error type
 #[derive(Debug)]
@@ -26,13 +30,22 @@ impl From<rusqlite_migration::Error> for DatabaseError {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct MessageAttachment {
-    pub id: String,
-    pub message_id: String,
+pub struct IncomingAttachment {
     pub name: String,
-    pub data: String,
+    pub data: String,  // This will contain the raw data
     pub attachment_type: String,
-    pub created_at: DateTime<Utc>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MessageAttachment {
+    pub id: Option<String>,
+    pub message_id: Option<String>,
+    pub name: String,
+    pub file_path: String,
+    pub attachment_type: String,
+    pub description: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -141,10 +154,12 @@ impl Db {
                 message_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 data TEXT NOT NULL,
+                file_path TEXT,
                 attachment_type TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (message_id) REFERENCES messages(id)
             );"),
+            M::up("ALTER TABLE message_attachments RENAME COLUMN data TO file_path;"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();
@@ -161,37 +176,85 @@ impl Db {
         Ok(())
     }
 
-    pub fn save_message(&self, conversation_id: &str, role: &str, content: &str) -> RusqliteResult<()> {
-        let message_id = Uuid::new_v4().to_string();
-        let created_at = Utc::now();
-        let created_at_timestamp = created_at.timestamp();  // Convert to Unix timestamp
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![message_id, conversation_id, role, content, created_at_timestamp],
-        )?;
-        Ok(())
+    fn save_attachment_to_fs(&self, data: &str, file_name: &str) -> RusqliteResult<String> {
+        // Get app attachments directory from Tauri
+        let app_dir = path::app_data_dir(&tauri::Config::default())
+            .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
+        
+        let attachments_dir = app_dir.join("com.tauri.dev").join("attachments");
+        fs::create_dir_all(&attachments_dir)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+
+        // Create unique filename to avoid collisions
+        let unique_filename = format!("{}-{}", Uuid::new_v4(), file_name);
+        let file_path = attachments_dir.join(&unique_filename);
+        
+        // Extract base64 data after the comma if it's a data URL
+        let base64_data = if data.starts_with("data:") {
+            data.split(",").nth(1)
+                .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid data URL format".into()))?
+        } else {
+            data
+        };
+        
+        // Decode base64 data
+        let decoded_data = base64::engine::general_purpose::STANDARD
+            .decode(base64_data)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+        
+        // Write the decoded data to file
+        fs::write(&file_path, decoded_data)
+            .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+
+        // Return relative path as string
+        Ok(unique_filename)
     }
 
-    // pub fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {
-    //     let conn = self.conn.lock().unwrap();
-    //     let mut stmt = conn.prepare(
-    //         "SELECT id, conversation_id, role, content, created_at FROM messages WHERE conversation_id = ?1 ORDER BY created_at ASC"
-    //     )?;
-    //     let message_iter = stmt.query_map(params![conversation_id], |row| {
-    //         let timestamp: i64 = row.get(4)?;
-    //         let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
-    //         Ok(Message {
-    //             id: row.get(0)?,
-    //             conversation_id: row.get(1)?,
-    //             role: row.get(2)?,
-    //             content: row.get(3)?,
-    //             created_at,
-    //             attachments: Vec::new(),
-    //         })
-    //     })?;
-    //     message_iter.collect()
-    // }
+    pub fn save_message(
+        &self,
+        conversation_id: &str,
+        role: &str,
+        content: &str,
+        attachments: &[IncomingAttachment],
+    ) -> RusqliteResult<()> {
+        let message_id = Uuid::new_v4().to_string();
+        let created_at = Utc::now();
+        let created_at_timestamp = created_at.timestamp();
+        
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        
+        // Insert message
+        tx.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, created_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![message_id, conversation_id, role, content, created_at_timestamp],
+        )?;
+        
+        // Save attachments
+        for attachment in attachments {
+            let file_path = self.save_attachment_to_fs(
+                &attachment.data,
+                &attachment.name
+            )?;
+
+            tx.execute(
+                "INSERT INTO message_attachments (id, message_id, name, file_path, attachment_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    message_id,
+                    attachment.name,
+                    file_path,
+                    attachment.attachment_type,
+                    created_at_timestamp
+                ],
+            )?;
+        }
+        
+        tx.commit()?;
+        Ok(())
+    }
 
     pub fn get_conversations(&self) -> RusqliteResult<Vec<Conversation>> {
         let conn = self.conn.lock().unwrap();
@@ -423,52 +486,15 @@ impl Db {
         Ok(())
     }
 
-    pub fn save_message_with_attachments(
-        &self,
-        conversation_id: &str,
-        role: &str,
-        content: &str,
-        attachments: &[MessageAttachment],
-    ) -> RusqliteResult<()> {
-        let message_id = Uuid::new_v4().to_string();
-        let created_at = Utc::now();
-        let created_at_timestamp = created_at.timestamp();
-        
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction()?;
-        
-        // Insert message
-        tx.execute(
-            "INSERT INTO messages (id, conversation_id, role, content, created_at) 
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![message_id, conversation_id, role, content, created_at_timestamp],
-        )?;
-        
-        // Insert attachments
-        for attachment in attachments {
-            tx.execute(
-                "INSERT INTO message_attachments (id, message_id, name, data, attachment_type, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    Uuid::new_v4().to_string(),
-                    message_id,
-                    attachment.name,
-                    attachment.data,
-                    attachment.attachment_type,
-                    created_at_timestamp
-                ],
-            )?;
-        }
-        
-        tx.commit()?;
-        Ok(())
-    }
-
     pub fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {
         let conn = self.conn.lock().unwrap();
+        let app_dir = path::app_data_dir(&tauri::Config::default())
+            .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
+        let attachments_dir = app_dir.join("com.tauri.dev").join("attachments");
+
         let mut stmt = conn.prepare(
             "SELECT m.id, m.conversation_id, m.role, m.content, m.created_at,
-                    a.id, a.name, a.data, a.attachment_type, a.created_at
+                    a.id, a.name, a.file_path, a.attachment_type, a.created_at
              FROM messages m
              LEFT JOIN message_attachments a ON m.id = a.message_id
              WHERE m.conversation_id = ?1
@@ -481,18 +507,49 @@ impl Db {
             let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
             
             let attachment = if let Ok(attachment_id) = row.get::<_, String>(5) {
+                let file_path = row.get::<_, String>(7)?;
+                let full_path = attachments_dir.join(&file_path);
+                
+                // Read the file content as bytes and encode to base64
+                let file_content = fs::read(&full_path)
+                    .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+
+                // Get file extension from the filename
+                let extension = std::path::Path::new(&file_path)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("jpeg"); // fallback to jpeg if no extension found
+
+                // Use the correct mime type based on extension
+                let mime_type = match extension.to_lowercase().as_str() {
+                    "png" => "image/png",
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "gif" => "image/gif",
+                    "webp" => "image/webp",
+                    _ => "application/octet-stream", // fallback for unknown types
+                };
+
+                let base64_content = format!(
+                    "data:{};base64,{}",
+                    mime_type,
+                    Engine::encode(&base64::engine::general_purpose::STANDARD, &file_content)
+                );
+
                 Some(MessageAttachment {
-                    id: attachment_id,
-                    message_id: message_id.clone(),
+                    id: Some(attachment_id),
+                    message_id: Some(message_id.clone()),
                     name: row.get(6)?,
-                    data: row.get(7)?,
+                    file_path: base64_content,  // Store base64 encoded content
                     attachment_type: row.get(8)?,
-                    created_at,
+                    description: None,
+                    created_at: Some(created_at),
                 })
             } else {
                 None
             };
-
+            if let Some(attachment) = &attachment {
+                println!("Attachment path: {:?}", attachment);
+            }
             Ok((
                 Message {
                     id: message_id,

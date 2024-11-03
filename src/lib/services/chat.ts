@@ -32,8 +32,9 @@ export async function sendChatMessage(
     const conversation: { id: string } = await invoke('get_or_create_conversation', { conversationId });
     
     // Get conversation history
-    const history: { role: string, content: string }[] = await invoke('get_conversation_history', { conversationId: conversation.id });
+    const history: { role: string, content: string, attachments: Attachment[] }[] = await invoke('get_conversation_history', { conversationId: conversation.id });
 
+    console.log('history', history);
     // Get all models to find the provider for the selected model
     const models = await invoke<Array<{ model_name: string, provider: string }>>('get_models');
     const selectedModel = models.find(m => m.model_name === model);
@@ -59,7 +60,16 @@ export async function sendChatMessage(
       },
       ...history.map((msg) => ({
         role: msg.role,
-        content: msg.content
+        content: msg.attachments ? [
+          { type: "text", text: msg.content },
+          ...msg.attachments.map((att) => ({
+            type: "image_url",
+            image_url: {
+              url: `${att.file_path}`,
+              detail: "auto"
+            }
+          }))
+        ] : msg.content
       })),
       { 
         role: 'user', 
@@ -92,16 +102,21 @@ export async function sendChatMessage(
       }
     }
 
+
+    console.log('saving message', message);
+    console.log('full response', fullResponse);
     // Save messages
     await invoke('save_message', { 
       conversationId: conversation.id, 
       role: 'user', 
-      content: message 
+      content: message.content,
+      attachments: message.attachments || []
     });
     await invoke('save_message', { 
       conversationId: conversation.id, 
       role: 'assistant', 
-      content: fullResponse 
+      content: fullResponse,
+      attachments: []
     });
     return {
       text: fullResponse,

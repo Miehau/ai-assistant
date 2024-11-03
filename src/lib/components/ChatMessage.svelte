@@ -152,7 +152,7 @@
       {#if attachments && attachments.length > 0}
         <div class="mt-2 space-y-2">
           {#each attachments as attachment}
-            {#if attachment.type === 'image'}
+            {#if attachment.attachment_type === 'image'}
               <img 
                 src={attachment.data} 
                 alt={attachment.name}

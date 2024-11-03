@@ -1,11 +1,9 @@
-export type Attachment = {
-  type: 'image';
-  name: string;
-  data: string;
-};
-
-export type Message = {
-  type: "sent" | "received";
+export interface Message {
   content: string;
-  attachments?: Attachment[];
-}; 
+  attachments?: {
+    type: string;
+    name: string;
+    data: string;
+    description?: string;
+  }[];
+} 
