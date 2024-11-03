@@ -38,11 +38,15 @@ export class ConversationService {
       .sort((a, b) => {
         return (a.timestamp ?? 0) - (b.timestamp ?? 0);
       })
-      .map(msg => ({
-        type: msg.role === 'user' ? 'sent' : 'received',
-        content: msg.content,
-        attachments: msg.attachments
-      }));
+      .map(msg => {
+        let content = msg.content;
+
+        return {
+          type: msg.role === 'user' ? 'sent' : 'received',
+          content,
+          attachments: msg.attachments
+        };
+      });
   }
 
   async getAPIHistory(conversationId: string): Promise<APIMessage[]> {

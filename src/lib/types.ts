@@ -2,8 +2,8 @@ export interface SystemPrompt {
     id: string;
     name: string;
     content: string;
-    created_at: string;  // ISO string from backend
-    updated_at: string;  // ISO string from backend
+    created_at: string;
+    updated_at: string;
 }
 
 export interface Model {
@@ -46,5 +46,5 @@ export interface DBMessage {
     role: 'user' | 'assistant';
     content: string;
     attachments?: Attachment[];
-    timestamp?: number;  // Add timestamp field
+    timestamp?: number;
 }

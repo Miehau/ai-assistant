@@ -35,7 +35,7 @@ export class OpenAIService {
         ...msg.attachments.map((att: any) => ({
           type: "image_url",
           image_url: {
-            url: `${att.file_path}`,
+            url: `${att.data}`,
             detail: "auto"
           }
         }))

@@ -42,7 +42,7 @@ pub struct MessageAttachment {
     pub id: Option<String>,
     pub message_id: Option<String>,
     pub name: String,
-    pub file_path: String,
+    pub data: String,  // Changed from file_path to data
     pub attachment_type: String,
     pub description: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
@@ -154,12 +154,10 @@ impl Db {
                 message_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 data TEXT NOT NULL,
-                file_path TEXT,
                 attachment_type TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (message_id) REFERENCES messages(id)
             );"),
-            M::up("ALTER TABLE message_attachments RENAME COLUMN data TO file_path;"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();
@@ -233,13 +231,14 @@ impl Db {
         
         // Save attachments
         for attachment in attachments {
-            let file_path = self.save_attachment_to_fs(
+            let file_path: String = self.save_attachment_to_fs(
                 &attachment.data,
                 &attachment.name
             )?;
 
+            // Store the original data URL in the database
             tx.execute(
-                "INSERT INTO message_attachments (id, message_id, name, file_path, attachment_type, created_at)
+                "INSERT INTO message_attachments (id, message_id, name, data, attachment_type, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     Uuid::new_v4().to_string(),
@@ -514,7 +513,7 @@ impl Db {
 
         // Then, get and add attachments for each message
         let mut attachments_stmt = conn.prepare(
-            "SELECT message_id, id, name, file_path, attachment_type, created_at 
+            "SELECT message_id, id, name, data, attachment_type, created_at 
              FROM message_attachments 
              WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)"
         )?;
@@ -550,12 +549,13 @@ impl Db {
                 mime_type,
                 Engine::encode(&base64::engine::general_purpose::STANDARD, &file_content)
             );
+            println!("{:?}", base64_content);
 
             Ok(MessageAttachment {
                 id: Some(row.get(1)?),
                 message_id: Some(message_id),
                 name: row.get(2)?,
-                file_path: base64_content,
+                data: base64_content,  // Changed from file_path to data
                 attachment_type: row.get(4)?,
                 description: None,
                 created_at: Some(created_at),
