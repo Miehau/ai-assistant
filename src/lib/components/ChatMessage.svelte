@@ -2,9 +2,6 @@
   import { marked } from "marked";
   import { onMount } from "svelte";
   import { shell } from "@tauri-apps/api";
-  import type { Link } from "marked";
-  import { Check, Copy } from "lucide-svelte";
-  import { cn } from "$lib/utils";
   import type { Attachment } from "$lib/types";
 
   export let type: "sent" | "received";
@@ -50,7 +47,7 @@
     }
 
     // Fix the link renderer to use the correct type signature
-    renderer.link = ({ href, title, text }: Link) => {
+    renderer.link = ({ href, title, text }) => {
       if (!href) return text;
       return `<a href="#" 
                 data-href="${href}"

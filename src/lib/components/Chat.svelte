@@ -15,22 +15,8 @@
   import { invoke } from "@tauri-apps/api/tauri";
   import type { Selected } from "bits-ui";
   import type { SystemPrompt } from "$lib/types";
-  import { open } from '@tauri-apps/api/dialog';
-  import { readTextFile } from '@tauri-apps/api/fs';
   import { Image } from "lucide-svelte";
-
-  type Attachment = {
-    attachment_type: 'image';
-    name: string;
-    data: string;
-    description?: string;
-  };
-
-  type Message = {
-    type: "sent" | "received";
-    content: string;
-    attachments?: Attachment[];
-  };
+  import type { Message } from "$lib/types";
 
   let currentConversationId: string | null = null;
   let chatContainer: HTMLElement | null = null;
@@ -57,7 +43,7 @@
     attachment_type: 'image';
     name: string;
     data: string;
-    position?: number; // Optional position in the message
+    position?: number; 
   };
 
   afterUpdate(() => {

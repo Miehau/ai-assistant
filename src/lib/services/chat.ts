@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/tauri';
-import OpenAI from 'openai';
-import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages';
+import { OpenAIService } from './openai';
 import type { Message } from '$lib/types';
 
 async function getApiKeyForProvider(provider: string): Promise<string> {
@@ -26,16 +25,10 @@ export async function sendChatMessage(
   systemPrompt?: string,
   attachment?: Attachment
 ) {
-  console.log("Using model:", model);
   try {
-    // Get or create conversation
-    const conversation: { id: string } = await invoke('get_or_create_conversation', { conversationId });
+    const conversation = await invoke('get_or_create_conversation', { conversationId });
+    const history = await invoke('get_conversation_history', { conversationId: conversation.id });
     
-    // Get conversation history
-    const history: { role: string, content: string, attachments: Attachment[] }[] = await invoke('get_conversation_history', { conversationId: conversation.id });
-
-    console.log('history', history);
-    // Get all models to find the provider for the selected model
     const models = await invoke<Array<{ model_name: string, provider: string }>>('get_models');
     const selectedModel = models.find(m => m.model_name === model);
     
@@ -43,68 +36,18 @@ export async function sendChatMessage(
       throw new Error(`Model ${model} not found`);
     }
 
-    // Get the API key for the provider
     const apiKey = await getApiKeyForProvider(selectedModel.provider);
+    const openAIService = new OpenAIService(apiKey);
 
-    // Initialize OpenAI client with the fetched API key
-    const openai = new OpenAI({
-      apiKey: apiKey,
-      dangerouslyAllowBrowser: true
-    });
+    const fullResponse = await openAIService.createChatCompletion(
+      model,
+      history,
+      message,
+      systemPrompt,
+      streamResponse,
+      onStream
+    );
 
-    // Prepare messages for OpenAI
-    const messages = [
-      { 
-        role: 'system', 
-        content: systemPrompt || "You are a helpful AI assistant."
-      },
-      ...history.map((msg) => ({
-        role: msg.role,
-        content: msg.attachments ? [
-          { type: "text", text: msg.content },
-          ...msg.attachments.map((att) => ({
-            type: "image_url",
-            image_url: {
-              url: `${att.file_path}`,
-              detail: "auto"
-            }
-          }))
-        ] : msg.content
-      })),
-      { 
-        role: 'user', 
-        content: message.attachments ? [
-          { type: "text", text: message.content },
-          ...message.attachments.map((att) => ({
-            type: "image_url",
-            image_url: {
-              url: `${att.data}`,
-              detail: "auto"
-            }
-          }))
-        ] : message.content
-      }
-    ];
-    console.log('message ', messages);
-
-    const stream = await openai.chat.completions.create({
-      model: model,
-      messages: messages,
-      stream: streamResponse,
-    });
-
-    let fullResponse = '';
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      fullResponse += content;
-      if (onStream) {
-        onStream(content);
-      }
-    }
-
-
-    console.log('saving message', message);
-    console.log('full response', fullResponse);
     // Save messages
     await invoke('save_message', { 
       conversationId: conversation.id, 
@@ -118,13 +61,14 @@ export async function sendChatMessage(
       content: fullResponse,
       attachments: []
     });
+
     return {
       text: fullResponse,
       conversationId: conversation.id,
     };
   } catch (error) {
     console.error('Failed to send chat message:', error);
-    throw error; // Re-throw to handle in the UI
+    throw error;
   }
 }
 

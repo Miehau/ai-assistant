@@ -1,4 +1,3 @@
-import type { DateTime } from "luxon";
 
 export interface SystemPrompt {
     id: string;
@@ -7,3 +6,17 @@ export interface SystemPrompt {
     created_at: string;  // ISO string from backend
     updated_at: string;  // ISO string from backend
 }
+
+
+export type Attachment = {
+    attachment_type: 'image';
+    name: string;
+    data: string;
+    description?: string;
+};
+
+export type Message = {
+    type: "sent" | "received";
+    content: string;
+    attachments?: Attachment[];
+};
