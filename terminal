@@ -1,0 +1,4 @@
+mkdir -p src-tauri/src/db/{models,operations}
+touch src-tauri/src/db/error.rs
+touch src-tauri/src/db/models/{mod.rs,message.rs,conversation.rs,model.rs,system_prompt.rs}
+touch src-tauri/src/db/operations/{mod.rs,messages.rs,conversations.rs,models.rs,system_prompts.rs} 
