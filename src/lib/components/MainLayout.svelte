@@ -4,6 +4,6 @@
 
 <Navbar />
 
-<div class="pl-[53px]">
+<div class="pl-[26px]">
   <slot />
 </div>
