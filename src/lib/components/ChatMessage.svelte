@@ -1,31 +1,173 @@
 <script lang="ts">
   import type { Attachment } from "$lib/types";
+  import { marked } from "marked";
+  import { onMount } from "svelte";
   
   export let type: "sent" | "received";
   export let content: string;
   export let attachments: (Attachment)[] | undefined = undefined;
 
-  function getImageSrc(attachment: Attachment): string {
-      return attachment.data;
+  onMount(() => {
+    const renderer = new marked.Renderer();
+    
+    renderer.code = ({ text, lang }: { text: string, lang: string | undefined }) => {
+      const code = escapeHtml(text);
+      return `
+        <div class="code-block-wrapper relative group">
+          <pre><code class="language-${lang || ''}">${code}</code></pre>
+          <button
+            class="copy-button opacity-0 group-hover:opacity-100 absolute top-2 right-2 
+            p-1.5 rounded-md bg-background/90 hover:bg-background 
+            shadow-sm border border-border transition-all duration-200"
+            data-copy="${encodeURIComponent(text)}"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+        </div>
+      `;
+    };
+
+    function escapeHtml(text: string): string {
+      return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    marked.setOptions({
+      breaks: true,
+      gfm: true,
+      renderer: renderer
+    });
+  });
+
+  async function handleClick(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    const copyButton = target.closest('.copy-button');
+    
+    if (copyButton) {
+      event.preventDefault();
+      const code = copyButton.getAttribute('data-copy');
+      if (code) {
+        try {
+          await navigator.clipboard.writeText(decodeURIComponent(code));
+          const icon = copyButton.querySelector('svg');
+          if (icon) {
+            icon.outerHTML = `<svg class="w-4 h-4 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>`;
+            
+            setTimeout(() => {
+              const updatedIcon = copyButton.querySelector('svg');
+              if (updatedIcon) {
+                updatedIcon.outerHTML = `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>`;
+              }
+            }, 2000);
+          }
+        } catch (err) {
+          console.error('Failed to copy:', err);
+        }
+      }
+    }
   }
+
+  $: htmlContent = marked(content);
 </script>
 
 <div class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}">
-  <div class="rounded-lg px-3 py-2 max-w-[85%] {type === 'received' ? 'bg-muted' : 'bg-primary text-primary-foreground'}">
-    {#if attachments && attachments.length > 0}
-      <div class="flex flex-col gap-2 mb-2">
-        {#each attachments as attachment}
-          {#if attachment.attachment_type === 'image'}
-            <img
-              src={getImageSrc(attachment)}
-              alt={attachment.name}
-              class="max-w-full rounded-md"
-            />
-          {/if}
-        {/each}
+  <div class="rounded-lg px-4 py-2 max-w-[80%] {type === 'received' ? 'bg-muted' : 'bg-primary text-primary-foreground'}">
+    <div class="prose prose-sm dark:prose-invert max-w-none">
+      <div class="markdown-content" on:click={handleClick}>
+        {@html htmlContent}
       </div>
-    {/if}
-    <p class="whitespace-pre-wrap">{content}</p>
+      {#if attachments && attachments.length > 0}
+        <div class="mt-2 space-y-2">
+          {#each attachments as attachment}
+            {#if attachment.attachment_type === 'image'}
+              <img 
+                src={attachment.data} 
+                alt={attachment.name}
+                class="max-w-full rounded-lg"
+              />
+            {/if}
+          {/each}
+        </div>
+      {/if}
+    </div>
   </div>
 </div>
+
+<style>
+  /* Base markdown styles */
+  :global(.markdown-content p) {
+    line-height: 1.5;
+  }
+  
+  :global(.markdown-content p:last-child) {
+    margin-bottom: 0;
+  }
+
+  /* Code block styles */
+  :global(.markdown-content pre) {
+    background-color: hsl(var(--muted));
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    padding: 1rem;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  }
+
+  :global(.markdown-content pre code) {
+    color: rgb(var(--foreground));
+    font-size: 0.875rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    background-color: transparent;
+  }
+
+  /* Inline code styles */
+  :global(.markdown-content code:not(pre code)) {
+    background-color: rgb(var(--muted) / 0.5);
+    padding: 0.2em 0.4em;
+    border-radius: 0.25rem;
+    font-size: 0.875em;
+  }
+
+  /* Copy button styles */
+  :global(.copy-button) {
+    z-index: 10;
+  }
+
+  :global(.copy-button:focus) {
+    opacity: 1;
+  }
+
+  :global(.code-block-wrapper) {
+    position: relative;
+    margin: 1rem 0;
+  }
+
+  :global(.code-block-wrapper:hover .copy-button) {
+    opacity: 1;
+  }
+
+  /* Adjust backgrounds for different message types */
+  :global(.bg-muted .markdown-content pre) {
+    background-color: hsl(var(--background));
+  }
+
+  :global(.bg-primary .markdown-content pre) {
+    background-color: hsl(var(--primary-foreground));
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+</style>
 
