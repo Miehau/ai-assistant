@@ -8,7 +8,6 @@
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Button } from "$lib/components/ui/button";
   import { Paperclip } from "lucide-svelte";
-  import { Mic } from "lucide-svelte";
   import { Send } from "lucide-svelte";
   import * as Select from "$lib/components/ui/select";
   import type { Model } from "$lib/types/models";
@@ -26,34 +25,39 @@
   let systemPrompts: SystemPrompt[] = [];
   let selectedModel: Selected<string> = {
     value: "",
-    label: "No models"
+    label: "No models",
   };
   let selectedSystemPrompt: SystemPrompt | null = null;
 
   let lastScrollHeight = 0;
-  let lastScrollTop = 0; 
+  let lastScrollTop = 0;
 
   let fileInput: HTMLInputElement;
 
   let attachments: FileAttachment[] = [];
 
   type FileAttachment = {
-    attachment_type: 'image';
+    attachment_type: "image";
     name: string;
     data: string;
-    position?: number; 
+    position?: number;
   };
 
   let unsubscribe: () => void;
 
+  let autoScroll = true;
+  let scrollTimeout: NodeJS.Timeout | null = null;
+
   onMount(async () => {
     loadModels();
     loadSystemPrompts();
-    
+
     // Initial load of messages if there's a current conversation
     const currentConversation = conversationService.getCurrentConversation();
     if (currentConversation) {
-      const loadedMessages = await conversationService.getDisplayHistory(currentConversation.id);
+      const loadedMessages = await conversationService.getDisplayHistory(
+        currentConversation.id,
+      );
       messages = loadedMessages;
     }
   });
@@ -72,13 +76,15 @@
     if (chatContainer) {
       const newScrollHeight = chatContainer.scrollHeight;
       const visibleHeight = chatContainer.clientHeight;
-      
+
       // Calculate distance from bottom before resize
-      const distanceFromBottom = lastScrollHeight - (lastScrollTop + visibleHeight);
-      
+      const distanceFromBottom =
+        lastScrollHeight - (lastScrollTop + visibleHeight);
+
       // Restore the same distance from bottom after resize
-      chatContainer.scrollTop = newScrollHeight - (distanceFromBottom + visibleHeight);
-      
+      chatContainer.scrollTop =
+        newScrollHeight - (distanceFromBottom + visibleHeight);
+
       // Update values for next resize
       lastScrollHeight = newScrollHeight;
       lastScrollTop = chatContainer.scrollTop;
@@ -91,9 +97,9 @@
       const resizeObserver = new ResizeObserver(() => {
         preserveScrollFromBottom();
       });
-      
+
       resizeObserver.observe(chatContainer);
-      
+
       return () => {
         resizeObserver.disconnect();
       };
@@ -101,19 +107,54 @@
   });
 
   function scrollToBottom() {
-    if (chatContainer) {
+    if (chatContainer && autoScroll) {
       const newScrollTop = chatContainer.scrollHeight - chatContainer.clientHeight;
       chatContainer.scrollTop = newScrollTop;
       lastScrollHeight = chatContainer.scrollHeight;
       lastScrollTop = newScrollTop;
     }
   }
-  
+
+  function handleScroll() {
+    if (!chatContainer) return;
+    
+    // Clear existing timeout
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+    }
+
+    const isScrolledToBottom = 
+      Math.abs((chatContainer.scrollHeight - chatContainer.scrollTop) - chatContainer.clientHeight) < 10;
+    
+    // If user scrolls up, disable auto-scroll
+    if (!isScrolledToBottom) {
+      autoScroll = false;
+    }
+
+    // If user scrolls to bottom, enable auto-scroll after a delay
+    if (isScrolledToBottom) {
+      scrollTimeout = setTimeout(() => {
+        autoScroll = true;
+      }, 150); // 150ms delay before re-enabling auto-scroll
+    }
+  }
+
+  // Add the scroll event listener in onMount
+  onMount(() => {
+    if (chatContainer) {
+      chatContainer.addEventListener('scroll', handleScroll);
+      return () => {
+        chatContainer?.removeEventListener('scroll', handleScroll);
+        if (scrollTimeout) clearTimeout(scrollTimeout);
+      };
+    }
+  });
+
   function selectModel(v: Selected<string> | undefined) {
     if (v) {
       selectedModel = {
         value: v.value,
-        label: `${v.value} • ${availableModels.find(m => m.model_name === v.value)?.provider ?? ""}`
+        label: `${v.value} • ${availableModels.find((m) => m.model_name === v.value)?.provider ?? ""}`,
       };
     }
   }
@@ -121,11 +162,14 @@
   async function handleSendMessage() {
     if (!currentMessage.trim()) return;
 
+    // Temporarily enable auto-scroll when sending a new message
+    autoScroll = true;
+
     // Create and display user message immediately
     const userMessage: Message = {
       type: "sent",
       content: currentMessage,
-      attachments: attachments.length > 0 ? attachments : undefined
+      attachments: attachments.length > 0 ? attachments : undefined,
     };
     messages = [...messages, userMessage];
 
@@ -139,7 +183,10 @@
         messageToSend,
         selectedModel.value,
         (chunk: string) => {
-          if (!messages[messages.length - 1] || messages[messages.length - 1].type !== "received") {
+          if (
+            !messages[messages.length - 1] ||
+            messages[messages.length - 1].type !== "received"
+          ) {
             messages = [...messages, { type: "received", content: chunk }];
           } else {
             const updatedMessages = [...messages];
@@ -148,7 +195,7 @@
           }
         },
         selectedSystemPrompt?.content || "You are a helpful assistant.",
-        userMessage.attachments
+        userMessage.attachments,
       );
     } catch (error) {
       console.error(error);
@@ -158,13 +205,13 @@
   async function loadModels() {
     try {
       const models = await invoke<Model[]>("get_models");
-      availableModels = models.filter(model => model.enabled);
-      
+      availableModels = models.filter((model) => model.enabled);
+
       // Update selected model if we have available models
       if (availableModels.length > 0) {
         selectedModel = {
           value: availableModels[0].model_name,
-          label: `${availableModels[0].model_name} • ${availableModels[0].provider}`
+          label: `${availableModels[0].model_name} • ${availableModels[0].provider}`,
         };
       }
     } catch (error) {
@@ -174,7 +221,7 @@
 
   async function loadSystemPrompts() {
     try {
-      systemPrompts = await invoke('get_all_system_prompts');
+      systemPrompts = await invoke("get_all_system_prompts");
     } catch (error) {
       console.error("Failed to load system prompts:", error);
     }
@@ -196,17 +243,17 @@
   async function handleFileChange(event: Event) {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
-    
+
     if (file) {
       try {
-        if (file.type.startsWith('image/')) {
+        if (file.type.startsWith("image/")) {
           // Handle image files
           const base64 = await fileToBase64(file);
           const attachment: FileAttachment = {
-            attachment_type: 'image',
+            attachment_type: "image",
             name: file.name,
             data: base64,
-            position: input.selectionStart || currentMessage.length
+            position: input.selectionStart || currentMessage.length,
           };
           console.log(attachment);
           attachments = [...attachments, attachment];
@@ -216,11 +263,11 @@
           currentMessage += text;
         }
       } catch (error) {
-        console.error('Error reading file:', error);
+        console.error("Error reading file:", error);
       }
     }
     // Reset the input so the same file can be selected again
-    input.value = '';
+    input.value = "";
   }
 
   function handleFileUpload() {
@@ -229,7 +276,7 @@
 
   function handleKeydown(event: KeyboardEvent) {
     // Send message on Enter (but not with Shift+Enter)
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       handleSendMessage();
     }
@@ -243,11 +290,12 @@
     <div
       bind:this={chatContainer}
       class="h-full overflow-y-auto pr-4 space-y-4 w-full"
+      on:scroll={handleScroll}
     >
       {#each messages as msg}
         <div transition:fly={{ y: 20, duration: 300 }} class="w-full">
-          <ChatMessage 
-            type={msg.type} 
+          <ChatMessage
+            type={msg.type}
             content={msg.content}
             attachments={msg.attachments}
           />
@@ -259,7 +307,7 @@
   <form
     class="mt-4 relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring"
   >
-    <input 
+    <input
       type="file"
       accept=".txt,.md,.json,.js,.ts,.py,.rs,.svelte,image/*"
       bind:this={fileInput}
@@ -277,11 +325,13 @@
     {#if attachments.length > 0}
       <div class="flex flex-wrap gap-2 px-3 pb-2">
         {#each attachments as attachment, index}
-          {#if attachment.attachment_type === 'image'}
-            <div class="flex items-center gap-2 bg-muted px-2 py-1 rounded-md group relative">
+          {#if attachment.attachment_type === "image"}
+            <div
+              class="flex items-center gap-2 bg-muted px-2 py-1 rounded-md group relative"
+            >
               <Image class="size-4" />
               <span class="text-sm">{attachment.name}</span>
-              <button 
+              <button
                 class="ml-1 text-muted-foreground hover:text-destructive transition-colors"
                 on:click={() => {
                   attachments = attachments.filter((_, i) => i !== index);
@@ -289,19 +339,19 @@
                 type="button"
                 aria-label="Remove attachment"
               >
-                <svg 
-                  xmlns="http://www.w3.org/2000/svg" 
-                  width="14" 
-                  height="14" 
-                  viewBox="0 0 24 24" 
-                  fill="none" 
-                  stroke="currentColor" 
-                  stroke-width="2" 
-                  stroke-linecap="round" 
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
                   stroke-linejoin="round"
                 >
-                  <path d="M18 6 6 18"/>
-                  <path d="m6 6 12 12"/>
+                  <path d="M18 6 6 18" />
+                  <path d="m6 6 12 12" />
                 </svg>
               </button>
             </div>
@@ -312,9 +362,9 @@
     <div class="flex items-center p-3 pt-0">
       <Tooltip.Root>
         <Tooltip.Trigger asChild let:builder>
-          <Button 
-            builders={[builder]} 
-            variant="ghost" 
+          <Button
+            builders={[builder]}
+            variant="ghost"
             size="icon"
             type="button"
             on:click={handleFileUpload}
@@ -323,22 +373,44 @@
             <span class="sr-only">Upload File</span>
           </Button>
         </Tooltip.Trigger>
-        <Tooltip.Content side="top">Upload File (Text or Image)</Tooltip.Content>
+        <Tooltip.Content side="top">Upload File (Text or Image)</Tooltip.Content
+        >
       </Tooltip.Root>
       <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          <Button variant="ghost" size="icon">
-            <Mic class="size-4" />
-            <span class="sr-only">Use Microphone</span>
+        <Tooltip.Trigger asChild let:builder>
+          <Button
+            builders={[builder]}
+            variant="ghost"
+            size="icon"
+            on:click={() => {
+              messages = [];
+              conversationService.setCurrentConversation(null);
+            }}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M5 12h14" />
+              <path d="M12 5v14" />
+            </svg>
+            <span class="sr-only">New Conversation</span>
           </Button>
         </Tooltip.Trigger>
-        <Tooltip.Content side="top">Use Microphone</Tooltip.Content>
+        <Tooltip.Content side="top">Start New Conversation</Tooltip.Content>
       </Tooltip.Root>
       <!-- <div class="flex items-center p-3 pb-0"> -->
-      <Select.Root 
+      <Select.Root
         onSelectedChange={(v) => {
           if (v) {
-            const prompt = systemPrompts.find(p => p.id === v.value);
+            const prompt = systemPrompts.find((p) => p.id === v.value);
             if (prompt) selectSystemPrompt(prompt);
           }
         }}
@@ -347,14 +419,18 @@
           <Select.Value placeholder="Select system prompt">
             {#if selectedSystemPrompt}
               <div class="flex items-center gap-2">
-                <span class="truncate max-w-[150px]">{selectedSystemPrompt.name}</span>
+                <span class="truncate max-w-[150px]"
+                  >{selectedSystemPrompt.name}</span
+                >
               </div>
             {/if}
           </Select.Value>
         </Select.Trigger>
         <Select.Content>
           {#if systemPrompts.length === 0}
-            <Select.Item value="" disabled>No system prompts available</Select.Item>
+            <Select.Item value="" disabled
+              >No system prompts available</Select.Item
+            >
           {:else}
             {#each systemPrompts as prompt}
               <Select.Item value={prompt.id}>
@@ -376,7 +452,7 @@
                 {#if selectedModel.label}
                   <span class="text-sm text-muted-foreground">•</span>
                   <span class="text-sm text-muted-foreground">
-                    {selectedModel.label.split(' • ')[1] ?? ''}
+                    {selectedModel.label.split(" • ")[1] ?? ""}
                   </span>
                 {/if}
               </div>
@@ -392,7 +468,9 @@
                 <div class="flex items-center gap-2 whitespace-nowrap">
                   <span>{model.model_name}</span>
                   <span class="text-sm text-muted-foreground">•</span>
-                  <span class="text-sm text-muted-foreground">{model.provider}</span>
+                  <span class="text-sm text-muted-foreground"
+                    >{model.provider}</span
+                  >
                 </div>
               </Select.Item>
             {/each}
