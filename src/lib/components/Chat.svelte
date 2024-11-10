@@ -17,6 +17,8 @@
   import { Image } from "lucide-svelte";
   import type { Message } from "$lib/types";
   import { conversationService } from "$lib/services/conversation";
+  import { fade } from "svelte/transition";
+  import { flip } from "svelte/animate";
 
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
@@ -281,6 +283,18 @@
       handleSendMessage();
     }
   }
+
+  function removeMessages() {
+    const removeWithDelay = async () => {
+      const delay = 100;
+      while (messages.length > 0) {
+        messages = messages.slice(0, -1);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+      conversationService.setCurrentConversation(null);
+    };
+    removeWithDelay();
+  }
 </script>
 
 <div
@@ -292,8 +306,12 @@
       class="h-full overflow-y-auto pr-4 space-y-4 w-full"
       on:scroll={handleScroll}
     >
-      {#each messages as msg}
-        <div transition:fly={{ y: 20, duration: 300 }} class="w-full">
+      {#each messages as msg, i (i)}
+        <div
+          in:fade={{ duration: 200 }}
+          out:fade={{ duration: 500 }}
+          class="w-full message-container"
+        >
           <ChatMessage
             type={msg.type}
             content={msg.content}
@@ -383,8 +401,7 @@
             variant="ghost"
             size="icon"
             on:click={() => {
-              messages = [];
-              conversationService.setCurrentConversation(null);
+              removeMessages();
             }}
           >
             <svg
@@ -489,3 +506,26 @@
     </div>
   </form>
 </div>
+
+<style>
+  /* Add to existing styles */
+  :global(.message-container) {
+    transform-origin: center;
+    perspective: 1000px;
+  }
+
+  :global(.message-container:out) {
+    animation: dustAway 0.3s ease-out forwards;
+  }
+
+  @keyframes dustAway {
+    0% {
+      opacity: 1;
+      transform: translateX(0) rotate(0);
+    }
+    100% {
+      opacity: 0;
+      transform: translateX(100px) rotate(10deg);
+    }
+  }
+</style>
