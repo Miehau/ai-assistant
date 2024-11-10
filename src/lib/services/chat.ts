@@ -1,11 +1,13 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { OpenAIService } from './openai';
-import type { Message, Model, Attachment } from '$lib/types';
+import { customProviderService } from './customProvider';
+import type { Message, Attachment } from '$lib/types';
 import { conversationService } from './conversation';
+import type { Model } from '$lib/types/models';
 
 export class ChatService {
-  private streamResponse = true;  // Default to true
-  
+  private streamResponse = true;
+
   private async getApiKeyForProvider(provider: string): Promise<string> {
     const apiKey = await invoke<string | null>('get_api_key', { provider });
     if (!apiKey) {
@@ -33,7 +35,6 @@ export class ChatService {
     };
   }
 
-  // this will come from config
   setStreamResponse(value: boolean) {
     this.streamResponse = value;
   }
@@ -52,16 +53,13 @@ export class ChatService {
         ?? await conversationService.setCurrentConversation(null);
       
       const history = await conversationService.getAPIHistory(conversation.id);
-      
       const selectedModel = await this.getModelInfo(model);
-      const apiKey = await this.getApiKeyForProvider(selectedModel.provider);
       
-      const openAIService = new OpenAIService(apiKey);
-      const modelResponse = await openAIService.createChatCompletion(
-        model,
+      const modelResponse = await this.createChatCompletion(
+        selectedModel,
         history,
         message,
-        systemPrompt,
+        systemPrompt || "You are a helpful AI assistant.",
         this.streamResponse,
         onStreamResponse
       );
@@ -79,6 +77,42 @@ export class ChatService {
       console.error('Failed to send chat message:', error);
       throw error;
     }
+  }
+
+  private async createChatCompletion(
+    model: Model, 
+    history: any[], 
+    message: Message, 
+    systemPrompt: string,
+    streamResponse: boolean,
+    onStreamResponse: (chunk: string) => void
+  ): Promise<string> {
+    if (model.provider === 'openai') {
+      const apiKey = await this.getApiKeyForProvider(model.provider);
+      const openAIService = new OpenAIService(apiKey);
+      return openAIService.createChatCompletion(
+        model.model_name,
+        history,
+        message,
+        systemPrompt,
+        streamResponse,
+        onStreamResponse
+      );
+    } 
+    
+    if (model.provider === 'custom' && model.url) {
+      return customProviderService.createChatCompletion(
+        model.model_name,
+        model.url,
+        history,
+        message,
+        systemPrompt,
+        streamResponse,
+        onStreamResponse
+      );
+    }
+    
+    throw new Error(`Unsupported provider: ${model.provider}`);
   }
 }
 

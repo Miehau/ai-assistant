@@ -147,7 +147,7 @@
             messages = updatedMessages;
           }
         },
-        selectedSystemPrompt?.content,
+        selectedSystemPrompt?.content || "You are a helpful assistant.",
         userMessage.attachments
       );
     } catch (error) {

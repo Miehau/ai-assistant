@@ -6,11 +6,6 @@ export interface SystemPrompt {
     updated_at: string;
 }
 
-export interface Model {
-    model_name: string;
-    provider: string;
-}
-
 export type Attachment = {
     attachment_type: 'image';
     name: string;

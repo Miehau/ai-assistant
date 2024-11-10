@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { browser } from "$app/environment";
     import { Input } from "$lib/components/ui/input";
     import * as Select from "$lib/components/ui/select";
     import { Button } from "$lib/components/ui/button";
@@ -17,16 +16,23 @@
     let models: Model[] = [];
 
     // Define the options for the Select component
-    const providers = [
+    type Provider = {
+        value: "openai" | "anthropic" | "azure" | "custom";
+        label: string;
+    };
+
+    const providers: Provider[] = [
         { value: "openai", label: "OpenAI" },
         { value: "anthropic", label: "Anthropic" },
         { value: "azure", label: "Azure" },
-    ] as const;
+        { value: "custom", label: "Custom Provider" }
+    ];
 
-    let selectedProvider = providers[0];
+    let selectedProvider: Provider = providers[0];
     let modelName = "";
     let deploymentName = "";
     let deploymentUrl = "";
+    let customUrl = "";
 
     async function loadModels() {
         try {
@@ -43,10 +49,12 @@
     $: formData = {
         provider: selectedProvider.value,
         model_name: modelName,
-        // Include Azure-specific fields conditionally
         ...(selectedProvider.value === "azure" && {
             deployment_name: deploymentName,
             url: deploymentUrl
+        }),
+        ...(selectedProvider.value === "custom" && {
+            url: customUrl
         })
     };
 
@@ -65,6 +73,7 @@
             modelName = "";
             deploymentName = "";
             deploymentUrl = "";
+            customUrl = "";
             selectedProvider = providers[0];
         } catch (error: any) {
             console.error(error);
@@ -72,9 +81,9 @@
             isSubmitting = false;
         }
     }
-    function handleFormModelUpdate(v: Selected<{ value: string; label: string }> | undefined) {
+    function handleFormModelUpdate(v: Selected<Provider> | undefined) {
         if (v) {
-            selectedProvider = providers.find(p => p.value === v.value) || providers[0];
+            selectedProvider = v.value;
         }
     }
 
@@ -150,6 +159,20 @@
                             <label for="deploymentUrl" class="font-medium w-24">Deployment URL:</label>
                             <Input id="deploymentUrl" bind:value={deploymentUrl} />
                         </div>
+                    </div>
+                </div>
+            {/if}
+
+            {#if selectedProvider.value === "custom"}
+                <div transition:slide={{ duration: 300, easing: cubicOut }}>
+                    <div class="space-y-1.5">
+                        <div class="flex items-center space-x-2">
+                            <label for="customUrl" class="font-medium w-24">API URL:</label>
+                            <Input id="customUrl" bind:value={customUrl} />
+                        </div>
+                        <p class="text-sm text-muted-foreground">
+                            The URL of your custom API endpoint
+                        </p>
                     </div>
                 </div>
             {/if}
