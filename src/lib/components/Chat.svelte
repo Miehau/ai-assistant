@@ -236,6 +236,9 @@
   async function loadSystemPrompts() {
     try {
       systemPrompts = await invoke("get_all_system_prompts");
+      if (systemPrompts.length > 0 && !selectedSystemPrompt) {
+        selectSystemPrompt(systemPrompts[0]);
+      }
     } catch (error) {
       console.error("Failed to load system prompts:", error);
     }
@@ -437,6 +440,7 @@
       </Tooltip.Root>
       <!-- <div class="flex items-center p-3 pb-0"> -->
       <Select.Root
+        selected={{ value: selectedSystemPrompt?.id ?? "", label: selectedSystemPrompt?.name ?? "" }}
         onSelectedChange={(v) => {
           if (v) {
             const prompt = systemPrompts.find((p) => p.id === v.value);
@@ -448,9 +452,7 @@
           <Select.Value placeholder="Select system prompt">
             {#if selectedSystemPrompt}
               <div class="flex items-center gap-2">
-                <span class="truncate max-w-[150px]"
-                  >{selectedSystemPrompt.name}</span
-                >
+                <span class="truncate max-w-[150px]">{selectedSystemPrompt.name}</span>
               </div>
             {/if}
           </Select.Value>

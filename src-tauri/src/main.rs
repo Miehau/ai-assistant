@@ -2,6 +2,7 @@
 
 mod db;
 mod commands;
+mod setup_default_values;
 
 use db::Db;
 use std::fs;
@@ -15,6 +16,8 @@ fn main() {
             let db_path = app_dir.join("app.db");
             let mut db = Db::new(db_path.to_str().unwrap()).expect("Failed to create database");
             db.run_migrations().expect("Failed to run database migrations");
+            
+            setup_default_values::initialize(&mut db).expect("Failed to initialize default values");
 
             app.manage(db);
             Ok(())
