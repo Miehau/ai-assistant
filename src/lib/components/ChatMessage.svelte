@@ -1,12 +1,20 @@
 <script lang="ts">
-  import type { Attachment } from "$lib/types";
   import { marked } from "marked";
   import { onMount } from "svelte";
-  import type { Code } from 'marked';
+  import type { Attachment } from "$lib/types";
   
   export let type: "sent" | "received";
   export let content: string;
   export let attachments: (Attachment)[] | undefined = undefined;
+
+  function escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
 
   onMount(() => {
     const renderer = new marked.Renderer();
@@ -20,7 +28,7 @@
               <span class="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">${lang || 'text'}</span>
             </div>
           </div>
-                 <button
+          <button
             class="copy-button opacity-0 group-hover:opacity-100 absolute top-1 right-2 
             p-1.5 rounded-md hover:bg-background/50 transition-all duration-200"
             data-copy="${encodeURIComponent(text || '')}"
@@ -37,21 +45,17 @@
       `;
     };
 
-    function escapeHtml(text: string): string {
-      return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-    }
-
     marked.setOptions({
       breaks: true,
       gfm: true,
       renderer: renderer
     });
   });
+
+  // Process content based on message type
+  $: processedContent = type === 'sent' ? escapeHtml(content) : content;
+  // Apply markdown processing to both sent and received messages
+  $: htmlContent = marked(processedContent);
 
   async function handleClick(event: MouseEvent) {
     const target = event.target as HTMLElement;
@@ -85,12 +89,10 @@
       }
     }
   }
-
-  $: htmlContent = marked(content);
 </script>
 
 <div class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}">
-  <div class="rounded-2xl px-4 py-2 w-[75%] {type === 'received' ? 'bg-muted' : 'text-primary-foreground bg-primary/30'}">
+  <div class="rounded-2xl px-4 py-2 max-w-[75%] {type === 'received' ? 'bg-muted' : 'text-primary-foreground bg-primary/30'}">
     <div class="prose prose-sm dark:prose-invert max-w-none">
       <div class="markdown-content" on:click={handleClick}>
         {@html htmlContent}
