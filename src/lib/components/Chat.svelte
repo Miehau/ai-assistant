@@ -50,6 +50,13 @@
   let autoScroll = true;
   let scrollTimeout: NodeJS.Timeout | null = null;
 
+  let streamingEnabled = true;
+
+  function toggleStreaming() {
+    streamingEnabled = !streamingEnabled;
+    chatService.setStreamResponse(streamingEnabled);
+  }
+
   onMount(async () => {
     loadModels();
     loadSystemPrompts();
@@ -495,6 +502,38 @@
         </Select.Content>
       </Select.Root>
       <!-- </div> -->
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild let:builder>
+          <Button
+            builders={[builder]}
+            variant="ghost"
+            size="icon"
+            type="button"
+            on:click={toggleStreaming}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class={streamingEnabled ? "text-primary" : "text-muted-foreground"}
+            >
+              <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+              <path d="M12 12v9" />
+              <path d="m8 17 4 4 4-4" />
+            </svg>
+            <span class="sr-only">Toggle Streaming</span>
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content side="top">
+          {streamingEnabled ? 'Disable' : 'Enable'} Streaming
+        </Tooltip.Content>
+      </Tooltip.Root>
       <Button
         type="button"
         on:click={handleSendMessage}
