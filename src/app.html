@@ -5,6 +5,18 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tauri + SvelteKit + Typescript App</title>
+    <style>
+      html {
+        overflow: hidden;
+        height: 100%;
+      }
+      
+      body {
+        height: 100%;
+        overflow: auto;
+        overscroll-behavior: none;
+      }
+    </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
