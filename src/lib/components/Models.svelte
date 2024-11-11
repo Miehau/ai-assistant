@@ -109,128 +109,131 @@
     }
 </script>
 
-<Card.Root>
-    <Card.Header>
-        <Card.Title>Add New Model</Card.Title>
-    </Card.Header>
-    <Card.Content>
-        <form on:submit={handleSubmit} class="space-y-6">
-            <div class="space-y-1.5">
-                <div class="flex items-center space-x-2">
-                    <label for="name" class="font-medium w-24">Name:</label>
-                    <Input id="name" bind:value={modelName} />
-                </div>
-                <p class="text-sm text-muted-foreground">
-                    Model name, e.g. gpt-4
-                </p>
-            </div>
-
-            <div class="space-y-1.5">
-                <div class="flex items-center space-x-2">
-                    <label for="provider" class="font-medium w-24">Provider</label>
-                    <Select.Root 
-                    selected={selectedProvider}
-                    onSelectedChange={handleFormModelUpdate}>
-                        <Select.Trigger class="w-full">
-                            <Select.Value placeholder="Select provider" />
-                        </Select.Trigger>
-                        <Select.Content>
-                            {#each providers as provider}
-                                <Select.Item value={provider}>
-                                    {provider.label}
-                                </Select.Item>
-                            {/each}
-                        </Select.Content>
-                    </Select.Root>
-                </div>
-            </div>
-
-            {#if selectedProvider.value === "azure"}
-                <div transition:slide={{ duration: 300, easing: cubicOut }}>
-                    <div class="space-y-1.5">
-                        <div class="flex items-center space-x-2">
-                            <label for="deploymentName" class="font-medium w-24">Deployment Name:</label>
-                            <Input id="deploymentName" bind:value={deploymentName} />
+<div class="pt-6">
+    <Card.Root class="max-w-2xl mx-auto text-sm">
+        <Card.Header class="space-y-0.5">
+            <Card.Title class="text-base">Add New Model</Card.Title>
+        </Card.Header>
+        <Card.Content>
+            <form on:submit={handleSubmit} class="space-y-3">
+                <div class="space-y-0.5">
+                    <div class="flex items-center gap-2">
+                        <label for="name" class="font-medium w-20 text-xs">Name</label>
+                        <div class="w-full max-w-xl">
+                            <Input id="name" bind:value={modelName} class="w-full text-sm h-8" placeholder="Model name, e.g. gpt-4" />
                         </div>
                     </div>
+                </div>
 
-                    <div class="space-y-1.5">
-                        <div class="flex items-center space-x-2">
-                            <label for="deploymentUrl" class="font-medium w-24">Deployment URL:</label>
-                            <Input id="deploymentUrl" bind:value={deploymentUrl} />
+                <div class="space-y-0.5">
+                    <div class="flex items-center gap-2">
+                        <label for="provider" class="font-medium w-20 text-xs">Provider</label>
+                        <Select.Root 
+                            selected={selectedProvider}
+                            onSelectedChange={handleFormModelUpdate}
+                            class="w-full max-w-sm text-sm">
+                            <Select.Trigger class="w-full h-8">
+                                <Select.Value placeholder="Select provider" />
+                            </Select.Trigger>
+                            <Select.Content>
+                                {#each providers as provider}
+                                    <Select.Item value={provider}>
+                                        {provider.label}
+                                    </Select.Item>
+                                {/each}
+                            </Select.Content>
+                        </Select.Root>
+                    </div>
+                </div>
+
+                {#if selectedProvider.value === "azure"}
+                    <div transition:slide={{ duration: 300, easing: cubicOut }}>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center space-x-2">
+                                <label for="deploymentName" class="font-medium w-24">Deployment Name:</label>
+                                <Input id="deploymentName" bind:value={deploymentName} />
+                            </div>
+                        </div>
+
+                        <div class="space-y-1.5">
+                            <div class="flex items-center space-x-2">
+                                <label for="deploymentUrl" class="font-medium w-24">Deployment URL:</label>
+                                <Input id="deploymentUrl" bind:value={deploymentUrl} />
+                            </div>
                         </div>
                     </div>
+                {/if}
+
+                {#if selectedProvider.value === "custom"}
+                    <div transition:slide={{ duration: 300, easing: cubicOut }}>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center space-x-2">
+                                <label for="customUrl" class="font-medium w-24">API URL:</label>
+                                <Input id="customUrl" bind:value={customUrl} />
+                            </div>
+                            <p class="text-sm text-muted-foreground">
+                                The URL of your custom API endpoint
+                            </p>
+                        </div>
+                    </div>
+                {/if}
+            </form>
+        </Card.Content>
+        <Card.Footer class="flex justify-end gap-2">
+            <Button variant="outline" size="sm" class="h-7 text-xs">Cancel</Button>
+            <Button type="submit" disabled={isSubmitting} on:click={handleSubmit} size="sm" class="h-7 text-xs">
+                {isSubmitting ? "Submitting..." : "Submit"}
+            </Button>
+        </Card.Footer>
+    </Card.Root>
+
+    <Card.Root class="mt-4 max-w-2xl mx-auto text-sm">
+        <Card.Header class="space-y-0.5">
+            <Card.Title class="text-base">Configured Models</Card.Title>
+        </Card.Header>
+        <Card.Content>
+            {#if models.length === 0}
+                <p class="text-xs text-muted-foreground">No models configured yet.</p>
+            {:else}
+                <div class="space-y-1">
+                    {#each models as model}
+                        <div class="flex items-center justify-between p-1.5 border rounded-lg hover:bg-muted/50 transition-colors">
+                            <div class="flex items-center gap-1.5">
+                                <h4 class="font-medium text-sm">{model.model_name}</h4>
+                                <span class="text-xs text-muted-foreground">•</span>
+                                <span class="text-xs text-muted-foreground">{model.provider}</span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <Switch 
+                                    checked={model.enabled} 
+                                    onCheckedChange={() => toggleModel(model)}
+                                    class="scale-90"
+                                />
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    class="text-destructive hover:text-destructive/90 h-7 w-7"
+                                    on:click={() => deleteModel(model)}
+                                    aria-label={`Delete model ${model.model_name}`}
+                                >
+                                    <Trash2 class="h-3.5 w-3.5" />
+                                </Button>
+                            </div>
+                        </div>
+                    {/each}
                 </div>
             {/if}
+        </Card.Content>
+    </Card.Root>
 
-            {#if selectedProvider.value === "custom"}
-                <div transition:slide={{ duration: 300, easing: cubicOut }}>
-                    <div class="space-y-1.5">
-                        <div class="flex items-center space-x-2">
-                            <label for="customUrl" class="font-medium w-24">API URL:</label>
-                            <Input id="customUrl" bind:value={customUrl} />
-                        </div>
-                        <p class="text-sm text-muted-foreground">
-                            The URL of your custom API endpoint
-                        </p>
-                    </div>
-                </div>
-            {/if}
-        </form>
-    </Card.Content>
-    <Card.Footer class="flex justify-between">
-        <Button variant="outline">Cancel</Button>
-        <Button type="submit" disabled={isSubmitting} on:click={handleSubmit}>
-            {isSubmitting ? "Submitting..." : "Submit"}
-        </Button>
-    </Card.Footer>
-</Card.Root>
-
-<Card.Root class="mt-6">
-    <Card.Header>
-        <Card.Title>Configured Models</Card.Title>
-    </Card.Header>
-    <Card.Content>
-        {#if models.length === 0}
-            <p class="text-muted-foreground">No models configured yet.</p>
-        {:else}
-            <div class="space-y-2">
-                {#each models as model}
-                    <div class="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors">
-                        <div class="flex items-center gap-2">
-                            <h4 class="font-medium">{model.model_name}</h4>
-                            <span class="text-sm text-muted-foreground">•</span>
-                            <span class="text-sm text-muted-foreground">{model.provider}</span>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <Switch 
-                                checked={model.enabled} 
-                                onCheckedChange={() => toggleModel(model)}
-                            />
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                class="text-destructive hover:text-destructive/90"
-                                on:click={() => deleteModel(model)}
-                                aria-label={`Delete model ${model.model_name}`}
-                            >
-                                <Trash2 class="h-4 w-4" />
-                            </Button>
-                        </div>
-                    </div>
-                {/each}
-            </div>
-        {/if}
-    </Card.Content>
-</Card.Root>
-
-<Card.Root class="mt-6">
-    <Card.Header>
-        <Card.Title>API Keys</Card.Title>
-    </Card.Header>
-    <Card.Content>
-        {#each providers as provider}
-            <ApiKeyInput {provider} />
-        {/each}
-    </Card.Content>
-</Card.Root>
+    <Card.Root class="mt-4 max-w-2xl mx-auto text-sm">
+        <Card.Header class="space-y-0.5">
+            <Card.Title class="text-base">API Keys</Card.Title>
+        </Card.Header>
+        <Card.Content>
+            {#each providers as provider}
+                <ApiKeyInput {provider} />
+            {/each}
+        </Card.Content>
+    </Card.Root>
+</div>

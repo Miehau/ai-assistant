@@ -38,7 +38,7 @@
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Playground</Tooltip.Content>
     </Tooltip.Root>
-    <Tooltip.Root>
+    <!-- <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
         <a href="/recipes">
           <Button
@@ -53,7 +53,7 @@
         </a>
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Models</Tooltip.Content>
-    </Tooltip.Root>
+    </Tooltip.Root> -->
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
         <a href="/models">
@@ -85,36 +85,6 @@
         </a>
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Assistants</Tooltip.Content>
-    </Tooltip.Root>
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
-        <Button
-          variant="ghost"
-          size="icon"
-          class="rounded-lg"
-          aria-label="Documentation"
-          builders={[builder]}
-        >
-          <Book class="size-5" />
-        </Button>
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}
-        >Documentation</Tooltip.Content
-      >
-    </Tooltip.Root>
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
-        <Button
-          variant="ghost"
-          size="icon"
-          class="rounded-lg"
-          aria-label="Settings"
-          builders={[builder]}
-        >
-          <Settings2 class="size-5" />
-        </Button>
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Settings</Tooltip.Content>
     </Tooltip.Root>
   </nav>
   <nav class="mt-auto grid gap-1 p-2">

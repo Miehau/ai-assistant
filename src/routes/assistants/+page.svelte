@@ -68,10 +68,6 @@
     }
 
     async function deletePrompt(id: string) {
-        if (!confirm('Are you sure you want to delete this prompt?')) {
-            return;
-        }
-
         try {
             isLoading = true;
             await invoke('delete_system_prompt', { id });
@@ -89,69 +85,72 @@
     onMount(loadPrompts);
 </script>
 
-<div class="container mx-auto p-4">
-    <div class="flex items-center justify-between mb-4">
-        <h1 class="text-2xl font-bold">System Prompts</h1>
-        {#if selectedPromptId}
-            <div class="space-x-2">
-                <Button variant="outline" on:click={cancelEdit}>Cancel</Button>
-                <Button on:click={savePrompt}>Update Prompt</Button>
-            </div>
-        {:else}
-            <Button on:click={savePrompt}>Save New Prompt</Button>
-        {/if}
-    </div>
+<div class="pt-6">
+    <div class="max-w-2xl mx-auto text-sm">
+        <div class="flex items-center justify-between mb-4">
+            <h1 class="text-base font-medium">System Prompts</h1>
+            {#if selectedPromptId}
+                <div class="space-x-2">
+                    <Button variant="outline" size="sm" class="h-7 text-xs" on:click={cancelEdit}>Cancel</Button>
+                    <Button size="sm" class="h-7 text-xs" on:click={savePrompt}>Update Prompt</Button>
+                </div>
+            {:else}
+                <Button size="sm" class="h-7 text-xs" on:click={savePrompt}>Save New Prompt</Button>
+            {/if}
+        </div>
 
-    <div class="grid w-full gap-4">
-        <Input
-            bind:value={currentName}
-            placeholder="Enter prompt name..."
-            class="w-full"
-        />
-        <Textarea 
-            bind:value={currentPrompt}
-            placeholder="Enter your system prompt here..."
-            class="min-h-[200px] resize-y"
-        />
+        <div class="grid w-full gap-3">
+            <Input
+                bind:value={currentName}
+                placeholder="Enter prompt name..."
+                class="w-full h-8 text-sm"
+            />
+            <Textarea 
+                bind:value={currentPrompt}
+                placeholder="Enter your system prompt here..."
+                class="min-h-[150px] resize-y text-sm"
+            />
 
-        {#if isLoading}
-            <div class="text-center">Loading...</div>
-        {:else}
-            <div class="grid gap-4">
-                {#each prompts as prompt (prompt.id)}
-                    <div class="border rounded-lg p-4">
-                        <div class="flex justify-between items-start mb-2">
-                            <div>
-                                <h3 class="font-medium">{prompt.name}</h3>
-                                <div class="text-sm text-muted-foreground">
-                                    Last updated: {new Date(prompt.updated_at).toLocaleString()}
+            {#if isLoading}
+                <div class="text-center text-xs text-muted-foreground">Loading...</div>
+            {:else}
+                <div class="grid gap-2">
+                    {#each prompts as prompt (prompt.id)}
+                        <div class="border rounded-lg p-2">
+                            <div class="flex justify-between items-start gap-4">
+                                <div>
+                                    <h3 class="text-sm font-medium">{prompt.name}</h3>
+                                    <div class="text-xs text-muted-foreground">
+                                        Last updated: {new Date(prompt.updated_at).toLocaleString()}
+                                    </div>
+                                    <p class="mt-1 text-xs text-muted-foreground">
+                                        {prompt.content.split('.')[0]}
+                                        {prompt.content.split('.')[1] ? '.' + prompt.content.split('.')[1] + '...' : '...'}
+                                    </p>
                                 </div>
-                                <p class="mt-2 text-sm text-muted-foreground">
-                                    {prompt.content.split('.')[0]}
-                                    {prompt.content.split('.')[1] ? '.' + prompt.content.split('.')[1] + '...' : '...'}
-                                </p>
-                            </div>
-                            <div class="flex gap-2">
-                                <Button 
-                                    variant="ghost" 
-                                    size="sm"
-                                    on:click={() => editPrompt(prompt)}
-                                >
-                                    Edit
-                                </Button>
-                                <Button 
-                                    variant="ghost" 
-                                    size="sm"
-                                    class="text-destructive hover:text-destructive"
-                                    on:click={() => deletePrompt(prompt.id)}
-                                >
-                                    <Trash2 class="size-4" />
-                                </Button>
+                                <div class="flex gap-1.5 h-3">
+                                    <Button 
+                                        variant="ghost" 
+                                        size="sm"
+                                        class="text-xs"
+                                        on:click={() => editPrompt(prompt)}
+                                    >
+                                        Edit
+                                    </Button>
+                                    <Button 
+                                        variant="ghost" 
+                                        size="sm"
+                                        class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                        on:click={() => deletePrompt(prompt.id)}
+                                    >
+                                        <Trash2 class="size-4" />
+                                    </Button>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                {/each}
-            </div>
-        {/if}
+                    {/each}
+                </div>
+            {/if}
+        </div>
     </div>
 </div>
