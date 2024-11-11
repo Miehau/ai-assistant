@@ -6,7 +6,7 @@
     "distDir": "../build"
   },
   "package": {
-    "productName": "ai_agent_ui",
+    "productName": "ai_agent",
     "version": "0.0.0"
   },
   "tauri": {
@@ -23,9 +23,9 @@
     },
     "windows": [
       {
-        "title": "ai_agent_ui",
+        "title": "ai_agent",
         "width": 800,
-        "height": 600
+        "height": 800
       }
     ],
     "security": {
@@ -34,7 +34,7 @@
     "bundle": {
       "active": true,
       "targets": "all",
-      "identifier": "com.tauri.dev",
+      "identifier": "dev.michalmlak.ai_agent",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
