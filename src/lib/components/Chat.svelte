@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, afterUpdate } from "svelte";
   import { chatService } from "$lib/services/chat";
-  import { fly } from "svelte/transition";
   import ChatMessage from "./ChatMessage.svelte";
   import { Label } from "$lib/components/ui/label";
   import { Textarea } from "$lib/components/ui/textarea";
@@ -18,7 +17,7 @@
   import type { Message } from "$lib/types";
   import { conversationService } from "$lib/services/conversation";
   import { fade } from "svelte/transition";
-  import { flip } from "svelte/animate";
+  import { Square } from "lucide-svelte";
 
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
@@ -51,6 +50,8 @@
   let scrollTimeout: NodeJS.Timeout | null = null;
 
   let streamingEnabled = true;
+
+  let isLoading = false;
 
   function toggleStreaming() {
     streamingEnabled = !streamingEnabled;
@@ -186,6 +187,8 @@
     const messageToSend = currentMessage;
     currentMessage = "";
     attachments = [];
+    
+    isLoading = true;
 
     try {
       await chatService.handleSendMessage(
@@ -208,6 +211,8 @@
       );
     } catch (error) {
       console.error(error);
+    } finally {
+      isLoading = false;
     }
   }
 
@@ -536,11 +541,16 @@
       </Tooltip.Root>
       <Button
         type="button"
-        on:click={handleSendMessage}
+        on:click={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
         size="sm"
         class="ml-auto gap-1.5"
+        variant={isLoading ? "destructive" : "default"}
       >
-        <Send class="size-3.5" />
+        {#if isLoading}
+          <Square class="size-3.5" />
+        {:else}
+          <Send class="size-3.5" />
+        {/if}
       </Button>
     </div>
   </form>

@@ -1,61 +1,86 @@
-import OpenAI from 'openai';
 import type { Message } from '$lib/types';
 import { formatMessages } from './messageFormatting';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 export class OpenAIService {
-  private client: OpenAI;
-
-  constructor(apiKey: string) {
-    this.client = new OpenAI({
-      apiKey,
-      dangerouslyAllowBrowser: true
-    });
-  }
+  constructor(private apiKey: string) {}
 
   async createChatCompletion(
     model: string,
     history: any[],
     message: Message,
-    systemPrompt?: string,
-    streamResponse = false,
-    onStream?: (chunk: string) => void,
-  ) {
+    systemPrompt: string,
+    streamResponse: boolean,
+    onStreamResponse: (chunk: string) => void,
+    signal: AbortSignal
+  ): Promise<string> {
     const messages = formatMessages(history, message, systemPrompt) as ChatCompletionMessageParam[];
     
-    try {
-        if (streamResponse) {
-            const stream = await this.client.chat.completions.create({
-                model,
-                messages,
-                stream: true,
-            });
-
-            let fullResponse = '';
-            for await (const chunk of stream) {
-                const content = chunk.choices[0]?.delta?.content || '';
-                fullResponse += content;
-                if (onStream) {
-                    onStream(content);
-                }
-            }
-            return fullResponse;
-        }
-    } catch (error) {
-        // If streaming fails, fall back to non-streaming
-        console.warn('Streaming not supported, falling back to regular response');
-    }
-
-    // Default to non-streaming response
-    const response = await this.client.chat.completions.create({
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
         model,
         messages,
-        stream: false,
+        stream: streamResponse,
+      }),
+      signal,
     });
-    const content = response.choices[0]?.message?.content || '';
-    if (onStream) {
-        onStream(content);
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.statusText}`);
     }
-    return content;
+
+    if (!streamResponse) {
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content || '';
+      onStreamResponse(content);
+      return content;
+    }
+
+    return this.handleStreamingResponse(response, onStreamResponse);
+  }
+
+  private async handleStreamingResponse(
+    response: Response, 
+    onStreamResponse: (chunk: string) => void
+  ): Promise<string> {
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body reader available');
+    
+    let fullResponse = '';
+    const decoder = new TextDecoder();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const lines = decoder.decode(value).split('\n');
+        const chunks = lines
+          .map(line => line.replace(/^data: /, '').trim())
+          .filter(line => line && line !== '[DONE]')
+          .map(line => {
+            try {
+              return JSON.parse(line);
+            } catch {
+              return null;
+            }
+          })
+          .filter(data => data?.choices?.[0]?.delta?.content)
+          .map(data => data.choices[0].delta.content);
+
+        for (const chunk of chunks) {
+          fullResponse += chunk;
+          onStreamResponse(chunk);
+        }
+      }
+      return fullResponse;
+    } finally {
+      reader.releaseLock();
+    }
   }
 }

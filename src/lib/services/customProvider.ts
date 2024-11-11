@@ -9,7 +9,8 @@ export class CustomProviderService {
     message: Message,
     systemPrompt: string,
     streamResponse: boolean,
-    onStreamResponse: (chunk: string) => void
+    onStreamResponse: (chunk: string) => void,
+    signal: AbortSignal
   ): Promise<string> {
     const body = JSON.stringify({
       messages: formatMessages(history, message, systemPrompt),
@@ -23,6 +24,7 @@ export class CustomProviderService {
         'Content-Type': 'application/json',
       },
       body,
+      signal
     });
 
     if (!response.ok) {

@@ -2,6 +2,7 @@
   import type { Attachment } from "$lib/types";
   import { marked } from "marked";
   import { onMount } from "svelte";
+  import type { Code } from 'marked';
   
   export let type: "sent" | "received";
   export let content: string;
@@ -10,22 +11,28 @@
   onMount(() => {
     const renderer = new marked.Renderer();
     
-    renderer.code = ({ text, lang }: { text: string, lang: string | undefined }) => {
-      const code = escapeHtml(text);
+    renderer.code = ({ text, lang }: Code) => {
+      const code = escapeHtml(text || '');
       return `
         <div class="code-block-wrapper relative group">
-          <pre><code class="language-${lang || ''}">${code}</code></pre>
-          <button
-            class="copy-button opacity-0 group-hover:opacity-100 absolute top-2 right-2 
-            p-1.5 rounded-md bg-background/90 hover:bg-background 
-            shadow-sm border border-border transition-all duration-200"
-            data-copy="${encodeURIComponent(text)}"
+          <div class="absolute top-0 left-0 right-0 h-8 bg-gradient-to-r from-primary/10 to-transparent rounded-t-lg flex items-center px-3">
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">${lang || 'text'}</span>
+            </div>
+          </div>
+                 <button
+            class="copy-button opacity-0 group-hover:opacity-100 absolute top-1 right-2 
+            p-1.5 rounded-md hover:bg-background/50 transition-all duration-200"
+            data-copy="${encodeURIComponent(text || '')}"
           >
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="w-3.5 h-3.5 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
           </button>
+          <div class="mt-8">
+            <pre><code class="language-${lang || ''}">${code}</code></pre>
+          </div>
         </div>
       `;
     };
@@ -83,7 +90,7 @@
 </script>
 
 <div class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}">
-  <div class="rounded-lg px-4 py-2 max-w-[80%] {type === 'received' ? 'bg-muted' : 'bg-primary text-primary-foreground'}">
+  <div class="rounded-2xl px-4 py-2 w-[75%] {type === 'received' ? 'bg-muted' : 'text-primary-foreground bg-primary/30'}">
     <div class="prose prose-sm dark:prose-invert max-w-none">
       <div class="markdown-content" on:click={handleClick}>
         {@html htmlContent}
@@ -95,7 +102,7 @@
               <img 
                 src={attachment.data} 
                 alt={attachment.name}
-                class="max-w-full rounded-lg"
+                class="max-w-full rounded-xl"
               />
             {/if}
           {/each}
@@ -117,13 +124,12 @@
 
   /* Code block styles */
   :global(.markdown-content pre) {
-    background-color: hsl(var(--muted));
+    background-color: hsl(var(--background));
     border: 1px solid hsl(var(--border));
     border-radius: 0.5rem;
-    padding: 1rem;
+    padding: 0.25rem 0.75rem 0.75rem;
     overflow-x: auto;
     margin: 0.5rem 0;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
 
   :global(.markdown-content pre code) {
@@ -132,6 +138,8 @@
     line-height: 1.5;
     white-space: pre-wrap;
     background-color: transparent;
+    display: block;
+    padding-top: 0.5rem;
   }
 
   /* Inline code styles */
@@ -154,9 +162,18 @@
   :global(.code-block-wrapper) {
     position: relative;
     margin: 1rem 0;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    transition: all 150ms ease;
+    background-color: hsl(var(--background));
+    border: 1px solid hsl(var(--border));
   }
 
-  :global(.code-block-wrapper:hover .copy-button) {
+  :global(.code-block-wrapper:hover) {
+    border-color: hsl(var(--primary) / 0.5);
+  }
+
+  :global(.code-block-wrapper .copy-button) {
     opacity: 1;
   }
 
@@ -166,8 +183,17 @@
   }
 
   :global(.bg-primary .markdown-content pre) {
-    background-color: hsl(var(--primary-foreground));
-    border-color: rgba(255, 255, 255, 0.2);
+    background-color: hsl(var(--background));
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  :global(.bg-primary .code-block-wrapper) {
+    background-color: hsl(var(--background));
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  :global(.bg-primary .code-block-wrapper .bg-gradient-to-r) {
+    background: linear-gradient(to right, rgba(255, 255, 255, 0.1), transparent);
   }
 </style>
 

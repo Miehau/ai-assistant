@@ -7,6 +7,7 @@ import type { Model } from '$lib/types/models';
 
 export class ChatService {
   private streamResponse = true;
+  private currentController: AbortController | null = null;
 
   private async getApiKeyForProvider(provider: string): Promise<string> {
     const apiKey = await invoke<string | null>('get_api_key', { provider });
@@ -39,6 +40,13 @@ export class ChatService {
     this.streamResponse = value;
   }
 
+  cancelCurrentRequest() {
+    if (this.currentController) {
+      this.currentController.abort();
+      this.currentController = null;
+    }
+  }
+
   async handleSendMessage(
     content: string,
     model: string,
@@ -47,6 +55,7 @@ export class ChatService {
     attachments: Attachment[] = [],
   ) {
     try {
+      this.currentController = new AbortController();
       const message = this.createMessage(content, attachments);
       
       const conversation = conversationService.getCurrentConversation() 
@@ -61,8 +70,11 @@ export class ChatService {
         message,
         systemPrompt || "You are a helpful AI assistant.",
         this.streamResponse,
-        onStreamResponse
+        onStreamResponse,
+        this.currentController.signal
       );
+
+      this.currentController = null;
 
       await Promise.all([
         conversationService.saveMessage('user', message.content, message.attachments || []),
@@ -73,7 +85,11 @@ export class ChatService {
         text: modelResponse,
         conversationId: conversation.id,
       };
-    } catch (error) {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('Request was cancelled');
+        return;
+      }
       console.error('Failed to send chat message:', error);
       throw error;
     }
@@ -85,7 +101,8 @@ export class ChatService {
     message: Message, 
     systemPrompt: string,
     streamResponse: boolean,
-    onStreamResponse: (chunk: string) => void
+    onStreamResponse: (chunk: string) => void,
+    signal: AbortSignal
   ): Promise<string> {
     if (model.provider === 'openai') {
       const apiKey = await this.getApiKeyForProvider(model.provider);
@@ -96,7 +113,8 @@ export class ChatService {
         message,
         systemPrompt,
         streamResponse,
-        onStreamResponse
+        onStreamResponse,
+        signal
       );
     } 
     
@@ -108,7 +126,8 @@ export class ChatService {
         message,
         systemPrompt,
         streamResponse,
-        onStreamResponse
+        onStreamResponse,
+        signal
       );
     }
     
