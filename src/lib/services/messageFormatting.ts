@@ -5,7 +5,7 @@ export interface FormattedMessage {
   content: string | Array<{ type: string; text?: string; image_url?: { url: string; detail: string } }>;
 }
 
-export async function formatMessages(history: any[], currentMessage: Message, systemPrompt?: string): FormattedMessage[] {
+export async function formatMessages(history: any[], currentMessage: Message, systemPrompt?: string): Promise<FormattedMessage[]> {
   return [
     { 
       role: 'system', 
@@ -50,7 +50,6 @@ export async function formatUserMessage(message: Message): Promise<FormattedMess
       }
     })))
   ];
-  console.log(content);
 
   return {
     role: 'user',
@@ -58,7 +57,7 @@ export async function formatUserMessage(message: Message): Promise<FormattedMess
   };
 }
 
-async function resizeImage(dataUrl: string, maxWidth: number = 2048, maxHeight: number = 2048): Promise<string> {
+export async function resizeImage(dataUrl: string, maxWidth: number = 2048, maxHeight: number = 2048): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {

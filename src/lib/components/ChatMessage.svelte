@@ -2,10 +2,15 @@
   import { marked } from "marked";
   import { onMount } from "svelte";
   import type { Attachment } from "$lib/types";
-  
+
   export let type: "sent" | "received";
   export let content: string;
-  export let attachments: (Attachment)[] | undefined = undefined;
+  export let attachments: Attachment[] | undefined = undefined;
+
+  interface RendererCode {
+    text?: string;
+    lang?: string;
+  }
 
   function escapeHtml(text: string): string {
     return text
@@ -16,22 +21,22 @@
       .replace(/'/g, "&#039;");
   }
 
-  onMount(() => {
+  onMount(async () => {
     const renderer = new marked.Renderer();
-    
-    renderer.code = ({ text, lang }: Code) => {
-      const code = escapeHtml(text || '');
+
+    renderer.code = ({ text, lang }: RendererCode) => {
+      const code = escapeHtml(text || "");
       return `
         <div class="code-block-wrapper relative group">
           <div class="absolute top-0 left-0 right-0 h-8 bg-gradient-to-r from-primary/10 to-transparent rounded-t-lg flex items-center px-3">
             <div class="flex items-center gap-2">
-              <span class="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">${lang || 'text'}</span>
+              <span class="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">${lang || "text"}</span>
             </div>
           </div>
           <button
             class="copy-button opacity-0 group-hover:opacity-100 absolute top-1 right-2 
             p-1.5 rounded-md hover:bg-background/50 transition-all duration-200"
-            data-copy="${encodeURIComponent(text || '')}"
+            data-copy="${encodeURIComponent(text || "")}"
           >
             <svg class="w-3.5 h-3.5 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -39,7 +44,7 @@
             </svg>
           </button>
           <div class="mt-8">
-            <pre><code class="language-${lang || ''}">${code}</code></pre>
+            <pre><code class="language-${lang || ""}">${code}</code></pre>
           </div>
         </div>
       `;
@@ -48,33 +53,33 @@
     marked.setOptions({
       breaks: true,
       gfm: true,
-      renderer: renderer
+      renderer: renderer,
     });
   });
 
   // Process content based on message type
-  $: processedContent = type === 'sent' ? escapeHtml(content) : content;
+  $: processedContent = type === "sent" ? escapeHtml(content) : content;
   // Apply markdown processing to both sent and received messages
   $: htmlContent = marked(processedContent);
 
   async function handleClick(event: MouseEvent) {
     const target = event.target as HTMLElement;
-    const copyButton = target.closest('.copy-button');
-    
+    const copyButton = target.closest(".copy-button");
+
     if (copyButton) {
       event.preventDefault();
-      const code = copyButton.getAttribute('data-copy');
+      const code = copyButton.getAttribute("data-copy");
       if (code) {
         try {
           await navigator.clipboard.writeText(decodeURIComponent(code));
-          const icon = copyButton.querySelector('svg');
+          const icon = copyButton.querySelector("svg");
           if (icon) {
             icon.outerHTML = `<svg class="w-4 h-4 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>`;
-            
+
             setTimeout(() => {
-              const updatedIcon = copyButton.querySelector('svg');
+              const updatedIcon = copyButton.querySelector("svg");
               if (updatedIcon) {
                 updatedIcon.outerHTML = `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -84,7 +89,7 @@
             }, 2000);
           }
         } catch (err) {
-          console.error('Failed to copy:', err);
+          console.error("Failed to copy:", err);
         }
       }
     }
@@ -92,7 +97,11 @@
 </script>
 
 <div class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}">
-  <div class="rounded-2xl px-4 py-2 max-w-[75%] {type === 'received' ? 'bg-muted' : 'text-primary-foreground bg-primary/30'}">
+  <div
+    class="rounded-2xl px-4 py-2 max-w-[75%] {type === 'received'
+      ? 'bg-muted'
+      : 'text-primary-foreground bg-primary/30'}"
+  >
     <div class="prose prose-sm dark:prose-invert max-w-none">
       <div class="markdown-content" on:click={handleClick}>
         {@html htmlContent}
@@ -100,11 +109,11 @@
       {#if attachments && attachments.length > 0}
         <div class="mt-2 space-y-2">
           {#each attachments as attachment}
-            {#if attachment.attachment_type === 'image'}
-              <img 
-                src={attachment.data} 
+            {#if attachment.attachment_type === "image"}
+              <img
+                src={attachment.data}
                 alt={attachment.name}
-                class="max-w-full rounded-xl"
+                class="max-w-full max-h-[300px] object-contain rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
               />
             {/if}
           {/each}
@@ -119,7 +128,7 @@
   :global(.markdown-content p) {
     line-height: 1.5;
   }
-  
+
   :global(.markdown-content p:last-child) {
     margin-bottom: 0;
   }
@@ -195,7 +204,10 @@
   }
 
   :global(.bg-primary .code-block-wrapper .bg-gradient-to-r) {
-    background: linear-gradient(to right, rgba(255, 255, 255, 0.1), transparent);
+    background: linear-gradient(
+      to right,
+      rgba(255, 255, 255, 0.1),
+      transparent
+    );
   }
 </style>
-

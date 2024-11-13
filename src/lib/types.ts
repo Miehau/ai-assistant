@@ -6,12 +6,16 @@ export interface SystemPrompt {
     updated_at: string;
 }
 
-export type Attachment = {
-    attachment_type: 'image';
+export interface Attachment {
+    id?: string;
+    message_id?: string;
     name: string;
     data: string;
+    attachment_url?: string;
+    attachment_type: string;
     description?: string;
-};
+    created_at?: Date;
+}
 
 // For display in UI
 export type Message = {

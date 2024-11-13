@@ -6,6 +6,8 @@ use base64::Engine;
 use tauri::api::path;
 use crate::db::models::{Message, MessageAttachment, IncomingAttachment};
 use super::DbOperations;
+use image::ImageFormat;
+use std::time::Instant;
 
 pub trait MessageOperations: DbOperations {
     fn save_message(
@@ -30,19 +32,20 @@ pub trait MessageOperations: DbOperations {
         )?;
         
         for attachment in attachments {
-            let file_path: String = self.save_attachment_to_fs(
+            let (file_path, thumbnail_path) = self.save_attachment_to_fs(
                 &attachment.data,
                 &attachment.name
             )?;
 
             tx.execute(
-                "INSERT INTO message_attachments (id, message_id, name, data, attachment_type, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO message_attachments (id, message_id, name, data, thumbnail_path, attachment_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     Uuid::new_v4().to_string(),
                     message_id,
                     attachment.name,
                     file_path,
+                    thumbnail_path,
                     attachment.attachment_type,
                     created_at_timestamp
                 ],
@@ -54,11 +57,16 @@ pub trait MessageOperations: DbOperations {
     }
 
     fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {
+        let start_time = Instant::now();
+        
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let app_dir = path::app_data_dir(&tauri::Config::default())
             .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
         let attachments_dir = app_dir.join("dev.michalmlak.ai_agent").join("attachments");
+
+        println!("📁 Setup time: {:?}", start_time.elapsed());
+        let messages_query_start = Instant::now();
 
         let mut messages_stmt = conn.prepare(
             "SELECT id, conversation_id, role, content, created_at 
@@ -79,48 +87,46 @@ pub trait MessageOperations: DbOperations {
             })
         })?.collect::<Result<Vec<_>, _>>()?;
 
+        println!("📨 Messages query time: {:?}", messages_query_start.elapsed());
+        let attachments_start = Instant::now();
+
         let mut attachments_stmt = conn.prepare(
-            "SELECT message_id, id, name, data, attachment_type, created_at 
+            "SELECT message_id, id, name, data, thumbnail_path, attachment_type, created_at 
              FROM message_attachments 
              WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)"
         )?;
 
         let attachments = attachments_stmt.query_map(params![conversation_id], |row| {
             let message_id: String = row.get(0)?;
-            let timestamp: i64 = row.get(5)?;
+            let timestamp: i64 = row.get(6)?;
             let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
             
             let file_path = row.get::<_, String>(3)?;
-            let full_path = attachments_dir.join(&file_path);
+            let thumbnail_path: Option<String> = row.get(4)?;
             
-            let file_content = fs::read(&full_path)
-                .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
-
-            let extension = std::path::Path::new(&file_path)
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("jpeg");
-
-            let mime_type = match extension.to_lowercase().as_str() {
-                "png" => "image/png",
-                "jpg" | "jpeg" => "image/jpeg",
-                "gif" => "image/gif",
-                "webp" => "image/webp",
-                _ => "application/octet-stream",
+            let attachment_url = format!("file://{}", attachments_dir.join(&file_path).to_string_lossy());
+            
+            let data = if let Some(thumb_path) = thumbnail_path {
+                let thumb_full_path = attachments_dir.join(&thumb_path);
+                if let Ok(thumb_content) = fs::read(&thumb_full_path) {
+                    format!(
+                        "data:image/jpeg;base64,{}",
+                        Engine::encode(&base64::engine::general_purpose::STANDARD, &thumb_content)
+                    )
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
             };
-
-            let base64_content = format!(
-                "data:{};base64,{}",
-                mime_type,
-                Engine::encode(&base64::engine::general_purpose::STANDARD, &file_content)
-            );
 
             Ok(MessageAttachment {
                 id: Some(row.get(1)?),
                 message_id: Some(message_id),
                 name: row.get(2)?,
-                data: base64_content,
-                attachment_type: row.get(4)?,
+                data,
+                attachment_url: Some(attachment_url),
+                attachment_type: row.get(5)?,
                 description: None,
                 created_at: Some(created_at),
             })
@@ -136,10 +142,13 @@ pub trait MessageOperations: DbOperations {
             }
         }
 
+        println!("📎 Total attachments processing time: {:?}", attachments_start.elapsed());
+        println!("⏱️  Total get_messages time: {:?}", start_time.elapsed());
+
         Ok(messages)
     }
 
-    fn save_attachment_to_fs(&self, data: &str, file_name: &str) -> RusqliteResult<String> {
+    fn save_attachment_to_fs(&self, data: &str, file_name: &str) -> RusqliteResult<(String, Option<String>)> {
         let app_dir = path::app_data_dir(&tauri::Config::default())
             .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
         
@@ -161,9 +170,35 @@ pub trait MessageOperations: DbOperations {
             .decode(base64_data)
             .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
         
-        fs::write(&file_path, decoded_data)
+        fs::write(&file_path, &decoded_data)
             .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
 
-        Ok(unique_filename)
+        // Generate thumbnail for images
+        let extension = std::path::Path::new(file_name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("jpeg");
+
+        let thumbnail_filename = if matches!(extension.to_lowercase().as_str(), 
+            "png" | "jpg" | "jpeg" | "gif" | "webp") {
+            let thumbnail_name = format!("thumb_{}", unique_filename);
+            let thumbnail_path = attachments_dir.join(&thumbnail_name);
+
+            // Generate thumbnail asynchronously
+            std::thread::spawn(move || {
+                if let Ok(img) = image::load_from_memory(&decoded_data) {
+                    let thumbnail = img.resize_to_fill(600, 600, image::imageops::FilterType::Lanczos3);
+                    if let Ok(_) = thumbnail.save_with_format(&thumbnail_path, ImageFormat::Jpeg) {
+                        return;
+                    }
+                }
+            });
+
+            Some(thumbnail_name)
+        } else {
+            None
+        };
+
+        Ok((unique_filename, thumbnail_filename))
     }
 } 

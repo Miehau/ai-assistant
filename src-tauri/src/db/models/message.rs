@@ -18,6 +18,7 @@ pub struct MessageAttachment {
     pub attachment_type: String,
     pub description: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
+    pub attachment_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
