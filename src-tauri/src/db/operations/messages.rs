@@ -58,7 +58,7 @@ pub trait MessageOperations: DbOperations {
         let conn = binding.lock().unwrap();
         let app_dir = path::app_data_dir(&tauri::Config::default())
             .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
-        let attachments_dir = app_dir.join("com.tauri.dev").join("attachments");
+        let attachments_dir = app_dir.join("dev.michalmlak.ai_agent").join("attachments");
 
         let mut messages_stmt = conn.prepare(
             "SELECT id, conversation_id, role, content, created_at 
@@ -143,7 +143,7 @@ pub trait MessageOperations: DbOperations {
         let app_dir = path::app_data_dir(&tauri::Config::default())
             .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
         
-        let attachments_dir = app_dir.join("com.tauri.dev").join("attachments");
+        let attachments_dir = app_dir.join("dev.michalmlak.ai_agent").join("attachments");
         fs::create_dir_all(&attachments_dir)
             .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
 

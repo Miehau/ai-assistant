@@ -14,8 +14,9 @@ export class OpenAIService {
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
   ): Promise<string> {
-    const messages = formatMessages(history, message, systemPrompt) as ChatCompletionMessageParam[];
+    const messages = await formatMessages(history, message, systemPrompt) as ChatCompletionMessageParam[];
     
+    console.log(messages);
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {

@@ -13,7 +13,7 @@ export class CustomProviderService {
     signal: AbortSignal
   ): Promise<string> {
     const body = JSON.stringify({
-      messages: formatMessages(history, message, systemPrompt),
+      messages: await formatMessages(history, message, systemPrompt),
       model: modelName,
       stream: streamResponse,
     });

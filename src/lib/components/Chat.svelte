@@ -272,7 +272,6 @@
             data: base64,
             position: input.selectionStart || currentMessage.length,
           };
-          console.log(attachment);
           attachments = [...attachments, attachment];
         } else {
           // Handle text files
