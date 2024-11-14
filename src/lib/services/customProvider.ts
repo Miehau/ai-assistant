@@ -5,15 +5,13 @@ export class CustomProviderService {
   async createChatCompletion(
     modelName: string,
     url: string,
-    history: any[],
-    message: Message,
-    systemPrompt: string,
+    messages: any[],
     streamResponse: boolean,
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
   ): Promise<string> {
     const body = JSON.stringify({
-      messages: await formatMessages(history, message, systemPrompt),
+      messages,
       model: modelName,
       stream: streamResponse,
     });

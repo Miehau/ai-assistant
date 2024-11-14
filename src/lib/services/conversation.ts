@@ -22,7 +22,6 @@ export class ConversationService {
   }
 
   getCurrentConversation(): Conversation | null {
-    console.log(get(this.state));
     return get(this.state).currentConversation;
   }
 
@@ -58,8 +57,7 @@ export class ConversationService {
       })
       .map(msg => ({
         role: msg.role,
-        content: msg.content,
-        attachments: msg.attachments
+        content: msg.content
       }));
   }
 

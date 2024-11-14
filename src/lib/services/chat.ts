@@ -4,6 +4,8 @@ import { customProviderService } from './customProvider';
 import type { Message, Attachment } from '$lib/types';
 import { conversationService } from './conversation';
 import type { Model } from '$lib/types/models';
+import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import { formatMessages } from './messageFormatting';
 
 export class ChatService {
   private streamResponse = true;
@@ -95,6 +97,26 @@ export class ChatService {
     }
   }
 
+  private async formatMessages(
+    history: any[],
+    message: Message,
+    systemPrompt: string
+  ): Promise<ChatCompletionMessageParam[]> {
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history.map(msg => ({
+        role: msg.role,
+        content: msg.content,
+      })),
+      {
+        role: 'user',
+        content: message.content,
+      },
+    ] as ChatCompletionMessageParam[];
+
+    return messages;
+  }
+
   private async createChatCompletion(
     model: Model, 
     history: any[], 
@@ -104,14 +126,15 @@ export class ChatService {
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
   ): Promise<string> {
+    
+    const formattedMessages = await formatMessages(history, message, systemPrompt);
+
     if (model.provider === 'openai') {
       const apiKey = await this.getApiKeyForProvider(model.provider);
       const openAIService = new OpenAIService(apiKey);
       return openAIService.createChatCompletion(
         model.model_name,
-        history,
-        message,
-        systemPrompt,
+        formattedMessages,
         streamResponse,
         onStreamResponse,
         signal
@@ -122,9 +145,7 @@ export class ChatService {
       return customProviderService.createChatCompletion(
         model.model_name,
         model.url,
-        history,
-        message,
-        systemPrompt,
+        formattedMessages,
         streamResponse,
         onStreamResponse,
         signal

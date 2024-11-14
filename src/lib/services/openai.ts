@@ -1,5 +1,4 @@
 import type { Message } from '$lib/types';
-import { formatMessages } from './messageFormatting';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 export class OpenAIService {
@@ -7,15 +6,11 @@ export class OpenAIService {
 
   async createChatCompletion(
     model: string,
-    history: any[],
-    message: Message,
-    systemPrompt: string,
+    messages: ChatCompletionMessageParam[],
     streamResponse: boolean,
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
   ): Promise<string> {
-    const messages = await formatMessages(history, message, systemPrompt) as ChatCompletionMessageParam[];
-    
     console.log(messages);
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",

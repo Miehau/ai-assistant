@@ -1,11 +1,12 @@
 import type { Message } from '$lib/types';
+import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 export interface FormattedMessage {
   role: 'system' | 'user' | 'assistant';
   content: string | Array<{ type: string; text?: string; image_url?: { url: string; detail: string } }>;
 }
 
-export async function formatMessages(history: any[], currentMessage: Message, systemPrompt?: string): Promise<FormattedMessage[]> {
+        export async function formatMessages(history: any[], currentMessage: Message, systemPrompt?: string): Promise<ChatCompletionMessageParam[]> {
   return [
     { 
       role: 'system', 
@@ -16,7 +17,7 @@ export async function formatMessages(history: any[], currentMessage: Message, sy
   ];
 }
 
-export function formatHistoryMessage(msg: any): FormattedMessage {
+export function formatHistoryMessage(msg: any): ChatCompletionMessageParam {
   return {
     role: msg.role,
     content: msg.attachments ? [
@@ -32,7 +33,7 @@ export function formatHistoryMessage(msg: any): FormattedMessage {
   };
 }
 
-export async function formatUserMessage(message: Message): Promise<FormattedMessage> {
+export async function formatUserMessage(message: Message): Promise<ChatCompletionMessageParam> {
   if (!message.attachments) {
     return {
       role: 'user',
@@ -42,45 +43,17 @@ export async function formatUserMessage(message: Message): Promise<FormattedMess
 
   const content = [
     { type: "text", text: message.content },
-    ...await Promise.all(message.attachments.map(async att => ({
+    ...message.attachments.map(att => ({
       type: "image_url",
       image_url: {
-        url: await resizeImage(att.data),
+        url: att.data,
         detail: "auto"
       }
-    })))
+    }))
   ];
 
   return {
     role: 'user',
     content
   };
-}
-
-export async function resizeImage(dataUrl: string, maxWidth: number = 2048, maxHeight: number = 2048): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      // If image is smaller than max dimensions, return original
-      if (img.width <= maxWidth && img.height <= maxHeight) {
-        resolve(dataUrl);
-        return;
-      }
-
-      const canvas = document.createElement('canvas');
-      // Calculate scale based on both width and height constraints
-      const scaleWidth = maxWidth / img.width;
-      const scaleHeight = maxHeight / img.height;
-      const scale = Math.min(scaleWidth, scaleHeight);
-      console.log(scale);
-
-      canvas.width = img.width * scale;
-      canvas.height = img.height * scale;
-
-      const ctx = canvas.getContext('2d');
-      ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.8));
-    };
-    img.src = dataUrl;
-  });
 } 
