@@ -22,7 +22,7 @@ A desktop chat application built with Tauri, SvelteKit, and TypeScript that prov
 
 1. Clone the repository
 2. Install dependencies with: bun install
-3. Run development server: bun run dev
+3. Run development server: bun run tauri dev
 4. Build for production: bun run build
 
 ## Configuration
