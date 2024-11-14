@@ -29,7 +29,6 @@ export class CustomProviderService {
       throw new Error(`Failed to send chat message to custom provider: ${response.statusText}`);
     }
 
-    console.log('response', response.headers.get('content-type'));
     const isStreaming = response.headers.get('content-type')?.includes('text/event-stream') 
       || response.headers.get('content-type')?.includes('application/x-ndjson')
       || response.headers.get('transfer-encoding')?.includes('chunked');
@@ -37,7 +36,6 @@ export class CustomProviderService {
     if (streamResponse && isStreaming && response.body) {
       return this.handleStreamingResponse(response, onStreamResponse);
     }
-    console.log('shouldnt be here')
     const data = await response.json();
     const content = data.message?.content || data.choices?.[0]?.message?.content || '';
     if (onStreamResponse) {

@@ -26,7 +26,6 @@ export async function addModel(model: Omit<Model, 'id'>): Promise<void> {
       ...model,
       id: uuidv4()
     };
-    console.log(modelWithId);
     await invoke('add_model', { model: modelWithId });
   } catch (error) {
     console.error('Failed to add model:', error);

@@ -11,7 +11,6 @@ export class OpenAIService {
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
   ): Promise<string> {
-    console.log(messages);
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {

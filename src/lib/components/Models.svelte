@@ -65,7 +65,6 @@
         isSubmitting = true;
 
         try {
-            console.log(formData);
             await invoke<string>("add_model", {model: formData});
             await loadModels();
             

@@ -6,6 +6,7 @@ import { conversationService } from './conversation';
 import type { Model } from '$lib/types/models';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { formatMessages } from './messageFormatting';
+import { AnthropicService } from './anthropic';
 
 export class ChatService {
   private streamResponse = true;
@@ -140,6 +141,18 @@ export class ChatService {
         signal
       );
     } 
+    
+    if (model.provider === 'anthropic') {
+      const apiKey = await this.getApiKeyForProvider(model.provider);
+      const anthropicService = new AnthropicService(apiKey);
+      return anthropicService.createChatCompletion(
+        model.model_name,
+        formattedMessages,
+        streamResponse,
+        onStreamResponse,
+        signal
+      );
+    }
     
     if (model.provider === 'custom' && model.url) {
       return customProviderService.createChatCompletion(
