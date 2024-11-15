@@ -102,11 +102,18 @@ pub trait MessageOperations: DbOperations {
             let file_path = row.get::<_, String>(3)?;
             let attachment_url = format!("asset://{}", file_path);
             
+            let full_path = attachments_dir.join(&file_path);
+            let file_content = fs::read(&full_path)
+                .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+            let base64_data = base64::engine::general_purpose::STANDARD.encode(file_content);
+            let attachment_type: String = row.get(4)?;
+            let data_url = format!("data:{};base64,{}", attachment_type, base64_data);
+            
             Ok(MessageAttachment {
                 id: Some(row.get(1)?),
                 message_id: Some(message_id),
                 name: row.get(2)?,
-                data: attachment_url.clone(),
+                data: data_url,
                 attachment_url: Some(attachment_url),
                 attachment_type: row.get(4)?,
                 description: None,

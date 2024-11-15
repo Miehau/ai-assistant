@@ -98,26 +98,6 @@ export class ChatService {
     }
   }
 
-  private async formatMessages(
-    history: any[],
-    message: Message,
-    systemPrompt: string
-  ): Promise<ChatCompletionMessageParam[]> {
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      ...history.map(msg => ({
-        role: msg.role,
-        content: msg.content,
-      })),
-      {
-        role: 'user',
-        content: message.content,
-      },
-    ] as ChatCompletionMessageParam[];
-
-    return messages;
-  }
-
   private async createChatCompletion(
     model: Model, 
     history: any[], 
