@@ -4,7 +4,6 @@ import { customProviderService } from './customProvider';
 import type { Message, Attachment } from '$lib/types';
 import { conversationService } from './conversation';
 import type { Model } from '$lib/types/models';
-import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { formatMessages } from './messageFormatting';
 import { AnthropicService } from './anthropic';
 
@@ -59,14 +58,33 @@ export class ChatService {
   ) {
     try {
       this.currentController = new AbortController();
-      const message = this.createMessage(content, attachments);
       
+      // Step 1: Process audio attachments and get transcripts
+      const processedAttachments = await this.processAttachments(attachments);
+
+      // Step 2: Prepare the content by adding transcripts
+      let processedContent = content;
+      const audioTranscripts = processedAttachments
+        .filter(att => att.attachment_type.startsWith("audio") && att.transcript)
+        .map(att => `[Audio Transcript]: ${att.transcript}`);
+      
+      if (audioTranscripts.length > 0) {
+        // processedContent += '\n' + audioTranscripts.join('\n');
+      }
+
+      // Step 3: Create the message with processed content and attachments
+      const message = this.createMessage(processedContent, processedAttachments);
+      console.log(message);
+      
+      // Step 4: Get or create conversation and fetch history
       const conversation = conversationService.getCurrentConversation() 
         ?? await conversationService.setCurrentConversation(null);
-      
       const history = await conversationService.getAPIHistory(conversation.id);
+      
+      // Step 5: Get model info
       const selectedModel = await this.getModelInfo(model);
       
+      // Step 6: Send to AI and get response
       const modelResponse = await this.createChatCompletion(
         selectedModel,
         history,
@@ -79,6 +97,7 @@ export class ChatService {
 
       this.currentController = null;
 
+      // Step 7: Save both messages to the conversation
       await Promise.all([
         conversationService.saveMessage('user', message.content, message.attachments || []),
         conversationService.saveMessage('assistant', modelResponse, [])
@@ -96,6 +115,25 @@ export class ChatService {
       console.error('Failed to send chat message:', error);
       throw error;
     }
+  }
+
+  private async processAttachments(attachments: Attachment[]): Promise<Attachment[]> {
+    const processedAttachments = [...attachments];
+    
+    for (const attachment of processedAttachments) {
+      if (attachment.attachment_type.startsWith("audio") && !attachment.transcript) {
+        try {
+          const apiKey = await this.getApiKeyForProvider('openai');
+          const openAIService = new OpenAIService(apiKey);
+          attachment.transcript = await openAIService.transcribeAudio(attachment.data);
+        } catch (error) {
+          console.error('Failed to transcribe audio:', error);
+          attachment.transcript = '[Transcription failed]';
+        }
+      }
+    }
+    
+    return processedAttachments;
   }
 
   private async createChatCompletion(
@@ -146,6 +184,12 @@ export class ChatService {
     }
     
     throw new Error(`Unsupported provider: ${model.provider}`);
+  }
+
+  async transcribeAudio(base64Audio: string): Promise<string> {
+    const apiKey = await this.getApiKeyForProvider('openai');
+    const openAIService = new OpenAIService(apiKey);
+    return openAIService.transcribeAudio(base64Audio);
   }
 }
 

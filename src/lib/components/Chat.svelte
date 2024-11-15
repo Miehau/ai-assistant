@@ -18,6 +18,7 @@
   import { conversationService } from "$lib/services/conversation";
   import { fade } from "svelte/transition";
   import { Square } from "lucide-svelte";
+  import { Headphones } from 'lucide-svelte';
 
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
@@ -38,10 +39,11 @@
   let attachments: FileAttachment[] = [];
 
   type FileAttachment = {
-    attachment_type: "image";
+    attachment_type: string;
     name: string;
     data: string;
     position?: number;
+    transcript?: string;
   };
 
   let unsubscribe: () => void;
@@ -170,49 +172,45 @@
   }
 
   async function handleSendMessage() {
-    if (!currentMessage.trim()) return;
+    if (!currentMessage.trim() && attachments.length === 0) return;
 
-    // Temporarily enable auto-scroll when sending a new message
-    autoScroll = true;
-
-    // Create and display user message immediately
-    const userMessage: Message = {
-      type: "sent",
-      content: currentMessage,
-      attachments: attachments.length > 0 ? attachments : undefined,
-    };
-    messages = [...messages, userMessage];
-
-    // Clear input fields
-    const messageToSend = currentMessage;
-    currentMessage = "";
-    attachments = [];
-    
     isLoading = true;
-
+    
     try {
-      await chatService.handleSendMessage(
-        messageToSend,
-        selectedModel.value,
-        (chunk: string) => {
-          if (
-            !messages[messages.length - 1] ||
-            messages[messages.length - 1].type !== "received"
-          ) {
-            messages = [...messages, { type: "received", content: chunk }];
-          } else {
-            const updatedMessages = [...messages];
-            updatedMessages[updatedMessages.length - 1].content += chunk;
-            messages = updatedMessages;
-          }
-        },
-        selectedSystemPrompt?.content || "You are a helpful assistant.",
-        userMessage.attachments,
-      );
+        // Create and display user message immediately
+        const userMessage: Message = {
+            type: "sent",
+            content: currentMessage,
+            attachments: attachments.length > 0 ? attachments : undefined,
+        };
+        messages = [...messages, userMessage];
+
+        // Clear input fields
+        const messageToSend = currentMessage;
+        currentMessage = "";
+        const attachmentsToSend = [...attachments];
+        attachments = [];
+
+        // Send message to AI (transcription happens inside handleSendMessage)
+        await chatService.handleSendMessage(
+            messageToSend,
+            selectedModel.value,
+            (chunk: string) => {
+                if (!messages[messages.length - 1] || messages[messages.length - 1].type !== "received") {
+                    messages = [...messages, { type: "received", content: chunk }];
+                } else {
+                    const updatedMessages = [...messages];
+                    updatedMessages[updatedMessages.length - 1].content += chunk;
+                    messages = updatedMessages;
+                }
+            },
+            selectedSystemPrompt?.content || "You are a helpful assistant.",
+            attachmentsToSend,
+        );
     } catch (error) {
-      console.error(error);
+        console.error("Error sending message:", error);
     } finally {
-      isLoading = false;
+        isLoading = false;
     }
   }
 
@@ -262,25 +260,33 @@
     const file = input.files?.[0];
 
     if (file) {
-      try {
-        if (file.type.startsWith("image/")) {
-          // Handle image files
-          const base64 = await fileToBase64(file);
-          const attachment: FileAttachment = {
-            attachment_type: "image",
-            name: file.name,
-            data: base64,
-            position: input.selectionStart || currentMessage.length,
-          };
-          attachments = [...attachments, attachment];
-        } else {
-          // Handle text files
-          const text = await file.text();
-          currentMessage += text;
+        try {
+            if (file.type.startsWith("image/")) {
+                // Handle image files
+                const base64 = await fileToBase64(file);
+                const attachment: FileAttachment = {
+                    attachment_type: file.type,
+                    name: file.name,
+                    data: base64,
+                };
+                attachments = [...attachments, attachment];
+            } else if (file.type.startsWith("audio/")) {
+                // Just save the audio file, don't transcribe yet
+                const base64 = await fileToBase64(file);
+                const attachment: FileAttachment = {
+                    attachment_type: file.type,
+                    name: file.name,
+                    data: base64,
+                };
+                attachments = [...attachments, attachment];
+            } else {
+                // Handle text files
+                const text = await file.text();
+                currentMessage += text;
+            }
+        } catch (error) {
+            console.error("Error reading file:", error);
         }
-      } catch (error) {
-        console.error("Error reading file:", error);
-      }
     }
     // Reset the input so the same file can be selected again
     input.value = "";
@@ -341,7 +347,7 @@
   >
     <input
       type="file"
-      accept=".txt,.md,.json,.js,.ts,.py,.rs,.svelte,image/*"
+      accept=".txt,.md,.json,.js,.ts,.py,.rs,.svelte,image/*,audio/*"
       bind:this={fileInput}
       style="display: none;"
       on:change={handleFileChange}
@@ -357,12 +363,43 @@
     {#if attachments.length > 0}
       <div class="flex flex-wrap gap-2 px-3 pb-2">
         {#each attachments as attachment, index}
-          {#if attachment.attachment_type === "image"}
+          {#if attachment.attachment_type.startsWith("image")}
             <div
               class="flex items-center gap-2 bg-muted px-2 py-1 rounded-md group relative"
             >
               <Image class="size-4" />
               <span class="text-sm">{attachment.name}</span>
+              <button
+                class="ml-1 text-muted-foreground hover:text-destructive transition-colors"
+                on:click={() => {
+                  attachments = attachments.filter((_, i) => i !== index);
+                }}
+                type="button"
+                aria-label="Remove attachment"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M18 6 6 18" />
+                  <path d="m6 6 12 12" />
+                </svg>
+              </button>
+            </div>
+          {:else if attachment.attachment_type.startsWith("audio")}
+            <div class="flex items-center gap-2 bg-muted px-2 py-1 rounded-md group relative">
+              <Headphones class="size-4" />
+              <span class="text-sm">{attachment.name}</span>
+              <audio class="h-6 w-24 mx-1" controls src={attachment.data}>
+                Your browser does not support the audio element.
+              </audio>
               <button
                 class="ml-1 text-muted-foreground hover:text-destructive transition-colors"
                 on:click={() => {

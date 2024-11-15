@@ -85,6 +85,12 @@ impl Db {
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (message_id) REFERENCES messages(id)
             );"),
+            M::up(
+                "ALTER TABLE message_attachments ADD COLUMN transcript TEXT;",
+            ),
+            M::up(
+                "ALTER TABLE message_attachments ADD COLUMN description TEXT;",
+            ),
         ]);
 
         let mut conn = self.conn.lock().unwrap();

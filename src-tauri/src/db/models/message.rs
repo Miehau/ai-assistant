@@ -7,6 +7,7 @@ pub struct IncomingAttachment {
     pub data: String,
     pub attachment_type: String,
     pub description: Option<String>,
+    pub transcript: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -17,6 +18,7 @@ pub struct MessageAttachment {
     pub data: String,
     pub attachment_type: String,
     pub description: Option<String>,
+    pub transcript: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub attachment_url: Option<String>,
 }

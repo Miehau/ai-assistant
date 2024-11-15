@@ -12,9 +12,10 @@ export interface Attachment {
     name: string;
     data: string;
     attachment_url?: string;
-    attachment_type: string;
+    attachment_type: "image" | "audio";
     description?: string;
     created_at?: Date;
+    transcript?: string;
 }
 
 // For display in UI

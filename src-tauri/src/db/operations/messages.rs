@@ -37,14 +37,18 @@ pub trait MessageOperations: DbOperations {
             )?;
 
             tx.execute(
-                "INSERT INTO message_attachments (id, message_id, name, data, attachment_type, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO message_attachments (
+                    id, message_id, name, data, attachment_type, description, transcript, created_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     Uuid::new_v4().to_string(),
                     message_id,
                     attachment.name,
                     file_path,
                     attachment.attachment_type,
+                    attachment.description,
+                    attachment.transcript,
                     created_at_timestamp
                 ],
             )?;
@@ -89,7 +93,7 @@ pub trait MessageOperations: DbOperations {
         let attachments_start = Instant::now();
 
         let mut attachments_stmt = conn.prepare(
-            "SELECT message_id, id, name, data, attachment_type, created_at 
+            "SELECT message_id, id, name, data, attachment_type, created_at, description, transcript 
              FROM message_attachments 
              WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)"
         )?;
@@ -116,7 +120,8 @@ pub trait MessageOperations: DbOperations {
                 data: data_url,
                 attachment_url: Some(attachment_url),
                 attachment_type: row.get(4)?,
-                description: None,
+                description: row.get(6)?,
+                transcript: row.get(7)?,
                 created_at: Some(created_at),
             })
         })?;

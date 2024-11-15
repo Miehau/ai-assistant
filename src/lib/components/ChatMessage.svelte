@@ -109,12 +109,23 @@
       {#if attachments && attachments.length > 0}
         <div class="mt-2 space-y-2">
           {#each attachments as attachment}
-            {#if attachment.attachment_type === "image"}
+            {#if attachment.attachment_type.startsWith("image")}
               <img
                 src={attachment.data}
                 alt={attachment.name}
                 class="max-w-full max-h-[300px] object-contain rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
               />
+            {:else if attachment.attachment_type.startsWith("audio")}
+              <div class="flex flex-col gap-2">
+                <audio controls src={attachment.data} class="max-w-full">
+                  Your browser does not support the audio element.
+                </audio>
+                {#if attachment.transcript}
+                  <div class="text-sm text-muted-foreground">
+                    Transcript: {attachment.transcript}
+                  </div>
+                {/if}
+              </div>
             {/if}
           {/each}
         </div>
