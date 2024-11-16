@@ -31,10 +31,16 @@ pub trait MessageOperations: DbOperations {
         )?;
         
         for attachment in attachments {
-            let file_path = self.save_attachment_to_fs(
-                &attachment.data,
-                &attachment.name
-            )?;
+            let file_path = if attachment.attachment_type.starts_with("text/") {
+                // For text attachments, store the content directly
+                attachment.data.to_string()
+            } else {
+                // For binary attachments (images, audio), save to filesystem
+                self.save_attachment_to_fs(
+                    &attachment.data,
+                    &attachment.name
+                )?
+            };
 
             tx.execute(
                 "INSERT INTO message_attachments (
@@ -102,24 +108,28 @@ pub trait MessageOperations: DbOperations {
             let message_id: String = row.get(0)?;
             let timestamp: i64 = row.get(5)?;
             let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
-            
-            let file_path = row.get::<_, String>(3)?;
-            let attachment_url = format!("asset://{}", file_path);
-            
-            let full_path = attachments_dir.join(&file_path);
-            let file_content = fs::read(&full_path)
-                .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
-            let base64_data = base64::engine::general_purpose::STANDARD.encode(file_content);
             let attachment_type: String = row.get(4)?;
-            let data_url = format!("data:{};base64,{}", attachment_type, base64_data);
+            
+            let data = if attachment_type.starts_with("text/") {
+                // For text attachments, use the stored content directly
+                row.get::<_, String>(3)?
+            } else {
+                // For binary attachments, read from filesystem and encode
+                let file_path: String = row.get(3)?;
+                let full_path = attachments_dir.join(&file_path);
+                let file_content = fs::read(&full_path)
+                    .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+                let base64_data = base64::engine::general_purpose::STANDARD.encode(file_content);
+                format!("data:{};base64,{}", attachment_type, base64_data)
+            };
             
             Ok(MessageAttachment {
                 id: Some(row.get(1)?),
                 message_id: Some(message_id),
                 name: row.get(2)?,
-                data: data_url,
-                attachment_url: Some(attachment_url),
-                attachment_type: row.get(4)?,
+                data,
+                attachment_url: None,
+                attachment_type,
                 description: row.get(6)?,
                 transcript: row.get(7)?,
                 created_at: Some(created_at),

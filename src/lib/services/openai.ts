@@ -79,7 +79,7 @@ export class OpenAIService {
     }
   }
 
-  async transcribeAudio(base64Audio: string): Promise<string> {
+  async transcribeAudio(base64Audio: string, context: string): Promise<string> {
     // Convert base64 to blob
     const base64Data = base64Audio.split(',')[1];
     const binaryData = atob(base64Data);
@@ -94,7 +94,7 @@ export class OpenAIService {
     formData.append('file', blob, 'audio.mp3');
     formData.append('model', 'whisper-1');
     formData.append('response_format', 'text');
-
+    formData.append('prompt', context);
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: {
@@ -104,6 +104,7 @@ export class OpenAIService {
     });
 
     if (!response.ok) {
+      console.error('Failed to transcribe audio:', response.statusText);
       throw new Error(`OpenAI API error: ${response.statusText}`);
     }
 

@@ -22,13 +22,21 @@ export function formatHistoryMessage(msg: any): ChatCompletionMessageParam {
     role: msg.role,
     content: msg.attachments ? [
       { type: "text", text: msg.content },
-      ...msg.attachments.map((att: any) => ({
-        type: "image_url",
-        image_url: {
-          url: `${att.data}`,
-          detail: "auto"
+      ...msg.attachments.map((att: any) => {
+        if (att.attachment_type.startsWith('text/')) {
+          return { 
+            type: "text", 
+            text: `\n\n[Attached file: ${att.name}]\n\`\`\`\n${att.data}\n\`\`\`\n` 
+          };
         }
-      }))
+        return {
+          type: "image_url",
+          image_url: {
+            url: `${att.data}`,
+            detail: "auto"
+          }
+        };
+      })
     ] : msg.content
   };
 }
@@ -43,13 +51,29 @@ export async function formatUserMessage(message: Message): Promise<ChatCompletio
 
   const audioMessages = message.attachments
     .filter(att => att.attachment_type.startsWith("audio"))
-    .map(att => `[Attached audio message transcript: ${att.transcript}]`)
+    .map(att => `[Audio Transcript: ${att.name}\n\`\`\`\n${att.transcript}\`\`\`\n]`)
     .join("\n");
 
+  const textAttachments = message.attachments
+    .filter(att => att.attachment_type.startsWith("text"))
+    .map(att => `\n\n[Attached file: ${att.name}]\n\`\`\`\n${att.data}\n\`\`\`\n`)
+    .join("");
+
   const content = [
-    { type: "text" as const, text: message.content + (audioMessages ? "\n" + audioMessages : "") },
+    { 
+      type: "text" as const,
+      text: message.content 
+      + (audioMessages ? "\n" + audioMessages : "")
+      + textAttachments
+      + (message.attachments.some(att => att.attachment_type.startsWith("image")) 
+         ? "\n\n[Attached images: " + message.attachments
+           .filter(att => att.attachment_type.startsWith("image"))
+           .map(att => att.name)
+           .join(", ") + "]"
+         : "")
+    },
     ...message.attachments
-      .filter(att => !att.attachment_type.startsWith("audio"))
+      .filter(att => att.attachment_type.startsWith("image"))
       .map(att => ({
         type: "image_url" as const,
         image_url: {

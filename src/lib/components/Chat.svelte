@@ -257,38 +257,36 @@
 
   async function handleFileChange(event: Event) {
     const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
+    const files = Array.from(input.files || []);
 
-    if (file) {
+    if (files.length > 0) {
         try {
-            if (file.type.startsWith("image/")) {
-                // Handle image files
-                const base64 = await fileToBase64(file);
-                const attachment: FileAttachment = {
-                    attachment_type: file.type,
-                    name: file.name,
-                    data: base64,
-                };
-                attachments = [...attachments, attachment];
-            } else if (file.type.startsWith("audio/")) {
-                // Just save the audio file, don't transcribe yet
-                const base64 = await fileToBase64(file);
-                const attachment: FileAttachment = {
-                    attachment_type: file.type,
-                    name: file.name,
-                    data: base64,
-                };
-                attachments = [...attachments, attachment];
-            } else {
-                // Handle text files
-                const text = await file.text();
-                currentMessage += text;
-            }
+            const newAttachments = await Promise.all(files.map(async (file) => {
+                if (file.type.startsWith('text/') || file.name.match(/\.(txt|md|json|js|ts|py|rs|svelte)$/)) {
+                    // For text files, read as text directly
+                    const text = await file.text();
+                    return {
+                        attachment_type: file.type || 'text/plain',
+                        name: file.name,
+                        data: text
+                    };
+                } else {
+                    // For non-text files (images, audio), use base64
+                    const base64 = await fileToBase64(file);
+                    return {
+                        attachment_type: file.type,
+                        name: file.name,
+                        data: base64
+                    };
+                }
+            }));
+
+            attachments = [...attachments, ...newAttachments];
         } catch (error) {
-            console.error("Error reading file:", error);
+            console.error("Error reading files:", error);
         }
     }
-    // Reset the input so the same file can be selected again
+    // Reset the input so the same files can be selected again
     input.value = "";
   }
 
@@ -347,11 +345,82 @@
   >
     <input
       type="file"
-      accept=".txt,.md,.json,.js,.ts,.py,.rs,.svelte,image/*,audio/*"
+      multiple
+      accept=".txt,.md,.json,.js,.ts,.py,.rs,.svelte,image/*,audio/*,text/*"
       bind:this={fileInput}
       style="display: none;"
       on:change={handleFileChange}
     />
+    {#if attachments.length > 0}
+      <div class="flex flex-wrap gap-2 px-3 pb-2">
+        {#each attachments as attachment, index}
+          <div class="w-[180px] h-[60px] flex items-center gap-2 bg-muted/50 px-2 rounded-md group relative hover:bg-muted/70 transition-colors">
+            <div class="w-8 h-full flex items-center justify-center flex-none">
+              {#if attachment.attachment_type.startsWith("image")}
+                <Image class="w-5 h-5 text-muted-foreground" />
+              {:else if attachment.attachment_type.startsWith("audio")}
+                <Headphones class="w-5 h-5 text-muted-foreground" />
+              {:else if attachment.attachment_type.startsWith("text")}
+                <svg 
+                    class="w-5 h-5 text-muted-foreground" 
+                    xmlns="http://www.w3.org/2000/svg" 
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    stroke-width="2" 
+                    stroke-linecap="round" 
+                    stroke-linejoin="round"
+                >
+                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                </svg>
+              {/if}
+            </div>
+
+            <div class="flex-1 min-w-0 py-2">
+              <p class="text-xs font-medium truncate leading-tight">{attachment.name}</p>
+              {#if attachment.attachment_type.startsWith("text")}
+                <p class="text-xs text-muted-foreground truncate leading-tight">
+                  {attachment.data.slice(0, 30)}...
+                </p>
+              {:else if attachment.attachment_type.startsWith("audio")}
+                <p class="text-xs text-muted-foreground truncate leading-tight">
+                  Audio file
+                </p>
+              {:else}
+                <p class="text-xs text-muted-foreground truncate leading-tight">
+                  Image file
+                </p>
+              {/if}
+            </div>
+
+            <button
+              class="w-8 h-full flex items-center justify-center flex-none text-muted-foreground hover:text-destructive transition-colors"
+              on:click={() => {
+                attachments = attachments.filter((_, i) => i !== index);
+              }}
+              type="button"
+              aria-label="Remove attachment"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
     <Label for="message" class="sr-only">Message</Label>
     <Textarea
       id="message"
@@ -360,74 +429,6 @@
       placeholder="Type your message here..."
       class="min-h-12 resize-none border-0 p-3 shadow-none focus-visible:ring-0"
     />
-    {#if attachments.length > 0}
-      <div class="flex flex-wrap gap-2 px-3 pb-2">
-        {#each attachments as attachment, index}
-          {#if attachment.attachment_type.startsWith("image")}
-            <div
-              class="flex items-center gap-2 bg-muted px-2 py-1 rounded-md group relative"
-            >
-              <Image class="size-4" />
-              <span class="text-sm">{attachment.name}</span>
-              <button
-                class="ml-1 text-muted-foreground hover:text-destructive transition-colors"
-                on:click={() => {
-                  attachments = attachments.filter((_, i) => i !== index);
-                }}
-                type="button"
-                aria-label="Remove attachment"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
-              </button>
-            </div>
-          {:else if attachment.attachment_type.startsWith("audio")}
-            <div class="flex items-center gap-2 bg-muted px-2 py-1 rounded-md group relative">
-              <Headphones class="size-4" />
-              <span class="text-sm">{attachment.name}</span>
-              <audio class="h-6 w-24 mx-1" controls src={attachment.data}>
-                Your browser does not support the audio element.
-              </audio>
-              <button
-                class="ml-1 text-muted-foreground hover:text-destructive transition-colors"
-                on:click={() => {
-                  attachments = attachments.filter((_, i) => i !== index);
-                }}
-                type="button"
-                aria-label="Remove attachment"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M18 6 6 18" />
-                  <path d="m6 6 12 12" />
-                </svg>
-              </button>
-            </div>
-          {/if}
-        {/each}
-      </div>
-    {/if}
     <div class="flex items-center p-3 pt-0">
       <Tooltip.Root>
         <Tooltip.Trigger asChild let:builder>
