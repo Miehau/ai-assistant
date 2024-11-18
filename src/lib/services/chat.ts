@@ -69,7 +69,7 @@ export class ChatService {
         .map(att => `[Audio Transcript]: ${att.transcript}`);
       
       if (audioTranscripts.length > 0) {
-        // processedContent += '\n' + audioTranscripts.join('\n');
+        processedContent += '\n' + audioTranscripts.join('\n');
       }
 
       // Step 3: Create the message with processed content and attachments

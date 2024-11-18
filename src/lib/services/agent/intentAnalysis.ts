@@ -8,6 +8,33 @@ export type Intent = {
   content?: string;
 };
 
+const refineDescriptionSystemMessage: ChatCompletionMessageParam = {
+  role: 'system',
+  content: `
+    Generate an accurate and comprehensive description of the provided image, incorporating both visual analysis and the given contextual information.
+<prompt_objective>
+To produce a detailed, factual description of the image that blends the context provided by the user and the contents of the image.
+
+Note: ignore green border.
+</prompt_objective>
+<prompt_rules>
+- ANALYZE the provided image thoroughly, noting all significant visual elements
+- INCORPORATE the given context into your description, ensuring it aligns with and enhances the visual information
+- GENERATE a single, cohesive paragraph that describes the image comprehensively
+- BLEND visual observations seamlessly with the provided contextual information
+- ENSURE consistency between the visual elements and the given context
+- PRIORITIZE accuracy and factual information over artistic interpretation
+- INCLUDE relevant details about style, composition, and notable features of the image
+- ABSOLUTELY FORBIDDEN to invent details not visible in the image or mentioned in the context
+- NEVER contradict information provided in the context
+- UNDER NO CIRCUMSTANCES include personal opinions or subjective interpretations
+- IF there's a discrepancy between the image and the context, prioritize the visual information and note the inconsistency
+- MAINTAIN a neutral, descriptive tone throughout the description
+</prompt_rules>
+Using the provided image and context, generate a rich, accurate description that captures both the visual essence of the image and the relevant background information. Your description should be informative, cohesive, and enhance the viewer's understanding of the image's content and significance.
+  `
+}
+
 const imagePreviewPrompt = `
   Generate a brief, factual description of the provided image based solely on its visual content.
 <prompt_objective>
@@ -204,10 +231,53 @@ export class IntentAnalysisService {
             const imageContext = await this.extractImageContext(content.links.images, content.text);
             const imagePromises = content.links.images.map(image => this.previewImage(image));
             const imagePreviews = await Promise.all(imagePromises);
-            console.log(`Processing ${content.links.audio.length} audio files`);
+            const mergedResults = imageContext.images.map((contextImage: { name: string, context: string }) => {
+              const preview = imagePreviews.find(p => p.name === contextImage.name);
+              return {
+                  ...contextImage,
+                  preview: preview ? preview.preview : ''
+              };
+          });
+            const processedImages = await Promise.all(content.links.images.map(async (image) => {
+              const { context = '', preview = '' } = mergedResults.find(ctx => ctx.name === image.name) || {};
+              return await this.refineDescription({ ...image, preview, context });
+          }));
+            const describedImages = processedImages.map(({ base64, ...rest }) => rest);
             const audioWithTranscriptions = await this.transcribeAudio(content);
+
+            // Create a map of media URLs to their descriptions
+            const mediaDescriptions = new Map<string, string>();
             
-            return `I'll remember the content from ${url}. I extracted ${content.text.substring(0, 100)}... and found context for ${imageContext.images.length} images.`;
+            // Map image URLs to their previews
+            describedImages.forEach(image => {
+              const matchingImage = content.links.images.find(img => img.url === image.url);
+              if (matchingImage) {
+                console.log(`Mapping image description for ${image.name}:`, {
+                  description: image.description,
+                  preview: image.preview,
+                  context: image.context,
+                  url: image.url,
+                  name: image.name
+                });
+                mediaDescriptions.set(image.name, `[Image: ${JSON.stringify(image)}]`);
+              }
+            });
+
+            // Map audio URLs to their transcriptions
+            audioWithTranscriptions.forEach(audio => {
+              mediaDescriptions.set(audio.title, `[Audio Transcription: ${audio.transcription}]`);
+            });
+
+            // Replace media URLs with their descriptions in the text
+            let updatedText = content.text;
+            console.log(`Updated text before: ${updatedText}`);
+            mediaDescriptions.forEach((description, url) => {
+              updatedText = updatedText.replace(new RegExp(url, 'g'), description);
+            });
+
+            content.text = updatedText;
+            
+            return content.text
           }
         }
 
@@ -219,6 +289,25 @@ export class IntentAnalysisService {
     }
 
     return undefined;
+  }
+
+  async refineDescription(image: Image): Promise<Image> {
+    const userMessage = {
+        role: 'user',
+        content: [
+            {
+                type: "image_url",
+                image_url: { url: `data:image/jpeg;base64,${image.base64}` }
+            },
+            {
+                type: "text",
+                text: `Write a description of the image ${image.name}. I have some <context>${image.context}</context> that should be useful for understanding the image in a better way. An initial preview of the image is: <preview>${image.preview}</preview>. A good description briefly describes what is on the image, and uses the context to make it more relevant to the article. The purpose of this description is for summarizing the article, so we need just an essence of the image considering the context, not a detailed description of what is on the image.`
+            }
+        ]
+    };
+
+    const response = await this.openAIService.createChatCompletion('gpt-4o-mini',[refineDescriptionSystemMessage, userMessage], false, () => {}, new AbortController().signal);
+    return { ...image, description: response };
   }
 
   private async transcribeAudio(content: ExtractedContent) {

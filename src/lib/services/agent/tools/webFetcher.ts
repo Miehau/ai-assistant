@@ -121,7 +121,54 @@ export class WebFetcherTool implements Tool {
       console.log(`WebFetcherTool: Removed ${removed} ${tag} elements`);
     });
 
-    const text = doc.body.textContent?.replace(/\s+/g, ' ').trim() || '';
+    // Convert HTML to Markdown-style text
+    const convertToMarkdown = (element: Element): string => {
+      let text = '';
+      
+      for (const node of Array.from(element.childNodes)) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          text += node.textContent?.trim() + ' ';
+        } else if (node instanceof Element) {
+          const tag = node.tagName.toLowerCase();
+          const content = convertToMarkdown(node).trim();
+          
+          switch (tag) {
+            case 'h1': text += `\n# ${content}\n\n`; break;
+            case 'h2': text += `\n## ${content}\n\n`; break;
+            case 'h3': text += `\n### ${content}\n\n`; break;
+            case 'h4': text += `\n#### ${content}\n\n`; break;
+            case 'h5': text += `\n##### ${content}\n\n`; break;
+            case 'h6': text += `\n###### ${content}\n\n`; break;
+            case 'p': text += `\n${content}\n\n`; break;
+            case 'br': text += '\n'; break;
+            case 'strong':
+            case 'b': text += `**${content}**`; break;
+            case 'em':
+            case 'i': text += `*${content}*`; break;
+            case 'ul': text += `\n${content}`; break;
+            case 'ol': text += `\n${content}`; break;
+            case 'li': text += `- ${content}\n`; break;
+            case 'blockquote': text += `\n> ${content}\n\n`; break;
+            case 'img': 
+              const src = node.getAttribute('src') || '';
+              text += `${src}`; 
+              break;
+            case 'audio':
+              const audioSrc = node.getAttribute('src') || '';
+              text += `${audioSrc}`;
+              break;
+            default: text += content;
+          }
+        }
+      }
+      
+      return text;
+    };
+
+    const text = convertToMarkdown(doc.body)
+      .replace(/\n{3,}/g, '\n\n') // Replace multiple newlines with double newlines
+      .trim();
+
     console.log(`WebFetcherTool: Extracted ${text.length} characters of text`);
 
     const links = {
@@ -176,7 +223,7 @@ export class WebFetcherTool implements Tool {
             context: this.getElementContext(el),
             description: el.getAttribute('title') || '',
             preview: '',
-            base64: `data:${el.getAttribute('type')};base64,${base64}`,
+            base64: base64,
             name: this.extractFilename(src)
           });
         } catch (error) {
@@ -231,7 +278,9 @@ export class WebFetcherTool implements Tool {
       if (src) {
         links.videos.push({
           url: src,
-          title: el.getAttribute('title') || this.extractFilename(src),
+          title: el.getAttribute('title') || this.extractFilename(src
+
+          ),
           thumbnail: el.getAttribute('poster') || '',
           duration: el.getAttribute('duration') || '',
           platform: this.getVideoPlatform(src),
