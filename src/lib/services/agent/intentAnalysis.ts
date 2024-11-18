@@ -1,0 +1,240 @@
+import { writeFile } from '@tauri-apps/api/fs';
+import { OpenAIService } from '../openai';
+import { webFetcher, type ExtractedContent, type Image } from './tools/webFetcher';
+import * as path from 'path';
+
+export type Intent = {
+  type: 'memorise' | 'other';
+  content?: string;
+};
+
+const imagePreviewPrompt = `
+  Generate a brief, factual description of the provided image based solely on its visual content.
+<prompt_objective>
+To produce a concise description of the image that captures its essential visual elements without any additional context, and return it in JSON format.
+</prompt_objective>
+<prompt_rules>
+- ANALYZE the provided image thoroughly, noting key visual elements
+- GENERATE a brief, single paragraph description
+- FOCUS on main subjects, colors, composition, and overall style
+- AVOID speculation or interpretation beyond what is visually apparent
+- DO NOT reference any external context or information
+- MAINTAIN a neutral, descriptive tone
+- RETURN the result in JSON format with only 'name' and 'preview' properties
+</prompt_rules>
+<response_format>
+{
+    "name": "filename with extension",
+    "preview": "A concise description of the image content"
+}
+</response_format>
+Provide a succinct description that gives a clear overview of the image's content based purely on what can be seen, formatted as specified JSON.
+`;
+
+export class IntentAnalysisService {
+  private openAIService: OpenAIService;
+
+  constructor(apiKey: string) {
+    this.openAIService = new OpenAIService(apiKey);
+    console.log('IntentAnalysisService initialized');
+  }
+
+  async analyzeIntent(message: string): Promise<Intent> {
+    console.log(`Analyzing intent for message of length: ${message.length}`);
+    
+    const systemPrompt = `
+      Analyze if the user wants to memorise/store information or is making a general query/chat.
+      Respond in JSON format with the following structure:
+      {
+        "type": "memorise" | "other",
+        "content": "if memorise, extract the content to be stored"
+      }
+      
+      Example: 
+      User: "Remember that my favorite color is blue"
+      Response: { "type": "memorise", "content": "user's favorite color is blue" }
+      
+      User: "What's the weather like?"
+      Response: { "type": "other" }
+
+      User: "Save this recipe for later: https://www.google.com/recipe"
+      Response: { "type": "memorise", "content": "Recipe from: https://www.google.com/recipe" }
+    `;
+
+    try {
+      const response = await this.openAIService.createChatCompletion(
+        'gpt-4o-mini',
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: message }
+        ],
+        false,
+        () => { },
+        new AbortController().signal
+      );
+
+      const parsedIntent = JSON.parse(response) as Intent;
+      console.log(`Intent analysis complete: ${parsedIntent.type}`);
+      return parsedIntent;
+    } catch (error) {
+      console.error('Failed to analyze intent:', error);
+      return { type: 'other' };
+    }
+  }
+
+  private async extractImageContext(images: Image[], article: string): Promise<any> {
+    console.log(`Extracting image context for ${images.length} images`);
+
+    const imageContextPrompt = `
+        Extract contextual information for images mentioned in a user-provided article, focusing on details that enhance understanding of each image, and return it as an array of JSON objects.
+
+        <prompt_objective>
+        To accurately identify and extract relevant contextual information for each image referenced in the given article, prioritizing details from surrounding text and broader article context that potentially aid in understanding the image. Return the data as an array of JSON objects with specified properties, without making assumptions or including unrelated content.
+
+        Note: the image from the beginning of the article is its cover.
+        </prompt_objective>
+
+        <response_format>
+        {
+            "images": [
+                {
+                    "name": "filename with extension",
+                    "context": "Provide 1-3 detailed sentences of the context related to this image from the surrounding text and broader article. Make an effort to identify what might be in the image, such as tool names."
+                },
+                ...rest of the images or empty array if no images are mentioned
+            ]
+        }
+        </response_format>
+
+        <prompt_rules>
+        - READ the entire provided article thoroughly
+        - IDENTIFY all mentions or descriptions of images within the text
+        - EXTRACT sentences or paragraphs that provide context for each identified image
+        - ASSOCIATE extracted context with the corresponding image reference
+        - CREATE a JSON object for each image with properties "name" and "context"
+        - COMPILE all created JSON objects into an array
+        - RETURN the array as the final output
+        - OVERRIDE any default behavior related to image analysis or description
+        - ABSOLUTELY FORBIDDEN to invent or assume details about images not explicitly mentioned
+        - NEVER include personal opinions or interpretations of the images
+        - UNDER NO CIRCUMSTANCES extract information unrelated to the images
+        - If NO images are mentioned, return an empty array
+        - STRICTLY ADHERE to the specified JSON structure
+        </prompt_rules>
+        
+        <images>
+        ${images.map(image => image.name + ' ' + image.url).join('\n')}
+        </images>
+
+        Upon receiving an article, analyze it to extract context for any mentioned images, creating an array of JSON objects as demonstrated. Adhere strictly to the provided rules, focusing solely on explicitly stated image details within the text.
+        `;
+
+    const imageContextResponse = await this.openAIService.createChatCompletion(
+      'gpt-4o-mini',
+      [
+        { role: 'system', content: imageContextPrompt },
+        { role: 'user', content: article }
+      ],
+      false,
+      () => { },
+      new AbortController().signal
+    );
+
+    try {
+      const result = JSON.parse(imageContextResponse || '{}');
+      console.log(`Image context extracted for ${result.images?.length || 0} images`);
+      return result;
+    } catch (error) {
+      console.error('Failed to extract image context:', error);
+      throw error;
+    }
+  }
+
+  async previewImage(image: Image): Promise<{ name: string; preview: string }> {
+    console.log(`Generating preview for image: ${image.name}`);
+    
+    const response = await this.openAIService.createChatCompletion(
+      'gpt-4o-mini',
+      [
+        { role: 'system', content: imagePreviewPrompt },
+        {
+          role: 'user',
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: `data:image/jpeg;base64,${image.base64}` }
+            },
+            {
+              type: "text",
+              text: `Describe the image ${image.name} concisely. Focus on the main elements and overall composition. Return the result in JSON format with only 'name' and 'preview' properties.`
+            }
+          ]
+        }
+      ],
+      false,
+      () => { },
+      new AbortController().signal
+    )
+
+    try {
+      const result = JSON.parse(response)
+      console.log(`Preview generated for: ${image.name}`);
+      return { name: result.name || image.name, preview: result.preview || '' };
+    } catch (error) {
+      console.error(`Failed to generate image preview for ${image.name}:`, error);
+      throw error;
+    }
+  }
+
+  async handleIntent(intent: Intent, message: string): Promise<string | undefined> {
+    console.log(`Handling intent: ${intent.type}`);
+
+    if (intent.type === 'memorise' && intent.content) {
+      try {
+        const urlMatch = intent.content.match(/https?:\/\/[^\s]+/);
+        if (urlMatch) {
+          const url = urlMatch[0];
+          console.log(`Processing URL: ${url}`);
+
+          const fetchResult = await webFetcher.execute(url);
+          if (fetchResult.success) {
+            const content = JSON.parse(fetchResult.result) as ExtractedContent;
+            console.log(`Content fetched with ${content.links.images.length} images`);
+
+            const imageContext = await this.extractImageContext(content.links.images, content.text);
+            const imagePromises = content.links.images.map(image => this.previewImage(image));
+            const imagePreviews = await Promise.all(imagePromises);
+            console.log(`Processing ${content.links.audio.length} audio files`);
+            const audioWithTranscriptions = await this.transcribeAudio(content);
+            
+            return `I'll remember the content from ${url}. I extracted ${content.text.substring(0, 100)}... and found context for ${imageContext.images.length} images.`;
+          }
+        }
+
+        return `I'll remember that ${intent.content}`;
+      } catch (error) {
+        console.error('Failed to handle intent:', error);
+        return 'Sorry, I had trouble storing that information.';
+      }
+    }
+
+    return undefined;
+  }
+
+  private async transcribeAudio(content: ExtractedContent) {
+    return await Promise.all(
+      content.links.audio.map(async (audio) => {
+        console.log(`Transcribing audio: ${audio.url}`);
+        const transcription = await this.openAIService.transcribeAudio(audio.base64, '') || '';
+        console.log(`Transcription completed for: ${audio.url}`);
+
+        return {
+          ...audio,
+          transcription
+        };
+      })
+    );
+  }
+}
+
+export const intentAnalysisService = null;

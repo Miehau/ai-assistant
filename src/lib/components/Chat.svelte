@@ -19,6 +19,7 @@
   import { fade } from "svelte/transition";
   import { Square } from "lucide-svelte";
   import { Headphones } from 'lucide-svelte';
+    import { orchestratorService } from "$lib/services/agent/orchestrator";
 
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
@@ -39,10 +40,9 @@
   let attachments: FileAttachment[] = [];
 
   type FileAttachment = {
-    attachment_type: string;
+    attachment_type: "audio" | "image";
     name: string;
     data: string;
-    position?: number;
     transcript?: string;
   };
 
@@ -192,6 +192,22 @@
         attachments = [];
 
         // Send message to AI (transcription happens inside handleSendMessage)
+        await orchestratorService.handleSendMessage(
+          messageToSend,
+            selectedModel.value,
+            (chunk: string) => {
+                if (!messages[messages.length - 1] || messages[messages.length - 1].type !== "received") {
+                    messages = [...messages, { type: "received", content: chunk }];
+                } else {
+                    const updatedMessages = [...messages];
+                    updatedMessages[updatedMessages.length - 1].content += chunk;
+                    messages = updatedMessages;
+                }
+            },
+            selectedSystemPrompt?.content || "You are a helpful assistant.",
+            attachmentsToSend,
+      )
+
         await chatService.handleSendMessage(
             messageToSend,
             selectedModel.value,

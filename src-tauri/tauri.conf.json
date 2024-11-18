@@ -15,6 +15,11 @@
         "all": true
       },
       "all": false,
+      "http": {
+        "all": true,
+        "request": true,
+        "scope": ["https://**", "http://**"]
+      },
       "shell": {
         "all": false,
         "open": true
