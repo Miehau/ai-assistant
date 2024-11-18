@@ -38,22 +38,6 @@
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Playground</Tooltip.Content>
     </Tooltip.Root>
-    <!-- <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
-        <a href="/recipes">
-          <Button
-            variant="ghost"
-            size="icon"
-            class="rounded-lg {currentPath === '/recipes' ? 'bg-muted' : ''}"
-            aria-label="Recipes"
-            builders={[builder]}
-          >
-            <Bot class="size-5" />
-          </Button>
-        </a>
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Models</Tooltip.Content>
-    </Tooltip.Root> -->
     <Tooltip.Root>
       <Tooltip.Trigger asChild let:builder>
         <a href="/models">
@@ -101,22 +85,6 @@
         </Button>
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Help</Tooltip.Content>
-    </Tooltip.Root>
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
-        <a href="/recipes">
-          <Button
-            variant="ghost"
-            size="icon"
-            class="mt-auto rounded-lg"
-            aria-label="Account"
-            builders={[builder]}
-          >
-            <SquareUser class="size-5" />
-          </Button>
-        </a>
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Account</Tooltip.Content>
     </Tooltip.Root>
   </nav>
 </aside>

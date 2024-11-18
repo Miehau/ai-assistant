@@ -60,7 +60,7 @@ export class ChatService {
       this.currentController = new AbortController();
       
       // Step 1: Process audio attachments and get transcripts
-      const processedAttachments = await this.processAttachments(attachments);
+      const processedAttachments = await this.processAttachments(attachments, content);
 
       // Step 2: Prepare the content by adding transcripts
       let processedContent = content;
@@ -117,7 +117,7 @@ export class ChatService {
     }
   }
 
-  private async processAttachments(attachments: Attachment[]): Promise<Attachment[]> {
+  private async processAttachments(attachments: Attachment[], content: string): Promise<Attachment[]> {
     const processedAttachments = [...attachments];
     
     for (const attachment of processedAttachments) {
@@ -125,7 +125,7 @@ export class ChatService {
         try {
           const apiKey = await this.getApiKeyForProvider('openai');
           const openAIService = new OpenAIService(apiKey);
-          attachment.transcript = await openAIService.transcribeAudio(attachment.data);
+          attachment.transcript = await openAIService.transcribeAudio(attachment.data, content);
         } catch (error) {
           console.error('Failed to transcribe audio:', error);
           attachment.transcript = '[Transcription failed]';
