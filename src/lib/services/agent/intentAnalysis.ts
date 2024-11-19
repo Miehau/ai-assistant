@@ -270,7 +270,6 @@ export class IntentAnalysisService {
 
             // Replace media URLs with their descriptions in the text
             let updatedText = content.text;
-            console.log(`Updated text before: ${updatedText}`);
             mediaDescriptions.forEach((description, url) => {
               updatedText = updatedText.replace(new RegExp(url, 'g'), description);
             });

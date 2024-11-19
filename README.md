@@ -19,7 +19,7 @@ A desktop chat application built with Tauri, SvelteKit, and TypeScript that prov
 - Bun (for package management)
 
 ### Installation Steps
-
+0. Make sure you have Rust installed
 1. Clone the repository
 2. Install dependencies with: bun install
 3. Run development server: bun run tauri dev
@@ -77,6 +77,3 @@ src/
 4. Push to the branch
 5. Open a Pull Request
 
-## License
-
-MIT License - see LICENSE file for details
