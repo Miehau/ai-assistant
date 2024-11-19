@@ -1,11 +1,10 @@
-import { writeFile } from '@tauri-apps/api/fs';
 import { OpenAIService } from '../openai';
 import { webFetcher, type ExtractedContent, type Image } from './tools/webFetcher';
-import * as path from 'path';
 
 export type Intent = {
   type: 'memorise' | 'other';
   content?: string;
+  params?: Record<string, any>;
 };
 
 const refineDescriptionSystemMessage: ChatCompletionMessageParam = {
@@ -70,6 +69,12 @@ export class IntentAnalysisService {
     console.log(`Analyzing intent for message of length: ${message.length}`);
     
     const systemPrompt = `
+      Your task is to analyse user's message and decide on the next steps, how to best handle it.
+      <thinking>
+      Begin your message with a thought process of how to best handle the user's message and what steps do you need to take.
+      Take into account all the context provided, also with previous messages.
+      Select a tool call to execute if you see fit, but make sure to provide all required paramaters.
+      </thinking>
       Analyze if the user wants to memorise/store information or is making a general query/chat.
       Respond in JSON format with the following structure:
       {
@@ -79,13 +84,13 @@ export class IntentAnalysisService {
       
       Example: 
       User: "Remember that my favorite color is blue"
-      Response: { "type": "memorise", "content": "user's favorite color is blue" }
+      Response: { "type": "memorise", "content": "user's favorite color is blue", "params": { "url": null } }
       
       User: "What's the weather like?"
-      Response: { "type": "other" }
+      Response: { "type": "other", "content": "What's the weather like?" }
 
       User: "Save this recipe for later: https://www.google.com/recipe"
-      Response: { "type": "memorise", "content": "Recipe from: https://www.google.com/recipe" }
+      Response: { "type": "memorise", "content": "Recipe from: https://www.google.com/recipe", "params": { "url": "https://www.google.com/recipe" } }
     `;
 
     try {
@@ -214,13 +219,12 @@ export class IntentAnalysisService {
   }
 
   async handleIntent(intent: Intent, message: string): Promise<string | undefined> {
-    console.log(`Handling intent: ${intent.type}`);
+    console.log(`Handling intent: ${JSON.stringify(intent)}`);
 
     if (intent.type === 'memorise' && intent.content) {
       try {
-        const urlMatch = intent.content.match(/https?:\/\/[^\s]+/);
-        if (urlMatch) {
-          const url = urlMatch[0];
+        const url = intent.params?.url;
+        if (url) {
           console.log(`Processing URL: ${url}`);
 
           const fetchResult = await webFetcher.execute(url);

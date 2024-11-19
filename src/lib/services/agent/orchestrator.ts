@@ -56,16 +56,11 @@ export class OrchestratorService {
 
       // Step 2: Prepare the content by adding transcripts
       let processedContent = content;
-      const audioTranscripts = processedAttachments
-        .filter(att => att.attachment_type.startsWith("audio") && att.transcript)
-        .map(att => `[Audio Transcript]: ${att.transcript}`);
-      
-      if (audioTranscripts.length > 0) {
-        processedContent += '\n' + audioTranscripts.join('\n');
-      }
+      processedContent = appendAudioTranscripts(processedAttachments, processedContent);
       
       const intent = await this.intentAnalysis.analyzeIntent(processedContent);
       
+      // this should be replaced with a tool calls in next iteration
       if (intent.type === 'memorise') {
         // Handle memorisation intent
         const response = await this.intentAnalysis.handleIntent(intent, content);
@@ -76,7 +71,7 @@ export class OrchestratorService {
         ]);
         return {
           text: response || '',
-          conversationId: null, // You might want to handle this differently
+          conversationId: conversation.id,
         };
       }
       
@@ -91,6 +86,17 @@ export class OrchestratorService {
     } catch (error) {
       console.error('Failed in orchestrator:', error);
       throw error;
+    }
+
+    function appendAudioTranscripts(processedAttachments: Attachment[], processedContent: string) {
+      const audioTranscripts = processedAttachments
+        .filter(att => att.attachment_type.startsWith("audio") && att.transcript)
+        .map(att => `[Audio Transcript]: ${att.transcript}`);
+
+      if (audioTranscripts.length > 0) {
+        processedContent += '\n' + audioTranscripts.join('\n');
+      }
+      return processedContent;
     }
   }
 

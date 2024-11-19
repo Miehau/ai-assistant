@@ -49,6 +49,12 @@ export interface ExtractedContent {
 export class WebFetcherTool implements Tool {
   name = 'webFetcher';
   description = 'Fetches and extracts text content and media links from web pages';
+  parameters = {
+    url: {
+      type: 'string',
+      description: 'The URL of the web page to fetch'
+    }
+  };
 
   async execute(url: string): Promise<ToolResult> {
     console.log(`WebFetcherTool: Starting fetch for URL: ${url}`);
