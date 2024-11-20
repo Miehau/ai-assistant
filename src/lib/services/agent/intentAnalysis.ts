@@ -77,10 +77,12 @@ export class IntentAnalysisService {
 
       <rules>
       - Some information might need to be inherited from previous messages, so make sure to read them.
+      - Reflect on the conversation history and decide what has already been done.
       </rules>
       <thinking>
         - Begin your message with a thought process of how to best handle the user's message and what steps do you need to take.
         - Take into account all the context provided, also with previous messages.
+        - See, if any action were already taken and don't repeat them if they succeeded.
         - Select a tool call to execute if you see fit, but make sure to provide all required paramaters.
         - Strictly return the result in JSON format as specified below.
         - Use only tools that are available to you in <available_tools> section.
@@ -105,7 +107,7 @@ export class IntentAnalysisService {
       </available_tools>
 
       <conversation_history>
-      ${conversationHistory}
+      ${JSON.stringify(conversationHistory)}
       </conversation_history>
       
       Example: 
@@ -137,6 +139,18 @@ export class IntentAnalysisService {
 
       Please extract the intent from the user's message and provide a plan of execution.
       Then, return the result in JSON format as specified above. Do not add any formatting to the JSON.
+      It is critical to return the result in JSON format wrapped in <final_result> tags.
+
+      Context: conversation about recipes, with URL provided.
+      User: "Okay, save this recipe"
+      AI: User wants to memorise the recipe, however haven't provided any URL. I can see we were talking about https://www.google.com/recipe recently, so I'll use it to fetch the content first and then memorise it.
+      <final_result>
+      { "intent_type": "tool_call", "tool": "webFetcher", "params": { "url": "URL from the conversation history" }, "userMessage": "I'm fetching the recipe, hold on tight" }
+      </final_result>
+      User: "here is result of that tool call"
+      AI: Okay, now that we have this recipe, I'll memorise it.
+
+      Please extract the intent from the user's message and provide a plan of execution.
       It is critical to return the result in JSON format wrapped in <final_result> tags.
     `;
 

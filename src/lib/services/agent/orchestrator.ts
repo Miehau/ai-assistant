@@ -71,22 +71,30 @@ export class OrchestratorService {
       // Step 2: Prepare the content by adding transcripts
       let processedContent = content;
       processedContent = appendAudioTranscripts(processedAttachments, processedContent);
-      console.log('Processed content:', processedContent);
-      let currentIntent = await this.intentAnalysis.analyzeIntent(processedContent, conversationHistory);
-      conversationHistory.push({
-        role: 'assistant',
-        content: "Your inner dialog and intent analysis: " + JSON.stringify(currentIntent)
-      });
       let finalResponse = '';
-      // this should be replaced with a tool calls in next iteration
-      while (currentIntent.intent_type === 'tool_call') {
-        let tool = this.tools[currentIntent.tool || ''];
-        let toolResult = await tool.execute(currentIntent.params);
-        conversationHistory.push({role: 'assistant', content: toolResult.result || ''});
-        currentIntent = await this.intentAnalysis.analyzeIntent(toolResult.result || '', conversationHistory);
-        console.log('Current intent:', currentIntent);
-        finalResponse = toolResult.result || '';
-      }
+
+      let maxIterations = 2;
+      let iterations = 0;
+      // That's where the magic happens
+      do {
+        console.log(conversationHistory);
+        let currentIntent = await this.intentAnalysis.analyzeIntent(processedContent, conversationHistory);
+        console.log('Processed content:', processedContent);
+        conversationHistory.push({
+          role: 'assistant',
+          content: "Your inner dialog and intent analysis: " + JSON.stringify(currentIntent)
+        });
+        if(currentIntent.intent_type === 'tool_call') {
+          let tool = this.tools[currentIntent.tool || ''];
+          let toolResult = await tool.execute(currentIntent.params);
+          console.log(toolResult);
+          conversationHistory.push({role: 'assistant', content: `Here is a response from ${tool.name} call: ${toolResult.result}` || ''});
+          finalResponse = toolResult.result || '';
+        } else {
+          break;
+        }
+        iterations++;
+      } while (true && iterations < maxIterations)
 
       await Promise.all([
         conversationService.saveMessage('user', content, []),

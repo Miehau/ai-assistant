@@ -48,7 +48,7 @@ export interface ExtractedContent {
 
 export class WebFetcherTool implements Tool {
   name = 'webFetcher';
-  description = 'Fetches and extracts text content and media links from web pages';
+  description = 'Retrieves parsed content from web pages with media extracted as links.';
   parameters = {
     url: {
       type: 'string',
