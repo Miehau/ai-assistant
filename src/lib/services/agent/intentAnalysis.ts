@@ -1,13 +1,17 @@
 import { OpenAIService } from '../openai';
 import { webFetcher, type ExtractedContent, type Image } from './tools/webFetcher';
+import { ProcessHtmlTool } from './tools/processHtml';
+import type { APIMessage } from '$lib/types';
 
 export type Intent = {
-  type: 'memorise' | 'other';
+  intent_type: 'tool_call' | 'other';
   content?: string;
+  tool?: string;
   params?: Record<string, any>;
+  userMessage?: string;
 };
 
-const refineDescriptionSystemMessage: ChatCompletionMessageParam = {
+const refineDescriptionSystemMessage = {
   role: 'system',
   content: `
     Generate an accurate and comprehensive description of the provided image, incorporating both visual analysis and the given contextual information.
@@ -57,40 +61,83 @@ To produce a concise description of the image that captures its essential visual
 Provide a succinct description that gives a clear overview of the image's content based purely on what can be seen, formatted as specified JSON.
 `;
 
+
 export class IntentAnalysisService {
   private openAIService: OpenAIService;
-
   constructor(apiKey: string) {
     this.openAIService = new OpenAIService(apiKey);
     console.log('IntentAnalysisService initialized');
   }
 
-  async analyzeIntent(message: string): Promise<Intent> {
+  async analyzeIntent(message: string, conversationHistory: APIMessage[]): Promise<Intent> {
     console.log(`Analyzing intent for message of length: ${message.length}`);
-    
+
     const systemPrompt = `
       Your task is to analyse user's message and decide on the next steps, how to best handle it.
+
+      <rules>
+      - Some information might need to be inherited from previous messages, so make sure to read them.
+      </rules>
       <thinking>
-      Begin your message with a thought process of how to best handle the user's message and what steps do you need to take.
-      Take into account all the context provided, also with previous messages.
-      Select a tool call to execute if you see fit, but make sure to provide all required paramaters.
+        - Begin your message with a thought process of how to best handle the user's message and what steps do you need to take.
+        - Take into account all the context provided, also with previous messages.
+        - Select a tool call to execute if you see fit, but make sure to provide all required paramaters.
+        - Strictly return the result in JSON format as specified below.
+        - Use only tools that are available to you in <available_tools> section.
       </thinking>
-      Analyze if the user wants to memorise/store information or is making a general query/chat.
-      Respond in JSON format with the following structure:
+      Analyse what user needs and provide a plan of execution. Reply with only one tool to be called if you see fit.
+
+      <final_result>
       {
-        "type": "memorise" | "other",
-        "content": "if memorise, extract the content to be stored"
+        "intent_type": "tool_call" | "other",
+        "content": "if memorise, extract the content to be stored",
+        "tool": "name of the tool to be called, if any",
+        "params": {
+          // parameters of the requested tool call
+        },
+        "userMessage": "a message to user about what you're doing"
       }
+      </final_result>
+      ABSOLUTELY FORBIDDEN TO RETURN ANY DIFFERENT FORMAT.
+
+      <available_tools>
+      ${webFetcher.toSchema()}
+      </available_tools>
+
+      <conversation_history>
+      ${conversationHistory}
+      </conversation_history>
       
       Example: 
+      Available tools in example: memorise
       User: "Remember that my favorite color is blue"
-      Response: { "type": "memorise", "content": "user's favorite color is blue", "params": { "url": null } }
+      AI: User wants to memorise a fact, so we should use memorise tool.
+      <final_result>
+      { "intent_type": "tool_call", "tool": "memorise", "params": { "content": "user's favorite color is blue" }, "userMessage": "I'm memorising the fact" }
+      </final_result>
       
       User: "What's the weather like?"
-      Response: { "type": "other", "content": "What's the weather like?" }
+      AI: User is asking about the weather, and it doesn't seem like I have any tools to answer that, I'll just reply with a general message.
+      <final_result>
+      { "intent_type": "other", "content": "What's the weather like?" }
+      </final_result>
 
       User: "Save this recipe for later: https://www.google.com/recipe"
-      Response: { "type": "memorise", "content": "Recipe from: https://www.google.com/recipe", "params": { "url": "https://www.google.com/recipe" } }
+      AI: User wants to memorise a recipe and provided a URL. In this case I should fetch the content first and then memorise it.
+      <final_result>
+      { "intent_type": "tool_call", "tool": "webFetcher", "params": { "url": "https://www.google.com/recipe" }, "userMessage": "First I'll fetch the recipe and then I'll memorise it." }
+      </final_result>
+
+      Context: conversation about recipes, with URL provided.
+      User: "Okay, save this recipe"
+      AI: User wants to memorise the recipe, however haven't provided any URL. I can see we were talking about https://www.google.com/recipe recently, so I'll use it to fetch the content first and then memorise it.
+      <final_result>
+      { "intent_type": "tool_call", "tool": "webFetcher", "params": { "url": "URL from the conversation history" }, "userMessage": "I'm fetching the recipe, hold on tight" }
+      </final_result>
+
+      Please extract the intent from the user's message and provide a plan of execution.
+      Then, return the result in JSON format as specified above. Do not add any formatting to the JSON.
+      It is critical to return the result in JSON format wrapped in <final_result> tags.
     `;
 
     try {
@@ -102,15 +149,25 @@ export class IntentAnalysisService {
         ],
         false,
         () => { },
-        new AbortController().signal
+        new AbortController().signal        
       );
 
-      const parsedIntent = JSON.parse(response) as Intent;
-      console.log(`Intent analysis complete: ${parsedIntent.type}`);
+      console.log(`Intent analysis response: ${response}`);
+      // Extract content between <final_result> tags
+      let finalResultJson;
+      const finalResultMatch = response.match(/<final_result>(.*?)<\/final_result>/s);
+      if (finalResultMatch) {
+        finalResultJson = finalResultMatch[1].trim();
+      } else {
+        // If no tags found, try parsing the whole response as JSON
+        finalResultJson = response.trim();
+      }
+      const parsedIntent = JSON.parse(finalResultJson) as Intent;
+      console.log(`Intent analysis complete: ${parsedIntent.intent_type}`);
       return parsedIntent;
     } catch (error) {
       console.error('Failed to analyze intent:', error);
-      return { type: 'other' };
+      return { intent_type: 'other' };
     }
   }
 
@@ -184,7 +241,7 @@ export class IntentAnalysisService {
 
   async previewImage(image: Image): Promise<{ name: string; preview: string }> {
     console.log(`Generating preview for image: ${image.name}`);
-    
+
     const response = await this.openAIService.createChatCompletion(
       'gpt-4o-mini',
       [
@@ -221,7 +278,7 @@ export class IntentAnalysisService {
   async handleIntent(intent: Intent, message: string): Promise<string | undefined> {
     console.log(`Handling intent: ${JSON.stringify(intent)}`);
 
-    if (intent.type === 'memorise' && intent.content) {
+    if (intent.tool === 'webFetcher') {
       try {
         const url = intent.params?.url;
         if (url) {
@@ -238,20 +295,20 @@ export class IntentAnalysisService {
             const mergedResults = imageContext.images.map((contextImage: { name: string, context: string }) => {
               const preview = imagePreviews.find(p => p.name === contextImage.name);
               return {
-                  ...contextImage,
-                  preview: preview ? preview.preview : ''
+                ...contextImage,
+                preview: preview ? preview.preview : ''
               };
-          });
+            });
             const processedImages = await Promise.all(content.links.images.map(async (image) => {
               const { context = '', preview = '' } = mergedResults.find(ctx => ctx.name === image.name) || {};
               return await this.refineDescription({ ...image, preview, context });
-          }));
+            }));
             const describedImages = processedImages.map(({ base64, ...rest }) => rest);
             const audioWithTranscriptions = await this.transcribeAudio(content);
 
             // Create a map of media URLs to their descriptions
             const mediaDescriptions = new Map<string, string>();
-            
+
             // Map image URLs to their previews
             describedImages.forEach(image => {
               const matchingImage = content.links.images.find(img => img.url === image.url);
@@ -279,37 +336,37 @@ export class IntentAnalysisService {
             });
 
             content.text = updatedText;
-            
-            return content.text
+
+            return content.text;
           }
         }
 
-        return `I'll remember that ${intent.content}`;
+        return `I'll keep in mind [${intent.content}]`;
       } catch (error) {
         console.error('Failed to handle intent:', error);
         return 'Sorry, I had trouble storing that information.';
       }
     }
 
-    return undefined;
+    return "no tool found";
   }
 
   async refineDescription(image: Image): Promise<Image> {
     const userMessage = {
-        role: 'user',
-        content: [
-            {
-                type: "image_url",
-                image_url: { url: `data:image/jpeg;base64,${image.base64}` }
-            },
-            {
-                type: "text",
-                text: `Write a description of the image ${image.name}. I have some <context>${image.context}</context> that should be useful for understanding the image in a better way. An initial preview of the image is: <preview>${image.preview}</preview>. A good description briefly describes what is on the image, and uses the context to make it more relevant to the article. The purpose of this description is for summarizing the article, so we need just an essence of the image considering the context, not a detailed description of what is on the image.`
-            }
-        ]
+      role: 'user',
+      content: [
+        {
+          type: "image_url",
+          image_url: { url: `data:image/jpeg;base64,${image.base64}` }
+        },
+        {
+          type: "text",
+          text: `Write a description of the image ${image.name}. I have some <context>${image.context}</context> that should be useful for understanding the image in a better way. An initial preview of the image is: <preview>${image.preview}</preview>. A good description briefly describes what is on the image, and uses the context to make it more relevant to the article. The purpose of this description is for summarizing the article, so we need just an essence of the image considering the context, not a detailed description of what is on the image.`
+        }
+      ]
     };
 
-    const response = await this.openAIService.createChatCompletion('gpt-4o-mini',[refineDescriptionSystemMessage, userMessage], false, () => {}, new AbortController().signal);
+    const response = await this.openAIService.createChatCompletion('gpt-4o-mini', [refineDescriptionSystemMessage, userMessage], false, () => { }, new AbortController().signal);
     return { ...image, description: response };
   }
 

@@ -1,5 +1,4 @@
-import type { Message } from '$lib/types';
-import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import type { ChatCompletionMessage, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 export class OpenAIService {
   constructor(private apiKey: string) {}
@@ -11,32 +10,49 @@ export class OpenAIService {
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
   ): Promise<string> {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: streamResponse,
-      }),
-      signal,
-    });
+    const timeoutDuration = 300000; // 5 minutes timeout
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort('Request timed out'), timeoutDuration);
 
-    if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.statusText}`);
+    // Combine timeout signal with the provided signal
+    const combinedController = new AbortController();
+    signal.addEventListener('abort', () => combinedController.abort());
+    timeoutController.signal.addEventListener('abort', () => combinedController.abort());
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: streamResponse
+        }),
+        signal: combinedController.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.statusText} (${response.status})`);
+      }
+
+      if (!streamResponse) {
+        const data = await response.json();
+        const content = data.choices[0]?.message?.content || '';
+        onStreamResponse(content);
+        return content;
+      }
+
+      return this.handleStreamingResponse(response, onStreamResponse);
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        throw new Error('Request timed out or was aborted');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    if (!streamResponse) {
-      const data = await response.json();
-      const content = data.choices[0]?.message?.content || '';
-      onStreamResponse(content);
-      return content;
-    }
-
-    return this.handleStreamingResponse(response, onStreamResponse);
   }
 
   private async handleStreamingResponse(

@@ -6,15 +6,23 @@ import { OpenAIService } from '../openai';
 import type { Model } from '$lib/types/models';
 import { message } from 'sveltekit-superforms';
 import { conversationService } from '../conversation';
+import type { Tool } from './tools/types';
+import { webFetcher } from './tools/webFetcher';
+import { ProcessHtmlTool } from './tools/processHtml';
+import { formatMessages } from '../messageFormatting';
 
 export class OrchestratorService {
   private intentAnalysis: IntentAnalysisService;
-  private streamResponse = true;
   private currentController: AbortController | null = null;
+  private tools: Record<string, Tool>;
 
   constructor() {
     // Initialize with null, will be set when we get the API key
     this.intentAnalysis = null;
+    this.tools = [webFetcher].reduce((acc, tool) => ({
+      ...acc,
+      [tool.name]: tool
+    }), {} as Record<string, Tool>);
   }
 
   private async initializeIntentAnalysis() {
@@ -27,15 +35,19 @@ export class OrchestratorService {
     }
   }
 
-  setStreamResponse(value: boolean) {
-    this.streamResponse = value;
-  }
-
   cancelCurrentRequest() {
     if (this.currentController) {
       this.currentController.abort();
       this.currentController = null;
     }
+  }
+
+  createMessage(content: string, attachments?: Attachment[]): Message {
+    return {
+      type: "sent",
+      content: content.trim(),
+      attachments: attachments?.length ? attachments : undefined
+    };
   }
 
   async handleSendMessage(
@@ -50,39 +62,48 @@ export class OrchestratorService {
       this.currentController = new AbortController();
       const conversation = conversationService.getCurrentConversation() 
         ?? await conversationService.setCurrentConversation(null);
-
+        
+      let conversationHistory = await conversationService.getAPIHistory(conversation.id);
+      console.log('Conversation history:', conversationHistory);
       // Step 1: Process audio attachments and get transcripts
       const processedAttachments = await this.processAttachments(attachments, content);
 
       // Step 2: Prepare the content by adding transcripts
       let processedContent = content;
       processedContent = appendAudioTranscripts(processedAttachments, processedContent);
-      
-      const intent = await this.intentAnalysis.analyzeIntent(processedContent);
-      
+      console.log('Processed content:', processedContent);
+      let currentIntent = await this.intentAnalysis.analyzeIntent(processedContent, conversationHistory);
+      conversationHistory.push({
+        role: 'assistant',
+        content: "Your inner dialog and intent analysis: " + JSON.stringify(currentIntent)
+      });
+      let finalResponse = '';
       // this should be replaced with a tool calls in next iteration
-      if (intent.type === 'memorise') {
-        // Handle memorisation intent
-        const response = await this.intentAnalysis.handleIntent(intent, content);
-        onStreamResponse(response || '');
-        await Promise.all([
-          conversationService.saveMessage('user', content, []),
-          conversationService.saveMessage('assistant', response || '', [])
-        ]);
-        return {
-          text: response || '',
-          conversationId: conversation.id,
-        };
+      while (currentIntent.intent_type === 'tool_call') {
+        let tool = this.tools[currentIntent.tool || ''];
+        let toolResult = await tool.execute(currentIntent.params);
+        conversationHistory.push({role: 'assistant', content: toolResult.result || ''});
+        currentIntent = await this.intentAnalysis.analyzeIntent(toolResult.result || '', conversationHistory);
+        console.log('Current intent:', currentIntent);
+        finalResponse = toolResult.result || '';
       }
+
+      await Promise.all([
+        conversationService.saveMessage('user', content, []),
+        conversationService.saveMessage('assistant', finalResponse || '', [])
+      ]);
       
       // For all other intents, delegate to the regular chat service
-      return chatService.handleSendMessage(
-        content,
+      const apiKey = await this.getApiKeyForProvider('openai');
+      const openAIService = new OpenAIService(apiKey);
+      const response = await openAIService.createChatCompletion(
         model,
+        await formatMessages(conversationHistory, this.createMessage(processedContent, processedAttachments), systemPrompt),
+        true,
         onStreamResponse,
-        systemPrompt,
-        attachments
+        this.currentController.signal
       );
+      return response;
     } catch (error) {
       console.error('Failed in orchestrator:', error);
       throw error;
@@ -95,6 +116,14 @@ export class OrchestratorService {
 
       if (audioTranscripts.length > 0) {
         processedContent += '\n' + audioTranscripts.join('\n');
+      }
+
+      const textAttachments = processedAttachments
+        .filter(att => att.attachment_type.startsWith("text") && att.data)
+        .map(att => `[Text attachment: ${att.data}]`);
+
+      if (textAttachments.length > 0) {
+        processedContent += '\n' + textAttachments.join('\n');
       }
       return processedContent;
     }

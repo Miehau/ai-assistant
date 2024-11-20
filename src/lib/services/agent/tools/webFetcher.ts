@@ -56,7 +56,16 @@ export class WebFetcherTool implements Tool {
     }
   };
 
-  async execute(url: string): Promise<ToolResult> {
+  toSchema() {
+    return JSON.stringify({
+      "name": this.name,
+      "description": this.description,
+      "parameters": this.parameters
+    });
+  }
+
+  async execute(params: Record<string, any>): Promise<ToolResult> {
+    const url = params.url;
     console.log(`WebFetcherTool: Starting fetch for URL: ${url}`);
     
     try {
@@ -205,21 +214,6 @@ export class WebFetcherTool implements Tool {
       if (src) {
         console.log(`WebFetcherTool: Fetching image: ${src}`);
         try {
-          const response = await fetch<ArrayBuffer>(src, {
-            method: 'GET',
-            responseType: ResponseType.Binary
-          });
-
-          if (!response.ok) {
-            throw new Error(`Failed to fetch image: ${response.status}`);
-          }
-
-          const bytes = new Uint8Array(response.data);
-          const base64 = btoa(
-            Array.from(bytes)
-              .map(byte => String.fromCharCode(byte))
-              .join('')
-          );
 
           console.log(`WebFetcherTool: Successfully processed image: ${src}`);
 
@@ -229,7 +223,7 @@ export class WebFetcherTool implements Tool {
             context: this.getElementContext(el),
             description: el.getAttribute('title') || '',
             preview: '',
-            base64: base64,
+            base64: '',
             name: this.extractFilename(src)
           });
         } catch (error) {
@@ -245,21 +239,6 @@ export class WebFetcherTool implements Tool {
       if (src) {
         console.log(`WebFetcherTool: Fetching audio: ${src}`);
         try {
-          const response = await fetch<ArrayBuffer>(src, {
-            method: 'GET',
-            responseType: ResponseType.Binary
-          });
-          
-          if (!response.ok) {
-            throw new Error(`Failed to fetch audio: ${response.status}`);
-          }
-          
-          const bytes = new Uint8Array(response.data);
-          const base64 = btoa(
-            Array.from(bytes)
-              .map(byte => String.fromCharCode(byte))
-              .join('')
-          );
           
           console.log(`WebFetcherTool: Successfully processed audio: ${src}`);
           
@@ -269,7 +248,7 @@ export class WebFetcherTool implements Tool {
             type: el.getAttribute('type') || 'audio/unknown',
             duration: el.getAttribute('duration') || '',
             context: this.getElementContext(el),
-            base64: `data:${el.getAttribute('type')};base64,${base64}`
+            base64: ''
           });
         } catch (error) {
           console.error(`WebFetcherTool: Failed to process audio ${src}:`, error);
