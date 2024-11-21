@@ -1,3 +1,5 @@
+import type { Attachment } from '$lib/types';
+import { ChatOpenAI, OpenAIChat } from '@langchain/openai';
 import type { ChatCompletionMessage, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 export class OpenAIService {
@@ -53,6 +55,25 @@ export class OpenAIService {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  async completion(model: string, messages: {role: string, content: string, attachments?: Attachment[]}[], signal: AbortSignal): Promise<ChatCompletionResponse> {
+     let openai = new ChatOpenAI({
+      model,
+      apiKey: this.apiKey,
+    });
+    let formattedMessages = messages.map((message) => ({role: message.role, content: message.content}));
+    console.log('Formatted messages:', formattedMessages);
+    return openai.invoke(formattedMessages, {signal: signal}).then((response) => {
+        return {
+            message: {message: response.content?.toString(), role: 'assistant'},
+            usage: {
+                totalTokens: response.usage_metadata?.total_tokens,
+                promptTokens: response.usage_metadata?.input_tokens,
+                completionTokens: response.usage_metadata?.output_tokens
+            }
+        };
+    });
   }
 
   private async handleStreamingResponse(
@@ -127,3 +148,15 @@ export class OpenAIService {
     return response.text();
   }
 }
+
+export type ChatCompletionResponse = {
+  message: {
+      message: string;
+      role: string;
+  };
+  usage: {
+      totalTokens?: number;
+      promptTokens?: number;
+      completionTokens?: number;
+  };
+};
