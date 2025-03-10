@@ -16,32 +16,41 @@ export class CustomProviderService {
       stream: streamResponse,
     });
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body,
-      signal
-    });
+    // Create a timeout controller if one wasn't provided
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), 180000); // 3 minutes
 
-    if (!response.ok) {
-      throw new Error(`Failed to send chat message to custom provider: ${response.statusText}`);
-    }
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body,
+        // Combine both signals if an external one was provided
+        signal: signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal,
+      });
 
-    const isStreaming = response.headers.get('content-type')?.includes('text/event-stream') 
-      || response.headers.get('content-type')?.includes('application/x-ndjson')
-      || response.headers.get('transfer-encoding')?.includes('chunked');
+      if (!response.ok) {
+        throw new Error(`Failed to send chat message to custom provider: ${response.statusText}`);
+      }
 
-    if (streamResponse && isStreaming && response.body) {
-      return this.handleStreamingResponse(response, onStreamResponse);
+      const isStreaming = response.headers.get('content-type')?.includes('text/event-stream') 
+        || response.headers.get('content-type')?.includes('application/x-ndjson')
+        || response.headers.get('transfer-encoding')?.includes('chunked');
+
+      if (streamResponse && isStreaming && response.body) {
+        return this.handleStreamingResponse(response, onStreamResponse);
+      }
+      const data = await response.json();
+      const content = data.message?.content || data.choices?.[0]?.message?.content || '';
+      if (onStreamResponse) {
+        onStreamResponse(content);
+      }
+      return content;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    const data = await response.json();
-    const content = data.message?.content || data.choices?.[0]?.message?.content || '';
-    if (onStreamResponse) {
-      onStreamResponse(content);
-    }
-    return content;
   }
 
   private async handleStreamingResponse(

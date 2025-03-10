@@ -25,6 +25,7 @@
     "lucide-svelte": "^0.407.0",
     "marked": "latest",
     "pouchdb": "^9.0.0",
+    "prismjs": "^1.30.0",
     "svelte-radix": "^1.1.1",
     "sveltekit-superforms": "^2.19.1",
     "tailwind-merge": "^2.4.0",

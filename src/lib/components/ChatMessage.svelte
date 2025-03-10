@@ -1,6 +1,14 @@
 <script lang="ts">
   import { marked } from "marked";
   import { onMount } from "svelte";
+  import Prism from 'prismjs';
+  import 'prismjs/themes/prism-tomorrow.css';
+  import 'prismjs/components/prism-json';
+  import 'prismjs/components/prism-javascript';
+  import 'prismjs/components/prism-typescript';
+  import 'prismjs/components/prism-python';
+  import 'prismjs/components/prism-bash';
+  import 'prismjs/components/prism-markdown';
   import type { Attachment } from "$lib/types";
 
   export let type: "sent" | "received";
@@ -25,26 +33,33 @@
     const renderer = new marked.Renderer();
 
     renderer.code = ({ text, lang }: RendererCode) => {
-      const code = escapeHtml(text || "");
+      const code = text || "";
+      const language = lang || "text";
+      const highlightedCode = language ? Prism.highlight(
+        code,
+        Prism.languages[language] || Prism.languages.text,
+        language
+      ) : escapeHtml(code);
+      
       return `
         <div class="code-block-wrapper relative group">
-          <div class="absolute top-0 left-0 right-0 h-8 bg-gradient-to-r from-primary/10 to-transparent rounded-t-lg flex items-center px-3">
+          <div class="absolute top-0 left-0 right-0 h-8 bg-zinc-800 rounded-t-lg flex items-center px-3">
             <div class="flex items-center gap-2">
-              <span class="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">${lang || "text"}</span>
+              <span class="text-[10px] uppercase tracking-wider text-zinc-400 font-medium">${language}</span>
             </div>
           </div>
           <button
             class="copy-button opacity-0 group-hover:opacity-100 absolute top-1 right-2 
-            p-1.5 rounded-md hover:bg-background/50 transition-all duration-200"
-            data-copy="${encodeURIComponent(text || "")}"
+            p-1.5 rounded-md hover:bg-zinc-700 transition-all duration-200"
+            data-copy="${encodeURIComponent(code)}"
           >
-            <svg class="w-3.5 h-3.5 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="w-3.5 h-3.5 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
           </button>
           <div class="mt-8">
-            <pre><code class="language-${lang || ""}">${code}</code></pre>
+            <pre class="!bg-zinc-900 !border-zinc-700"><code class="language-${language}">${highlightedCode}</code></pre>
           </div>
         </div>
       `;
@@ -57,12 +72,15 @@
     });
   });
 
-  // Process content based on message type
-  $: processedContent = type === "sent" ? escapeHtml(content) : content;
-  // Apply markdown processing to both sent and received messages
-  $: htmlContent = marked(processedContent);
+  // For sent messages, we'll let marked handle the escaping
+  $: htmlContent = marked(content);
 
-  async function handleClick(event: MouseEvent) {
+  async function handleInteraction(event: MouseEvent | KeyboardEvent) {
+    // Only handle Enter or Space key for keyboard events
+    if (event instanceof KeyboardEvent && event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+
     const target = event.target as HTMLElement;
     const copyButton = target.closest(".copy-button");
 
@@ -109,7 +127,12 @@
       : 'text-primary-foreground bg-primary/30'}"
   >
     <div class="prose prose-sm dark:prose-invert max-w-none">
-      <div class="markdown-content" on:click={handleClick}>
+      <div 
+        class="markdown-content" 
+        on:click={handleInteraction}
+        on:keydown={handleInteraction}
+        role="textbox"
+        tabindex="0">
         {@html htmlContent}
       </div>
       {#if attachments && attachments.length > 0}
@@ -175,8 +198,8 @@
 
   /* Code block styles */
   :global(.markdown-content pre) {
-    background-color: hsl(var(--background));
-    border: 1px solid hsl(var(--border));
+    background-color: rgb(24 24 27); /* zinc-900 */
+    
     border-radius: 0.5rem;
     padding: 0.25rem 0.75rem 0.75rem;
     overflow-x: auto;
@@ -184,13 +207,48 @@
   }
 
   :global(.markdown-content pre code) {
-    color: rgb(var(--foreground));
+    color: rgb(244 244 245); /* zinc-100 */
     font-size: 0.875rem;
     line-height: 1.5;
     white-space: pre-wrap;
     background-color: transparent;
     display: block;
     padding-top: 0.5rem;
+  }
+
+  /* Override Prism.js theme colors for better contrast */
+  :global(.token.comment),
+  :global(.token.prolog),
+  :global(.token.doctype),
+  :global(.token.cdata) {
+    color: rgb(161 161 170); /* zinc-400 */
+  }
+
+  :global(.token.punctuation) {
+    color: rgb(212 212 216); /* zinc-300 */
+  }
+
+  :global(.token.property),
+  :global(.token.tag),
+  :global(.token.boolean),
+  :global(.token.number),
+  :global(.token.constant),
+  :global(.token.symbol) {
+    color: rgb(167 139 250); /* purple-400 */
+  }
+
+  :global(.token.string) {
+    color: rgb(134 239 172); /* green-300 */
+  }
+
+  :global(.token.operator),
+  :global(.token.entity),
+  :global(.token.url) {
+    color: rgb(252 211 77); /* amber-300 */
+  }
+
+  :global(.token.keyword) {
+    color: rgb(248 113 113); /* red-400 */
   }
 
   /* Inline code styles */
@@ -210,15 +268,15 @@
     opacity: 1;
   }
 
-  :global(.code-block-wrapper) {
-    position: relative;
-    margin: 1rem 0;
-    border-radius: 0.5rem;
-    overflow: hidden;
-    transition: all 150ms ease;
-    background-color: hsl(var(--background));
-    border: 1px solid hsl(var(--border));
-  }
+:global(.code-block-wrapper) {
+  position: relative;
+  margin: 1rem 0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  transition: all 150ms ease;
+  background-color: rgb(24 24 27); /* zinc-900 */
+  border: 1px solid rgb(63 63 70); /* zinc-700 */
+}
 
   :global(.code-block-wrapper:hover) {
     border-color: hsl(var(--primary) / 0.5);

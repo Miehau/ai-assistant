@@ -191,9 +191,8 @@
         const attachmentsToSend = [...attachments];
         attachments = [];
 
-        // Send message to AI (transcription happens inside handleSendMessage)
-        await orchestratorService.handleSendMessage(
-          messageToSend,
+        await chatService.handleSendMessage(
+            messageToSend,
             selectedModel.value,
             (chunk: string) => {
                 if (!messages[messages.length - 1] || messages[messages.length - 1].type !== "received") {
@@ -206,23 +205,7 @@
             },
             selectedSystemPrompt?.content || "You are a helpful assistant.",
             attachmentsToSend,
-      )
-
-        // await chatService.handleSendMessage(
-        //     messageToSend,
-        //     selectedModel.value,
-        //     (chunk: string) => {
-        //         if (!messages[messages.length - 1] || messages[messages.length - 1].type !== "received") {
-        //             messages = [...messages, { type: "received", content: chunk }];
-        //         } else {
-        //             const updatedMessages = [...messages];
-        //             updatedMessages[updatedMessages.length - 1].content += chunk;
-        //             messages = updatedMessages;
-        //         }
-        //     },
-        //     selectedSystemPrompt?.content || "You are a helpful assistant.",
-        //     attachmentsToSend,
-        // );
+        );
     } catch (error) {
         console.error("Error sending message:", error);
     } finally {

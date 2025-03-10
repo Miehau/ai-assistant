@@ -54,9 +54,15 @@ export async function formatUserMessage(message: Message): Promise<ChatCompletio
     .map(att => `[Audio Transcript: ${att.name}\n\`\`\`\n${att.transcript}\`\`\`\n]`)
     .join("\n");
 
+  console.log(`message.attachments: ${JSON.stringify(message.attachments)}`);
   const textAttachments = message.attachments
     .filter(att => att.attachment_type.startsWith("text"))
     .map(att => `\n\n[Attached file: ${att.name}]\n\`\`\`\n${att.data}\n\`\`\`\n`)
+    .join("");
+
+  const jsonAttachments = message.attachments
+    .filter(att => att.attachment_type.startsWith("application/json"))
+    .map(att => `\n\n[Attached JSON: ${att.name}]\n\`\`\`\n${att.data}\n\`\`\`\n`)
     .join("");
 
   const content = [
@@ -65,6 +71,7 @@ export async function formatUserMessage(message: Message): Promise<ChatCompletio
       text: message.content 
       + (audioMessages ? "\n" + audioMessages : "")
       + textAttachments
+      + jsonAttachments
       + (message.attachments.some(att => att.attachment_type.startsWith("image")) 
          ? "\n\n[Attached images: " + message.attachments
            .filter(att => att.attachment_type.startsWith("image"))

@@ -130,7 +130,7 @@ export class ChatService {
           console.error('Failed to transcribe audio:', error);
           attachment.transcript = '[Transcription failed]';
         }
-      }
+      } 
     }
     
     return processedAttachments;
