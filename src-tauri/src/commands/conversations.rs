@@ -42,3 +42,13 @@ pub fn update_conversation_name(state: State<'_, Db>, conversation_id: String, n
             e.to_string()
         })
 }
+
+#[tauri::command]
+pub fn delete_conversation(state: State<'_, Db>, conversation_id: String) -> Result<(), String> {
+    println!("Tauri command delete_conversation called with id={}", conversation_id);
+    ConversationOperations::delete_conversation(&*state, &conversation_id)
+        .map_err(|e| {
+            println!("Error in delete_conversation command: {}", e);
+            e.to_string()
+        })
+}

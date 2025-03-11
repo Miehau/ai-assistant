@@ -77,4 +77,39 @@ pub trait ConversationOperations: DbOperations {
         
         Ok(())
     }
+
+    fn delete_conversation(&self, conversation_id: &str) -> RusqliteResult<()> {
+        let binding = self.conn();
+        
+        println!("Deleting conversation: id={}", conversation_id);
+        
+        // Start a transaction to ensure atomicity
+        let mut binding = binding.lock().unwrap();
+        let tx = binding.transaction()?;
+        
+        // First delete all message attachments for this conversation
+        tx.execute(
+            "DELETE FROM message_attachments WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)",
+            params![conversation_id],
+        )?;
+        
+        // Delete all messages for this conversation
+        tx.execute(
+            "DELETE FROM messages WHERE conversation_id = ?1",
+            params![conversation_id],
+        )?;
+        
+        // Finally delete the conversation itself
+        let result = tx.execute(
+            "DELETE FROM conversations WHERE id = ?1",
+            params![conversation_id],
+        )?;
+        
+        // Commit the transaction
+        tx.commit()?;
+        
+        println!("Deleted conversation and related data, affected {} conversation rows", result);
+        
+        Ok(())
+    }
 }

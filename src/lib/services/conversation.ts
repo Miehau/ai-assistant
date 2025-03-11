@@ -112,6 +112,28 @@ export class ConversationService {
       throw error;
     }
   }
+
+  async deleteConversation(conversationId: string): Promise<void> {
+    console.log('Calling delete_conversation with:', { conversationId });
+    try {
+      await invoke('delete_conversation', { conversationId });
+      console.log('Backend delete_conversation completed successfully');
+      
+      // If this is the current conversation, clear the current conversation
+      const currentState = get(this.state);
+      if (currentState.currentConversationId === conversationId) {
+        console.log('Clearing current conversation state');
+        this.state.update(state => ({
+          ...state,
+          currentConversationId: null,
+          currentConversation: null
+        }));
+      }
+    } catch (error) {
+      console.error('Error in deleteConversation:', error);
+      throw error;
+    }
+  }
 }
 
 export const conversationService = new ConversationService();

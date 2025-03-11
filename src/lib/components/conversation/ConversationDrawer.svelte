@@ -5,14 +5,19 @@
   import { formatDistanceToNow } from "date-fns";
   import { messages, isFirstMessage } from "$lib/components/chat/store";
   import { fly } from "svelte/transition";
-  import { X } from "lucide-svelte";
+  import { X, Trash2 } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
 
   export let isOpen = false;
 
   let conversations: Conversation[] = [];
-  let loading = true;
+  let loading = false;
   let error: string | null = null;
+
+  // Watch for changes to isOpen
+  $: if (isOpen) {
+    loadConversations();
+  }
 
   // Subscribe to conversation state changes to refresh the list when needed
   const unsubscribe = conversationService.subscribe(state => {
@@ -22,7 +27,6 @@
   });
 
   onMount(() => {
-    loadConversations();
     return () => {
       unsubscribe();
     };
@@ -59,6 +63,19 @@
       isOpen = false;
     } catch (err) {
       console.error("Error selecting conversation:", err);
+    }
+  }
+
+  async function deleteConversation(event: Event, conversationId: string) {
+    // Stop event propagation to prevent selecting the conversation
+    event.stopPropagation();
+    
+    try {
+      await conversationService.deleteConversation(conversationId);
+      // Refresh the conversation list
+      loadConversations();
+    } catch (err) {
+      console.error("Error deleting conversation:", err);
     }
   }
 
@@ -112,15 +129,22 @@
       {:else}
         <ul class="divide-y">
           {#each conversations as conversation (conversation.id)}
-            <li>
+            <li class="relative group">
               <button
                 class="w-full text-left p-4 hover:bg-muted transition-colors"
                 on:click={() => selectConversation(conversation)}
               >
-                <div class="font-medium truncate">{getPreviewText(conversation)}</div>
+                <div class="font-medium truncate pr-8">{getPreviewText(conversation)}</div>
                 <div class="text-xs text-muted-foreground mt-1">
                   {formatDate(conversation.created_at)}
                 </div>
+              </button>
+              <button 
+                class="absolute right-3 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-muted-foreground/10 rounded"
+                on:click={(e) => deleteConversation(e, conversation.id)}
+                title="Delete conversation"
+              >
+                <Trash2 class="h-4 w-4 text-muted-foreground hover:text-destructive" />
               </button>
             </li>
           {/each}

@@ -35,6 +35,7 @@ fn main() {
             commands::get_conversation_history,
             commands::get_conversations,
             commands::update_conversation_name,
+            commands::delete_conversation,
             commands::save_system_prompt,
             commands::update_system_prompt,
             commands::get_system_prompt,

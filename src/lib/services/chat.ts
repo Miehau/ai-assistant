@@ -43,11 +43,13 @@ export class ChatService {
       // Prefer OpenAI models for title generation as they're good at this task
       const openaiModel = enabledModels.find(m => m.provider === 'openai');
       if (openaiModel) {
+        console.log('Using OpenAI model for title generation:', openaiModel.model_name);
         return openaiModel.model_name;
       }
       
       // Fall back to any enabled model
       if (enabledModels.length > 0) {
+        console.log('Using fallback model for title generation:', enabledModels[0].model_name);
         return enabledModels[0].model_name;
       }
       
