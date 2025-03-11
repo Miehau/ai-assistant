@@ -3,7 +3,7 @@
   import { conversationService } from "$lib/services/conversation";
   import type { Conversation } from "$lib/types";
   import { formatDistanceToNow } from "date-fns";
-  import { messages } from "$lib/components/chat/store";
+  import { messages, isFirstMessage } from "$lib/components/chat/store";
   import { fly } from "svelte/transition";
   import { X } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
@@ -14,14 +14,26 @@
   let loading = true;
   let error: string | null = null;
 
-  onMount(async () => {
-    await loadConversations();
+  // Subscribe to conversation state changes to refresh the list when needed
+  const unsubscribe = conversationService.subscribe(state => {
+    if (isOpen) {
+      loadConversations();
+    }
+  });
+
+  onMount(() => {
+    loadConversations();
+    return () => {
+      unsubscribe();
+    };
   });
 
   async function loadConversations() {
     try {
       loading = true;
+      console.log('Loading conversations for drawer');
       conversations = await conversationService.getAllConversations();
+      console.log('Loaded conversations:', conversations);
       conversations.sort((a, b) => {
         return new Date(b.created_at).getTime() - 
                new Date(a.created_at).getTime();

@@ -31,4 +31,14 @@ pub fn get_conversation_history(state: State<'_, Db>, conversation_id: String) -
 pub fn get_conversations(state: State<'_, Db>) -> Result<Vec<Conversation>, String> {
     ConversationOperations::get_conversations(&*state)
         .map_err(|e| e.to_string())
-} 
+}
+
+#[tauri::command]
+pub fn update_conversation_name(state: State<'_, Db>, conversation_id: String, name: String) -> Result<(), String> {
+    println!("Tauri command update_conversation_name called with id={}, name={}", conversation_id, name);
+    ConversationOperations::update_conversation_name(&*state, &conversation_id, &name)
+        .map_err(|e| {
+            println!("Error in update_conversation_name command: {}", e);
+            e.to_string()
+        })
+}

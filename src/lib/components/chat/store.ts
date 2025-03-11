@@ -6,6 +6,7 @@ import type { Selected } from 'bits-ui';
 import { invoke } from '@tauri-apps/api/tauri';
 import { chatService } from '$lib/services/chat';
 import { conversationService } from '$lib/services/conversation';
+import { titleGeneratorService } from '$lib/services/titleGenerator';
 
 // State stores
 export const messages = writable<Message[]>([]);
@@ -20,6 +21,7 @@ export const streamingEnabled = writable<boolean>(true);
 export const isLoading = writable<boolean>(false);
 export const attachments = writable<any[]>([]);
 export const currentMessage = writable<string>('');
+export const isFirstMessage = writable<boolean>(true);
 
 // Derived stores
 export const hasAttachments = derived(
@@ -62,6 +64,11 @@ export async function loadConversationHistory(conversationId: string) {
   try {
     const loadedMessages = await conversationService.getDisplayHistory(conversationId);
     messages.set(loadedMessages);
+    
+    // If there are messages, this is not a first message scenario
+    if (loadedMessages.length > 0) {
+      isFirstMessage.set(false);
+    }
   } catch (error) {
     console.error('Failed to load conversation history:', error);
   }
@@ -80,12 +87,14 @@ export async function sendMessage() {
   let attachmentsValue: any[] = [];
   let selectedModelValue: Selected<string> = { value: '', label: '' };
   let selectedSystemPromptValue: SystemPrompt | null = null;
+  let isFirstMessageValue = false;
   
   // Get current values from stores
   currentMessage.subscribe(value => { currentMessageValue = value; })();
   attachments.subscribe(value => { attachmentsValue = [...value]; })();
   selectedModel.subscribe(value => { selectedModelValue = value; })();
   selectedSystemPrompt.subscribe(value => { selectedSystemPromptValue = value; })();
+  isFirstMessage.subscribe(value => { isFirstMessageValue = value; })();
   
   if (!currentMessageValue.trim() && attachmentsValue.length === 0) return;
   
@@ -116,7 +125,19 @@ export async function sendMessage() {
       systemPromptContent = prompt.content || defaultSystemPrompt;
     }
     
-    await chatService.handleSendMessage(
+    // Get the current conversation
+    const currentConversation = conversationService.getCurrentConversation();
+    
+    // Check if this is the first message in a new conversation
+    const shouldGenerateTitle = isFirstMessageValue;
+    console.log('Should generate title?', shouldGenerateTitle, 'isFirstMessage:', isFirstMessageValue);
+    
+    // Set isFirstMessage to false after the first message
+    if (isFirstMessageValue) {
+      isFirstMessage.set(false);
+    }
+    
+    const result = await chatService.handleSendMessage(
       currentMessageValue,
       selectedModelValue.value,
       (chunk: string) => {
@@ -133,6 +154,19 @@ export async function sendMessage() {
       systemPromptContent,
       attachmentsValue,
     );
+    
+    // Generate a title for the conversation if this is the first message
+    if (shouldGenerateTitle && currentConversation) {
+      console.log('Initiating title generation for conversation:', currentConversation.id);
+      // Use setTimeout to avoid blocking the UI
+      setTimeout(async () => {
+        try {
+          await titleGeneratorService.generateAndUpdateTitle(currentConversation.id);
+        } catch (error) {
+          console.error('Error generating conversation title:', error);
+        }
+      }, 1000);
+    }
   } catch (error) {
     console.error('Error sending message:', error);
   } finally {
@@ -143,6 +177,8 @@ export async function sendMessage() {
 export function clearConversation() {
   // Clear messages immediately
   messages.set([]);
+  // Reset first message flag
+  isFirstMessage.set(true);
   conversationService.setCurrentConversation(null);
 }
 

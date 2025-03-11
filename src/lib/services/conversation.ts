@@ -85,6 +85,33 @@ export class ConversationService {
   async getAllConversations(): Promise<Conversation[]> {
     return await invoke('get_conversations');
   }
+  
+  async updateConversationName(conversationId: string, name: string): Promise<void> {
+    console.log('Calling update_conversation_name with:', { conversationId, name });
+    try {
+      await invoke('update_conversation_name', { conversationId, name });
+      console.log('Backend update_conversation_name completed successfully');
+      
+      // If this is the current conversation, update the local state
+      const currentState = get(this.state);
+      if (currentState.currentConversationId === conversationId && currentState.currentConversation) {
+        console.log('Updating local state with new conversation name');
+        this.state.update(state => ({
+          ...state,
+          currentConversation: {
+            ...state.currentConversation!,
+            name
+          }
+        }));
+        console.log('Local state updated successfully');
+      } else {
+        console.log('Not updating local state - not the current conversation');
+      }
+    } catch (error) {
+      console.error('Error in updateConversationName:', error);
+      throw error;
+    }
+  }
 }
 
 export const conversationService = new ConversationService();

@@ -56,4 +56,25 @@ pub trait ConversationOperations: DbOperations {
             Err(e) => Err(e),
         }
     }
-} 
+    
+    fn update_conversation_name(&self, conversation_id: &str, name: &str) -> RusqliteResult<()> {
+        let binding = self.conn();
+        let conn = binding.lock().unwrap();
+        
+        println!("Updating conversation name: id={}, name={}", conversation_id, name);
+        
+        let result = conn.execute(
+            "UPDATE conversations SET name = ?1 WHERE id = ?2",
+            params![name, conversation_id],
+        );
+        
+        match &result {
+            Ok(rows) => println!("Updated {} rows", rows),
+            Err(e) => println!("Error updating conversation name: {}", e),
+        }
+        
+        result?;
+        
+        Ok(())
+    }
+}

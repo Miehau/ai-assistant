@@ -31,6 +31,69 @@ export class ChatService {
     return selectedModel;
   }
 
+  /**
+   * Gets the default model to use for operations like title generation
+   * @returns A promise that resolves to the model name
+   */
+  async getDefaultModel(): Promise<string> {
+    try {
+      const models = await invoke<Model[]>('get_models');
+      const enabledModels = models.filter(model => model.enabled);
+      
+      // Prefer OpenAI models for title generation as they're good at this task
+      const openaiModel = enabledModels.find(m => m.provider === 'openai');
+      if (openaiModel) {
+        return openaiModel.model_name;
+      }
+      
+      // Fall back to any enabled model
+      if (enabledModels.length > 0) {
+        return enabledModels[0].model_name;
+      }
+      
+      throw new Error('No enabled models found');
+    } catch (error) {
+      console.error('Failed to get default model:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generates a completion using the specified messages and model
+   * @param messages The messages to use for the completion
+   * @param modelName The name of the model to use
+   * @returns A promise that resolves to the generated text
+   */
+  async generateCompletion(messages: any[], modelName: string): Promise<string> {
+    try {
+      const model = await this.getModelInfo(modelName);
+      
+      // Use a temporary controller that we'll discard after this operation
+      const controller = new AbortController();
+      
+      let responseText = '';
+      const collectResponse = (chunk: string) => {
+        responseText += chunk;
+      };
+      
+      await this.createChatCompletion(
+        model,
+        [], // No history needed for title generation
+        { type: "sent" as "sent", content: 'Title generation' }, // Dummy message
+        'You are a helpful assistant.',
+        false, // Don't stream for title generation
+        collectResponse,
+        controller.signal,
+        messages // Pass the messages directly
+      );
+      
+      return responseText;
+    } catch (error) {
+      console.error('Failed to generate completion:', error);
+      throw error;
+    }
+  }
+
   createMessage(content: string, attachments?: Attachment[]): Message {
     return {
       type: "sent",
@@ -144,10 +207,12 @@ export class ChatService {
     systemPrompt: string,
     streamResponse: boolean,
     onStreamResponse: (chunk: string) => void,
-    signal: AbortSignal
+    signal: AbortSignal,
+    customMessages?: any[]
   ): Promise<string> {
     
-    const formattedMessages = await formatMessages(history, message, systemPrompt);
+    // Use custom messages if provided, otherwise format the history and message
+    const formattedMessages = customMessages || await formatMessages(history, message, systemPrompt);
 
     if (model.provider === 'openai') {
       const apiKey = await this.getApiKeyForProvider(model.provider);
@@ -199,10 +264,10 @@ export class ChatService {
     throw new Error(`Unsupported provider: ${model.provider}`);
   }
 
-  async transcribeAudio(base64Audio: string): Promise<string> {
+  async transcribeAudio(base64Audio: string, prompt: string = ''): Promise<string> {
     const apiKey = await this.getApiKeyForProvider('openai');
     const openAIService = new OpenAIService(apiKey);
-    return openAIService.transcribeAudio(base64Audio);
+    return openAIService.transcribeAudio(base64Audio, prompt);
   }
 }
 
