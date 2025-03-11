@@ -35,6 +35,7 @@ export type APIMessage = {
 export interface Conversation {
     id: string;
     name: string;
+    created_at: string;
 }
 
 export interface ConversationState {

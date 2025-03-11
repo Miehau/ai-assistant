@@ -8,11 +8,19 @@
   import Book from "lucide-svelte/icons/book";
   import SquareUser from "lucide-svelte/icons/square-user";
   import Users from "lucide-svelte/icons/users";
+  import History from "lucide-svelte/icons/history";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import { page } from "$app/stores";
+  import ConversationDrawer from "$lib/components/conversation/ConversationDrawer.svelte";
 
   $: currentPath = $page.url.pathname;
+  
+  let isConversationDrawerOpen = false;
+  
+  function toggleConversationDrawer() {
+    isConversationDrawerOpen = !isConversationDrawerOpen;
+  }
 </script>
 
 <aside class="inset-y fixed left-0 z-20 flex h-full flex-col border-r">
@@ -70,6 +78,21 @@
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Assistants</Tooltip.Content>
     </Tooltip.Root>
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild let:builder>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="rounded-lg {isConversationDrawerOpen ? 'bg-muted' : ''}"
+          aria-label="Conversation History"
+          builders={[builder]}
+          on:click={toggleConversationDrawer}
+        >
+          <History class="size-5" />
+        </Button>
+      </Tooltip.Trigger>
+      <Tooltip.Content side="right" sideOffset={5}>Conversation History</Tooltip.Content>
+    </Tooltip.Root>
   </nav>
   <nav class="mt-auto grid gap-1 p-2">
     <Tooltip.Root>
@@ -88,3 +111,5 @@
     </Tooltip.Root>
   </nav>
 </aside>
+
+<ConversationDrawer bind:isOpen={isConversationDrawerOpen} />
