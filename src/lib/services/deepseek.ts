@@ -1,6 +1,6 @@
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
-export class OpenAIService {
+export class DeepSeekService {
   constructor(private apiKey: string) {}
 
   async createChatCompletion(
@@ -10,11 +10,13 @@ export class OpenAIService {
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
   ): Promise<string> {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const response = await fetch("https://api.deepseek.com/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
         Authorization: `Bearer ${this.apiKey}`,
+
       },
       body: JSON.stringify({
         model,
@@ -25,7 +27,7 @@ export class OpenAIService {
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.statusText}`);
+      throw new Error(`DeepSeek API error: ${response.statusText}`);
     }
 
     if (!streamResponse) {
@@ -79,34 +81,6 @@ export class OpenAIService {
   }
 
   async transcribeAudio(base64Audio: string, context: string): Promise<string> {
-    // Convert base64 to blob
-    const base64Data = base64Audio.split(',')[1];
-    const binaryData = atob(base64Data);
-    const bytes = new Uint8Array(binaryData.length);
-    for (let i = 0; i < binaryData.length; i++) {
-      bytes[i] = binaryData.charCodeAt(i);
-    }
-    const blob = new Blob([bytes], { type: 'audio/mp3' });
-
-    // Create form data
-    const formData = new FormData();
-    formData.append('file', blob, 'audio.mp3');
-    formData.append('model', 'whisper-1');
-    formData.append('response_format', 'text');
-    formData.append('prompt', context);
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: formData,
-    });
-
-    if (!response.ok) {
-      console.error('Failed to transcribe audio:', response.statusText);
-      throw new Error(`OpenAI API error: ${response.statusText}`);
-    }
-
-    return response.text();
+    throw new Error(`DeepSeek API error: Not implemented`);
   }
 }

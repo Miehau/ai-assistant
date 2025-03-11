@@ -3,12 +3,20 @@
   import { onMount } from "svelte";
   import Prism from 'prismjs';
   import 'prismjs/themes/prism-tomorrow.css';
-  import 'prismjs/components/prism-json';
   import 'prismjs/components/prism-javascript';
   import 'prismjs/components/prism-typescript';
   import 'prismjs/components/prism-python';
   import 'prismjs/components/prism-bash';
   import 'prismjs/components/prism-markdown';
+  import 'prismjs/components/prism-java';
+  import 'prismjs/components/prism-kotlin';
+  import 'prismjs/components/prism-rust';
+  import 'prismjs/components/prism-sql';
+  import 'prismjs/components/prism-mermaid';
+  import 'prismjs/components/prism-typescript';
+  import 'prismjs/components/prism-git';
+  import 'prismjs/components/prism-docker';
+  import 'prismjs/components/prism-csv';
   import type { Attachment } from "$lib/types";
 
   export let type: "sent" | "received";

@@ -17,7 +17,7 @@
 
     // Define the options for the Select component
     type Provider = {
-        value: "openai" | "anthropic" | "azure" | "custom";
+        value: "openai" | "anthropic" | "azure" | "deepseek" | "custom";
         label: string;
     };
 
@@ -25,6 +25,7 @@
         { value: "openai", label: "OpenAI" },
         { value: "anthropic", label: "Anthropic" },
         { value: "azure", label: "Azure" },
+        { value: "deepseek", label: "Deepseek" },
         { value: "custom", label: "Custom Provider" }
     ];
 

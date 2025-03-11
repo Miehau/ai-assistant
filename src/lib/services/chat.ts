@@ -6,6 +6,7 @@ import { conversationService } from './conversation';
 import type { Model } from '$lib/types/models';
 import { formatMessages } from './messageFormatting';
 import { AnthropicService } from './anthropic';
+import { DeepSeekService } from './deepseek';
 
 export class ChatService {
   private streamResponse = true;
@@ -176,6 +177,18 @@ export class ChatService {
       return customProviderService.createChatCompletion(
         model.model_name,
         model.url,
+        formattedMessages,
+        streamResponse,
+        onStreamResponse,
+        signal
+      );
+    }
+    
+    if (model.provider === 'deepseek') {
+      const apiKey = await this.getApiKeyForProvider(model.provider);
+      const deepSeekService = new DeepSeekService(apiKey);
+      return deepSeekService.createChatCompletion(
+        model.model_name,
         formattedMessages,
         streamResponse,
         onStreamResponse,

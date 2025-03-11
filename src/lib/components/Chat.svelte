@@ -19,7 +19,7 @@
   import { fade } from "svelte/transition";
   import { Square } from "lucide-svelte";
   import { Headphones } from 'lucide-svelte';
-    import { orchestratorService } from "$lib/services/agent/orchestrator";
+  import { orchestratorService } from "$lib/services/agent/orchestrator";
 
   let chatContainer: HTMLElement | null = null;
   let currentMessage: string = "";
@@ -353,58 +353,53 @@
     {#if attachments.length > 0}
       <div class="flex flex-wrap gap-2 px-3 pb-2">
         {#each attachments as attachment, index}
-          <div class="w-[180px] h-[60px] flex items-center gap-2 bg-muted/50 px-2 rounded-md group relative hover:bg-muted/70 transition-colors">
-            <div class="w-8 h-full flex items-center justify-center flex-none">
-              {#if attachment.attachment_type.startsWith("image")}
-                <Image class="w-5 h-5 text-muted-foreground" />
-              {:else if attachment.attachment_type.startsWith("audio")}
-                <Headphones class="w-5 h-5 text-muted-foreground" />
-              {:else if attachment.attachment_type.startsWith("text")}
-                <svg 
-                    class="w-5 h-5 text-muted-foreground" 
-                    xmlns="http://www.w3.org/2000/svg" 
-                    viewBox="0 0 24 24" 
-                    fill="none" 
-                    stroke="currentColor" 
-                    stroke-width="2" 
-                    stroke-linecap="round" 
-                    stroke-linejoin="round"
+          <Tooltip.Root>
+            <Tooltip.Trigger asChild>
+              <div class="square-attachment">
+                {#if attachment.attachment_type.startsWith("image")}
+                  <div class="square-attachment-thumbnail">
+                    <img 
+                      src={attachment.data} 
+                      alt={attachment.name} 
+                      class="square-attachment-image" 
+                    />
+                  </div>
+                {:else}
+                  <div class="square-attachment-icon-container">
+                    {#if attachment.attachment_type.startsWith("audio")}
+                      <Headphones class="square-attachment-icon" />
+                    {:else if attachment.attachment_type.startsWith("text")}
+                      <svg 
+                        class="square-attachment-icon" 
+                        xmlns="http://www.w3.org/2000/svg" 
+                        viewBox="0 0 24 24" 
+                        fill="none" 
+                        stroke="currentColor" 
+                        stroke-width="2" 
+                        stroke-linecap="round" 
+                        stroke-linejoin="round"
+                      >
+                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                      </svg>
+                    {/if}
+                  </div>
+                {/if}
+                <div class="square-attachment-name">
+                  {attachment.name.length > 10 ? attachment.name.slice(0, 8) + '...' : attachment.name}
+                </div>
+                <button
+                  class="square-attachment-remove"
+                  on:click={() => {
+                    attachments = attachments.filter((_, i) => i !== index);
+                  }}
+                  type="button"
+                  aria-label="Remove attachment"
                 >
-                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
-                    <polyline points="14 2 14 8 20 8"/>
-                </svg>
-              {/if}
-            </div>
-
-            <div class="flex-1 min-w-0 py-2">
-              <p class="text-xs font-medium truncate leading-tight">{attachment.name}</p>
-              {#if attachment.attachment_type.startsWith("text")}
-                <p class="text-xs text-muted-foreground truncate leading-tight">
-                  {attachment.data.slice(0, 30)}...
-                </p>
-              {:else if attachment.attachment_type.startsWith("audio")}
-                <p class="text-xs text-muted-foreground truncate leading-tight">
-                  Audio file
-                </p>
-              {:else}
-                <p class="text-xs text-muted-foreground truncate leading-tight">
-                  Image file
-                </p>
-              {/if}
-            </div>
-
-            <button
-              class="w-8 h-full flex items-center justify-center flex-none text-muted-foreground hover:text-destructive transition-colors"
-              on:click={() => {
-                attachments = attachments.filter((_, i) => i !== index);
-              }}
-              type="button"
-              aria-label="Remove attachment"
-            >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
+                width="10"
+                height="10"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -416,7 +411,12 @@
                 <path d="m6 6 12 12" />
               </svg>
             </button>
-          </div>
+              </div>
+            </Tooltip.Trigger>
+            <Tooltip.Content side="top">
+              {attachment.name}
+            </Tooltip.Content>
+          </Tooltip.Root>
         {/each}
       </div>
     {/if}
@@ -595,6 +595,95 @@
 </div>
 
 <style>
+  /* Square attachment styles */
+  :global(.square-attachment) {
+    position: relative;
+    width: 50px;
+    height: 70px;
+    border-radius: 4px;
+    border: 1px solid hsl(var(--border));
+    background-color: hsl(var(--card) / 0.8);
+    overflow: hidden;
+    transition: all 0.15s ease;
+  }
+
+  :global(.square-attachment:hover) {
+    border-color: hsl(var(--border) / 1.2);
+    background-color: hsl(var(--card));
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  }
+
+  :global(.square-attachment-thumbnail) {
+    width: 100%;
+    height: 50px;
+    overflow: hidden;
+    border-bottom: 1px solid hsl(var(--border) / 0.6);
+  }
+
+  :global(.square-attachment-image) {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  :global(.square-attachment-icon-container) {
+    width: 100%;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: hsl(var(--muted) / 0.5);
+    border-bottom: 1px solid hsl(var(--border) / 0.6);
+  }
+
+  :global(.square-attachment-icon) {
+    width: 20px;
+    height: 20px;
+    color: hsl(var(--muted-foreground));
+  }
+
+  :global(.square-attachment-name) {
+    font-size: 0.65rem;
+    font-weight: 500;
+    color: hsl(var(--foreground));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 2px 4px;
+    text-align: center;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  :global(.square-attachment-remove) {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: hsl(var(--background));
+    background: hsl(var(--muted-foreground) / 0.7);
+    border: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    padding: 0;
+    opacity: 0;
+  }
+
+  :global(.square-attachment:hover .square-attachment-remove) {
+    opacity: 1;
+  }
+
+  :global(.square-attachment-remove:hover) {
+    background: hsl(var(--destructive));
+  }
+
   /* Add to existing styles */
   :global(.message-container) {
     transform-origin: center;
