@@ -1,0 +1,149 @@
+import { writable, derived } from 'svelte/store';
+import type { Message } from '$lib/types';
+import type { Model } from '$lib/types/models';
+import type { SystemPrompt } from '$lib/types';
+import type { Selected } from 'bits-ui';
+import { invoke } from '@tauri-apps/api/tauri';
+import { chatService } from '$lib/services/chat';
+import { conversationService } from '$lib/services/conversation';
+
+// State stores
+export const messages = writable<Message[]>([]);
+export const availableModels = writable<Model[]>([]);
+export const systemPrompts = writable<SystemPrompt[]>([]);
+export const selectedModel = writable<Selected<string>>({
+  value: '',
+  label: 'No models'
+});
+export const selectedSystemPrompt = writable<SystemPrompt | null>(null);
+export const streamingEnabled = writable<boolean>(true);
+export const isLoading = writable<boolean>(false);
+export const attachments = writable<any[]>([]);
+export const currentMessage = writable<string>('');
+
+// Derived stores
+export const hasAttachments = derived(
+  attachments,
+  $attachments => $attachments.length > 0
+);
+
+// Actions
+export async function loadModels() {
+  try {
+    const models = await invoke<Model[]>('get_models');
+    const enabledModels = models.filter(model => model.enabled);
+    availableModels.set(enabledModels);
+
+    if (enabledModels.length > 0) {
+      selectedModel.set({
+        value: enabledModels[0].model_name,
+        label: `${enabledModels[0].model_name} • ${enabledModels[0].provider}`
+      });
+    }
+  } catch (error) {
+    console.error('Failed to load models:', error);
+  }
+}
+
+export async function loadSystemPrompts() {
+  try {
+    const prompts = await invoke<SystemPrompt[]>('get_all_system_prompts');
+    systemPrompts.set(prompts);
+    
+    if (prompts.length > 0) {
+      selectedSystemPrompt.set(prompts[0]);
+    }
+  } catch (error) {
+    console.error('Failed to load system prompts:', error);
+  }
+}
+
+export async function loadConversationHistory(conversationId: string) {
+  try {
+    const loadedMessages = await conversationService.getDisplayHistory(conversationId);
+    messages.set(loadedMessages);
+  } catch (error) {
+    console.error('Failed to load conversation history:', error);
+  }
+}
+
+export function toggleStreaming() {
+  streamingEnabled.update(value => {
+    const newValue = !value;
+    chatService.setStreamResponse(newValue);
+    return newValue;
+  });
+}
+
+export async function sendMessage() {
+  let currentMessageValue = '';
+  let attachmentsValue: any[] = [];
+  let selectedModelValue: Selected<string> = { value: '', label: '' };
+  let selectedSystemPromptValue: SystemPrompt | null = null;
+  
+  // Get current values from stores
+  currentMessage.subscribe(value => { currentMessageValue = value; })();
+  attachments.subscribe(value => { attachmentsValue = [...value]; })();
+  selectedModel.subscribe(value => { selectedModelValue = value; })();
+  selectedSystemPrompt.subscribe(value => { selectedSystemPromptValue = value; })();
+  
+  if (!currentMessageValue.trim() && attachmentsValue.length === 0) return;
+  
+  isLoading.set(true);
+  
+  try {
+    // Create and display user message immediately
+    const userMessage: Message = {
+      type: 'sent',
+      content: currentMessageValue,
+      attachments: attachmentsValue.length > 0 ? attachmentsValue : undefined,
+    };
+    
+    messages.update(msgs => [...msgs, userMessage]);
+    
+    // Clear input fields
+    currentMessage.set('');
+    attachments.set([]);
+    
+    // Default system prompt
+    const defaultSystemPrompt = 'You are a helpful assistant.';
+    
+    // Get system prompt content safely
+    let systemPromptContent = defaultSystemPrompt;
+    if (selectedSystemPromptValue) {
+      // Use type assertion to avoid TypeScript error
+      const prompt = selectedSystemPromptValue as any;
+      systemPromptContent = prompt.content || defaultSystemPrompt;
+    }
+    
+    await chatService.handleSendMessage(
+      currentMessageValue,
+      selectedModelValue.value,
+      (chunk: string) => {
+        messages.update(msgs => {
+          if (!msgs[msgs.length - 1] || msgs[msgs.length - 1].type !== 'received') {
+            return [...msgs, { type: 'received', content: chunk }];
+          } else {
+            const updatedMsgs = [...msgs];
+            updatedMsgs[updatedMsgs.length - 1].content += chunk;
+            return updatedMsgs;
+          }
+        });
+      },
+      systemPromptContent,
+      attachmentsValue,
+    );
+  } catch (error) {
+    console.error('Error sending message:', error);
+  } finally {
+    isLoading.set(false);
+  }
+}
+
+export function clearConversation() {
+  messages.set([]);
+  conversationService.setCurrentConversation(null);
+}
+
+// Initialize streaming setting
+chatService.setStreamResponse(true);
