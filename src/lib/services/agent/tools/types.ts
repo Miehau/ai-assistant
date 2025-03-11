@@ -8,5 +8,6 @@ export interface Tool {
   name: string;
   description: string;
   parameters: Record<string, any>;
+  toSchema: () => string;
   execute: (input: any) => Promise<ToolResult>;
 } 
