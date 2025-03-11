@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, afterUpdate } from "svelte";
   import ChatMessage from "../ChatMessage.svelte";
-  import { fade } from "svelte/transition";
+  import { fade, fly, scale } from "svelte/transition";
+  import { backOut } from "svelte/easing";
   import type { Message } from "$lib/types";
 
   export let messages: Message[] = [];
@@ -103,8 +104,8 @@
 >
   {#each messages as msg, i (i)}
     <div
-      in:fade={{ duration: 200 }}
-      out:fade={{ duration: 500 }}
+      in:fly={{ y: 10, duration: 150, delay: i * 10, easing: backOut }}
+      out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
       class="w-full message-container"
     >
       <ChatMessage
@@ -121,10 +122,7 @@
   :global(.message-container) {
     transform-origin: center;
     perspective: 1000px;
-  }
-
-  :global(.message-container:out) {
-    animation: dustAway 0.3s ease-out forwards;
+    transition: all 0.3s ease-out;
   }
 
   @keyframes dustAway {
@@ -132,9 +130,13 @@
       opacity: 1;
       transform: translateX(0) rotate(0);
     }
+    50% {
+      opacity: 0.5;
+      transform: translateX(20px) rotate(5deg) scale(0.95);
+    }
     100% {
       opacity: 0;
-      transform: translateX(100px) rotate(10deg);
+      transform: translateX(40px) rotate(10deg) scale(0.9);
     }
   }
 </style>

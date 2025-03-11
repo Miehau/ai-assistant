@@ -1,4 +1,4 @@
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import type { Message } from '$lib/types';
 import type { Model } from '$lib/types/models';
 import type { SystemPrompt } from '$lib/types';
@@ -141,6 +141,7 @@ export async function sendMessage() {
 }
 
 export function clearConversation() {
+  // Clear messages immediately
   messages.set([]);
   conversationService.setCurrentConversation(null);
 }

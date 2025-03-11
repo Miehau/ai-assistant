@@ -20,9 +20,11 @@
   import ChatInput from "./chat/ChatInput.svelte";
   import ChatControls from "./chat/ChatControls.svelte";
   import { conversationService } from "$lib/services/conversation";
+  import { fade } from "svelte/transition";
 
   let chatContainer: HTMLElement | null = null;
   let autoScroll = true;
+  let isClearing = false;
 
   onMount(async () => {
     loadModels();
@@ -60,12 +62,33 @@
   }
 
   function handleClearConversation() {
-    clearConversation();
+    if ($messages.length > 0) {
+      isClearing = true;
+      clearConversation();
+      
+      // Reset the clearing state almost immediately - just enough time for a brief visual feedback
+      setTimeout(() => {
+        isClearing = false;
+      }, 200); // Very short delay for visual feedback
+    } else {
+      clearConversation();
+    }
   }
 </script>
 
 <div class="relative flex flex-col h-full min-h-[50vh] rounded-xl bg-muted/50 p-4 lg:col-span-2 w-full">
-  <div class="flex-1 overflow-hidden mb-4">
+  <div class="flex-1 overflow-hidden mb-4 relative">
+    {#if isClearing}
+      <div 
+        class="absolute inset-0 flex items-center justify-center z-10 bg-background/30 backdrop-blur-sm" 
+        transition:fade={{ duration: 200 }}
+      >
+        <div class="text-center">
+          <div class="loading-spinner mb-2"></div>
+          <p class="text-sm text-muted-foreground">Starting new conversation...</p>
+        </div>
+      </div>
+    {/if}
     <ChatMessages messages={$messages} bind:chatContainer bind:autoScroll />
   </div>
   
@@ -166,5 +189,22 @@
 
   :global(.square-attachment-remove:hover) {
     opacity: 1;
+  }
+  
+  /* Loading spinner */
+  .loading-spinner {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    border: 3px solid rgba(0, 0, 0, 0.1);
+    border-radius: 50%;
+    border-top-color: var(--primary, #333);
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>
