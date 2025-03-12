@@ -7,6 +7,7 @@
   import { fly } from "svelte/transition";
   import { X, Trash2 } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
+  import { goto } from "$app/navigation";
 
   export let isOpen = false;
 
@@ -61,6 +62,11 @@
       
       // Close the drawer after selection
       isOpen = false;
+      
+      // Navigate to the main page only if not already there
+      if (window.location.pathname !== '/') {
+        goto('/');
+      }
     } catch (err) {
       console.error("Error selecting conversation:", err);
     }
