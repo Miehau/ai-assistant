@@ -74,6 +74,12 @@
       `;
     };
 
+    // Make links open in a new window
+    renderer.link = function({href, title, text}) {
+      const titleAttr = title ? ` title="${title}"` : '';
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer"${titleAttr}>${text}</a>`;
+    };
+
     marked.setOptions({
       breaks: true,
       gfm: true,

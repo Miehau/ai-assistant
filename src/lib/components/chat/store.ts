@@ -156,12 +156,13 @@ export async function sendMessage() {
     );
     
     // Generate a title for the conversation if this is the first message
-    if (shouldGenerateTitle && currentConversation) {
-      console.log('Initiating title generation for conversation:', currentConversation.id);
+    console.log('Generating title for conversation:', currentConversation?.id);
+    if (shouldGenerateTitle) {
+      console.log('Initiating title generation for conversation:', result?.conversationId);
       // Use setTimeout to avoid blocking the UI
       setTimeout(async () => {
         try {
-          await titleGeneratorService.generateAndUpdateTitle(currentConversation.id);
+          await titleGeneratorService.generateAndUpdateTitle(result?.conversationId || '');
         } catch (error) {
           console.error('Error generating conversation title:', error);
         }
