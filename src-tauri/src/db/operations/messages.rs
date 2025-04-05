@@ -99,7 +99,8 @@ pub trait MessageOperations: DbOperations {
         let attachments_start = Instant::now();
 
         let mut attachments_stmt = conn.prepare(
-            "SELECT message_id, id, name, data, attachment_type, created_at, description, transcript 
+            "SELECT message_id, id, name, data, attachment_type, created_at, description, transcript, 
+             file_path, size_bytes, mime_type, thumbnail_path, updated_at 
              FROM message_attachments 
              WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)"
         )?;
@@ -123,6 +124,11 @@ pub trait MessageOperations: DbOperations {
                 format!("data:{};base64,{}", attachment_type, base64_data)
             };
             
+            // Get updated_at timestamp if available, otherwise use created_at
+            let updated_at_timestamp: Option<i64> = row.get(12).ok();
+            let updated_at = updated_at_timestamp
+                .map(|ts| Utc.timestamp_opt(ts, 0).single().unwrap());
+                
             Ok(MessageAttachment {
                 id: Some(row.get(1)?),
                 message_id: Some(message_id),
@@ -133,6 +139,11 @@ pub trait MessageOperations: DbOperations {
                 description: row.get(6)?,
                 transcript: row.get(7)?,
                 created_at: Some(created_at),
+                updated_at,
+                file_path: row.get(8).ok(),
+                size_bytes: row.get(9).ok(),
+                mime_type: row.get(10).ok(),
+                thumbnail_path: row.get(11).ok(),
             })
         })?;
 

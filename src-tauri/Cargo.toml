@@ -20,6 +20,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "0.8", features = ["v4"] }
 base64 = "0.21"
 image = "0.24"
+mime_guess = "2.0"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

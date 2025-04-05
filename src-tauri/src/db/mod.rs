@@ -91,6 +91,22 @@ impl Db {
             M::up(
                 "ALTER TABLE message_attachments ADD COLUMN description TEXT;",
             ),
+            // New migrations for file attachment improvements
+            M::up(
+                "ALTER TABLE message_attachments ADD COLUMN file_path TEXT;",
+            ),
+            M::up(
+                "ALTER TABLE message_attachments ADD COLUMN size_bytes INTEGER;",
+            ),
+            M::up(
+                "ALTER TABLE message_attachments ADD COLUMN mime_type TEXT;",
+            ),
+            M::up(
+                "ALTER TABLE message_attachments ADD COLUMN thumbnail_path TEXT;",
+            ),
+            M::up(
+                "ALTER TABLE message_attachments ADD COLUMN updated_at INTEGER;",
+            ),
         ]);
 
         let mut conn = self.conn.lock().unwrap();

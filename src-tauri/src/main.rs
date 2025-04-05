@@ -3,8 +3,10 @@
 mod db;
 mod commands;
 mod setup_default_values;
+mod files;
 
 use db::Db;
+use files::FileManager;
 use std::fs;
 use tauri::Manager;
 
@@ -18,8 +20,12 @@ fn main() {
             db.run_migrations().expect("Failed to run database migrations");
             
             setup_default_values::initialize(&mut db).expect("Failed to initialize default values");
-
+            
+            // Initialize the file manager
+            let file_manager = FileManager::new().expect("Failed to create file manager");
+            
             app.manage(db);
+            app.manage(file_manager);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -41,6 +47,11 @@ fn main() {
             commands::get_system_prompt,
             commands::get_all_system_prompts,
             commands::delete_system_prompt,
+            // File management commands
+            commands::upload_file,
+            commands::get_file,
+            commands::delete_file,
+            commands::cleanup_empty_directories,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

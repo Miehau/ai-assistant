@@ -20,7 +20,13 @@ pub struct MessageAttachment {
     pub description: Option<String>,
     pub transcript: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
     pub attachment_url: Option<String>,
+    // New fields for improved file handling
+    pub file_path: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub mime_type: Option<String>,
+    pub thumbnail_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
