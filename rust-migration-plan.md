@@ -123,7 +123,7 @@ Currently, file attachments are processed entirely on the frontend:
    - Add content extraction and parsing ✅
    - Support for code syntax highlighting ✅
 
-### Phase 3: Frontend Integration
+### Phase 3: Frontend Integration ✅
 
 1. **Update Frontend API** ✅
    - Modify attachment handling to use new Rust commands ✅
@@ -135,11 +135,11 @@ Currently, file attachments are processed entirely on the frontend:
    - Implement drag-and-drop functionality ✅
    - Add file previews and thumbnails ✅
 
-3. **Migration Utilities**
-   - Create tools to migrate existing attachments
-   - Ensure backward compatibility
+3. **Migration Utilities** *(Won't Do)*
+   - ~~Create tools to migrate existing attachments~~ *(Won't Do)*
+   - ~~Ensure backward compatibility~~ *(Won't Do)*
 
-### Phase 4: Advanced Features
+### Phase 4: Advanced Features *(Future Work)*
 
 1. **File Versioning**
    - Implement file versioning system

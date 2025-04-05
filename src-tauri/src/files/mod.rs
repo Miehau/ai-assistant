@@ -12,9 +12,12 @@ use tauri::api::path;
 use uuid::Uuid;
 use base64::Engine;
 
+mod versioning;
+
 pub use image::ImageProcessor;
 pub use audio::AudioProcessor;
 pub use text::TextProcessor;
+pub use versioning::{VersionManager, VersionMetadata, VersionHistory};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileMetadata {
@@ -38,6 +41,7 @@ pub struct FileUploadResult {
 
 pub struct FileManager {
     root_dir: PathBuf,
+    version_manager: Option<VersionManager>,
 }
 
 impl FileManager {
@@ -48,7 +52,19 @@ impl FileManager {
         let root_dir = app_dir.join("dev.michalmlak.ai_agent").join("attachments");
         fs::create_dir_all(&root_dir)?;
         
-        Ok(Self { root_dir })
+        // Initialize version manager
+        let version_manager = match VersionManager::new(&root_dir) {
+            Ok(vm) => Some(vm),
+            Err(e) => {
+                eprintln!("Failed to initialize version manager: {}", e);
+                None
+            }
+        };
+        
+        Ok(Self { 
+            root_dir,
+            version_manager,
+        })
     }
     
     // Create the hierarchical directory structure for a specific conversation and message
@@ -243,35 +259,95 @@ impl FileManager {
     pub fn cleanup_empty_dirs(&self) -> Result<(), io::Error> {
         self.cleanup_dir(&self.root_dir)
     }
-    
-    fn cleanup_dir(&self, dir: &Path) -> Result<(), io::Error> {
-        if dir.is_dir() {
-            let entries = fs::read_dir(dir)?;
-            let mut is_empty = true;
-            
-            for entry in entries {
-                let entry = entry?;
-                let path = entry.path();
+    pub fn cleanup_dir(&self, dir: &Path) -> Result<(), io::Error> {
+        if !dir.exists() {
+            return Ok(());
+        }
+
+        let entries = fs::read_dir(dir)?;
+        let mut is_empty = true;
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                self.cleanup_dir(&path)?;
                 
-                if path.is_dir() {
-                    self.cleanup_dir(&path)?;
-                    // Check if directory is now empty after potential cleanup
-                    if fs::read_dir(&path)?.next().is_none() {
-                        fs::remove_dir(path)?;
-                    } else {
-                        is_empty = false;
-                    }
+                // Check if directory is now empty
+                if path.read_dir()?.next().is_none() {
+                    fs::remove_dir(path)?;
                 } else {
                     is_empty = false;
                 }
-            }
-            
-            // If this is not the root directory and it's empty, remove it
-            if is_empty && dir != &self.root_dir {
-                fs::remove_dir(dir)?;
+            } else {
+                is_empty = false;
             }
         }
-        
+
+        if is_empty {
+            fs::remove_dir(dir)?;
+        }
+
         Ok(())
+    }
+    
+    // File versioning methods
+    
+    /// Create a new version of a file
+    pub fn create_version(&self, file_path: &str, comment: Option<String>) -> Result<VersionMetadata, io::Error> {
+        let vm = self.version_manager.as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Version manager not initialized"))?;
+            
+        let full_path = self.get_full_path(file_path);
+        vm.create_version(&full_path, comment)
+    }
+    
+    /// Get version history for a file
+    pub fn get_version_history(&self, file_path: &str) -> Result<VersionHistory, io::Error> {
+        let vm = self.version_manager.as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Version manager not initialized"))?;
+            
+        let file_id = Path::new(file_path)
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file path"))?;
+            
+        vm.get_version_history(&file_id.to_string_lossy())
+    }
+    
+    /// Restore a specific version of a file
+    pub fn restore_version(&self, file_path: &str, version_id: &str) -> Result<PathBuf, io::Error> {
+        let vm = self.version_manager.as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Version manager not initialized"))?;
+            
+        let file_id = Path::new(file_path)
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file path"))?;
+            
+        vm.restore_version(&file_id.to_string_lossy(), version_id)
+    }
+    
+    /// Delete a specific version of a file
+    pub fn delete_version(&self, file_path: &str, version_id: &str) -> Result<(), io::Error> {
+        let vm = self.version_manager.as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Version manager not initialized"))?;
+            
+        let file_id = Path::new(file_path)
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file path"))?;
+            
+        vm.delete_version(&file_id.to_string_lossy(), version_id)
+    }
+    
+    /// Clean up old versions, keeping only the specified number of most recent versions
+    pub fn cleanup_versions(&self, file_path: &str, keep_count: usize) -> Result<usize, io::Error> {
+        let vm = self.version_manager.as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Version manager not initialized"))?;
+            
+        let file_id = Path::new(file_path)
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid file path"))?;
+            
+        vm.cleanup_versions(&file_id.to_string_lossy(), keep_count)
     }
 }
