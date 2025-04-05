@@ -58,6 +58,7 @@ fn main() {
             commands::delete_system_prompt,
             // File management commands
             commands::upload_file,
+            commands::upload_file_from_path,
             commands::get_file,
             commands::delete_file,
             commands::cleanup_empty_directories,

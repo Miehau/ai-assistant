@@ -24,11 +24,40 @@ export class FileService {
   ): Promise<FileMetadata> {
     const result = await invoke('upload_file', {
       payload: {
-        fileData,
-        fileName,
-        mimeType,
-        conversationId,
-        messageId
+        file_data: fileData,
+        file_name: fileName,
+        mime_type: mimeType,
+        conversation_id: conversationId,
+        message_id: messageId
+      }
+    });
+    
+    return result as FileMetadata;
+  }
+  
+  /**
+   * Upload a file to the Rust backend using its path
+   * @param filePath Path to the file on disk
+   * @param fileName Name of the file
+   * @param mimeType MIME type of the file
+   * @param conversationId ID of the conversation
+   * @param messageId ID of the message
+   * @returns Metadata about the uploaded file
+   */
+  async uploadFileFromPath(
+    filePath: string,
+    fileName: string,
+    mimeType: string,
+    conversationId: string,
+    messageId: string
+  ): Promise<FileMetadata> {
+    const result = await invoke('upload_file_from_path', {
+      payload: {
+        file_path: filePath,
+        file_name: fileName,
+        mime_type: mimeType,
+        conversation_id: conversationId,
+        message_id: messageId
       }
     });
     

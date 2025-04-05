@@ -3,10 +3,20 @@ use crate::files::{FileManager, FileMetadata, FileUploadResult};
 use tauri::State;
 use serde::Deserialize;
 use base64::Engine;
+use std::fs;
 
 #[derive(Debug, Deserialize)]
 pub struct FileUploadPayload {
     pub file_data: String, // Base64 encoded file data
+    pub file_name: String,
+    pub mime_type: String,
+    pub conversation_id: String,
+    pub message_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FilePathUploadPayload {
+    pub file_path: String, // Path to the file on disk
     pub file_name: String,
     pub mime_type: String,
     pub conversation_id: String,
@@ -165,6 +175,63 @@ pub fn optimize_image(
             Ok(file_manager.encode_to_base64(&data, &mime_type))
         },
         Err(e) => Err(format!("Failed to optimize image: {}", e)),
+    }
+}
+
+// Upload file from path instead of base64 data
+#[tauri::command]
+pub fn upload_file_from_path(
+    payload: FilePathUploadPayload,
+    file_manager: State<'_, FileManager>,
+) -> Result<FileUploadResult, String> {
+    // Read the file directly from the filesystem
+    match fs::read(&payload.file_path) {
+        Ok(file_data) => {
+            // Save the file to the appropriate location
+            match file_manager.save_file(
+                &file_data,
+                &payload.file_name,
+                &payload.mime_type,
+                &payload.conversation_id,
+                &payload.message_id,
+            ) {
+                Ok(metadata) => Ok(FileUploadResult {
+                    metadata,
+                    success: true,
+                    error: None,
+                }),
+                Err(e) => Ok(FileUploadResult {
+                    metadata: FileMetadata {
+                        id: String::new(),
+                        name: payload.file_name,
+                        path: String::new(),
+                        mime_type: payload.mime_type,
+                        size_bytes: 0,
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                        thumbnail_path: None,
+                        metadata: None,
+                    },
+                    success: false,
+                    error: Some(format!("Failed to save file: {}", e)),
+                })
+            }
+        },
+        Err(e) => Ok(FileUploadResult {
+            metadata: FileMetadata {
+                id: String::new(),
+                name: payload.file_name,
+                path: String::new(),
+                mime_type: payload.mime_type,
+                size_bytes: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                thumbnail_path: None,
+                metadata: None,
+            },
+            success: false,
+            error: Some(format!("Failed to read file: {}", e)),
+        })
     }
 }
 

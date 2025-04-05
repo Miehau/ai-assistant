@@ -10,6 +10,7 @@
   import type { Attachment, FileMetadata } from "$lib/types";
   import { get } from "svelte/store";
   import { currentConversation } from "$lib/stores/conversation";
+  import { open } from '@tauri-apps/api/dialog';
 
   export let currentMessage: string = "";
   export let attachments: Attachment[] = [];
@@ -70,9 +71,6 @@
           }, 100);
           
           try {
-            // Convert file to base64 for upload
-            const base64Data = await fileToBase64(file);
-            
             // Determine the attachment type based on file MIME type
             let attachmentType = "";
             if (file.type.startsWith('text/') || file.name.match(/\.(txt|md|json|js|ts|py|rs|svelte)$/)) {
@@ -86,17 +84,31 @@
             }
             
             // Update progress
-            uploadProgress[file.name] = 95;
+            uploadProgress[file.name] = 50;
             uploadProgress = {...uploadProgress};
             
-            // Upload the file to the Rust backend
-            const result = await fileService.uploadFile(
-              base64Data,
+            // Get the file path using Tauri's native dialog API
+            const filePath = await open({
+              multiple: false,
+              directory: false
+            });
+            
+            if (!filePath || typeof filePath !== 'string') {
+              throw new Error('No file path selected');
+            }
+
+            // Let Rust handle the file operations directly from the temp path
+            const result = await fileService.uploadFileFromPath(
+              filePath,
               file.name,
               file.type || "application/octet-stream",
               conversationId,
               tempMessageId
             );
+            
+            // Update progress
+            uploadProgress[file.name] = 95;
+            uploadProgress = {...uploadProgress};
             
             // Complete progress
             uploadProgress[file.name] = 100;
@@ -108,10 +120,12 @@
             // Create an attachment with file metadata
             const attachment: Attachment = {
               name: file.name,
-              attachment_type: attachmentType as "image" | "audio" | "text", // Cast to valid attachment type
-              data: base64Data, // Keep the data for immediate display
-              file_path: result.path,
-              file_metadata: result
+              attachment_type: attachmentType.startsWith('image/') ? 'image' :
+                              attachmentType.startsWith('audio/') ? 'audio' :
+                              'text',
+              file_path: result.metadata.path,
+              mime_type: file.type || "application/octet-stream",
+              file_metadata: result.metadata as FileMetadata
             };
             
             return attachment;
@@ -124,6 +138,7 @@
             uploadProgress = {...uploadProgress};
             
             // Fallback to the old approach if upload fails
+            console.log('Falling back to direct file reading approach');
             if (file.type.startsWith('text/') || file.name.match(/\.(txt|md|json|js|ts|py|rs|svelte)$/)) {
               const text = await file.text();
               return {
@@ -132,7 +147,7 @@
                 data: text
               };
             } else {
-              // Need to get base64 data again for fallback since it might not be available in this scope
+              // Need to get base64 data for fallback
               const fallbackBase64 = await fileToBase64(file);
               if (file.type.startsWith('audio/')) {
                 return {

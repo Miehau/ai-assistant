@@ -94,7 +94,7 @@
     try {
       // If the attachment already has data, use it
       if (attachment.data) {
-        fullImageSrc = `data:${attachment.mime_type};base64,${attachment.data}`;
+        fullImageSrc = `${attachment.data}`;
         loadedImage = true;
         return;
       }
@@ -106,7 +106,7 @@
         });
         
         if (imageData) {
-          fullImageSrc = `data:${attachment.mime_type};base64,${imageData}`;
+          fullImageSrc = `${imageData}`;
           loadedImage = true;
         }
       }
@@ -174,7 +174,7 @@
               </svg>
             </button>
             <img
-              src="${fullImageSrc || (attachment.data ? `data:${attachment.mime_type};base64,${attachment.data}` : (attachment.path ? `tauri://localhost/${attachment.path}` : (attachment.file_path ? `tauri://localhost/${attachment.file_path}` : '')))}"
+              src="${fullImageSrc || (attachment.data ? `${attachment.data}` : (attachment.path ? `tauri://localhost/${attachment.path}` : (attachment.file_path ? `tauri://localhost/${attachment.file_path}` : '')))}"
               alt="${attachment.name}"
               class="max-w-full max-h-[85vh] object-contain"
             />
@@ -261,7 +261,7 @@
           {#if attachment.thumbnail}
             <!-- Use base64 thumbnail data if available -->
             <img
-              src={`data:${attachment.mime_type};base64,${attachment.thumbnail}`}
+              src={`${attachment.thumbnail}`}
               alt={attachment.name}
               class="max-w-xs rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
             />
@@ -306,7 +306,7 @@
             />
           {:else if attachment.data}
             <img
-              src={`data:${attachment.mime_type};base64,${attachment.data}`}
+              src={`${attachment.data}`}
               alt={attachment.name}
               class="max-w-xs rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
             />
