@@ -32,6 +32,7 @@ pub fn upload_file(
                     created_at: chrono::Utc::now(),
                     updated_at: chrono::Utc::now(),
                     thumbnail_path: None,
+                    metadata: None,
                 },
                 success: false,
                 error: Some(format!("Failed to decode file data: {}", e)),
@@ -62,6 +63,7 @@ pub fn upload_file(
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
                 thumbnail_path: None,
+                metadata: None,
             },
             success: false,
             error: Some(format!("Failed to save file: {}", e)),
@@ -112,5 +114,150 @@ pub fn cleanup_empty_directories(
     match file_manager.cleanup_empty_dirs() {
         Ok(_) => Ok(true),
         Err(e) => Err(format!("Failed to cleanup directories: {}", e)),
+    }
+}
+
+// Media processing options
+
+#[derive(Debug, Deserialize)]
+pub struct ImageProcessingOptions {
+    pub max_width: u32,
+    pub max_height: u32,
+    pub quality: u8,
+}
+
+#[tauri::command]
+pub fn get_image_thumbnail(
+    file_path: String,
+    file_manager: State<'_, FileManager>,
+) -> Result<String, String> {
+    match file_manager.get_thumbnail(&file_path) {
+        Ok(data) => {
+            // Determine MIME type (always JPEG for thumbnails)
+            let mime_type = "image/jpeg";
+            
+            // Return as base64 with MIME type prefix
+            Ok(file_manager.encode_to_base64(&data, mime_type))
+        },
+        Err(e) => Err(format!("Failed to get thumbnail: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub fn optimize_image(
+    file_path: String,
+    options: ImageProcessingOptions,
+    file_manager: State<'_, FileManager>,
+) -> Result<String, String> {
+    match file_manager.optimize_image(
+        &file_path, 
+        options.max_width, 
+        options.max_height, 
+        options.quality
+    ) {
+        Ok(data) => {
+            // Determine MIME type
+            let mime_type = mime_guess::from_path(&file_path)
+                .first_or_octet_stream()
+                .to_string();
+            
+            // Return as base64 with MIME type prefix
+            Ok(file_manager.encode_to_base64(&data, &mime_type))
+        },
+        Err(e) => Err(format!("Failed to optimize image: {}", e)),
+    }
+}
+
+// Audio processing commands
+
+#[tauri::command]
+pub fn validate_audio(
+    file_data: String,
+    file_manager: State<'_, FileManager>,
+) -> Result<bool, String> {
+    // Decode the base64 data
+    let data = match file_manager.decode_base64(&file_data) {
+        Ok(data) => data,
+        Err(e) => return Err(format!("Failed to decode audio data: {}", e)),
+    };
+    
+    // Validate the audio data
+    match crate::files::AudioProcessor::validate_audio(&data) {
+        Ok(valid) => Ok(valid),
+        Err(e) => Err(format!("Audio validation failed: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub fn extract_audio_metadata(
+    file_path: String,
+    file_manager: State<'_, FileManager>,
+) -> Result<serde_json::Value, String> {
+    // Get the file data
+    let data = match file_manager.get_file(&file_path) {
+        Ok(data) => data,
+        Err(e) => return Err(format!("Failed to read audio file: {}", e)),
+    };
+    
+    // Extract metadata
+    match crate::files::AudioProcessor::extract_metadata(&data) {
+        Ok(metadata) => Ok(metadata),
+        Err(e) => Err(format!("Failed to extract audio metadata: {}", e)),
+    }
+}
+
+// Text processing commands
+
+#[tauri::command]
+pub fn validate_text(
+    file_data: String,
+    file_manager: State<'_, FileManager>,
+) -> Result<bool, String> {
+    // Decode the base64 data
+    let data = match file_manager.decode_base64(&file_data) {
+        Ok(data) => data,
+        Err(e) => return Err(format!("Failed to decode text data: {}", e)),
+    };
+    
+    // Validate the text data
+    match crate::files::TextProcessor::validate_text(&data) {
+        Ok(valid) => Ok(valid),
+        Err(e) => Err(format!("Text validation failed: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub fn extract_text_metadata(
+    file_path: String,
+    file_manager: State<'_, FileManager>,
+) -> Result<serde_json::Value, String> {
+    // Get the file data
+    let data = match file_manager.get_file(&file_path) {
+        Ok(data) => data,
+        Err(e) => return Err(format!("Failed to read text file: {}", e)),
+    };
+    
+    // Extract metadata
+    match crate::files::TextProcessor::extract_metadata(&data) {
+        Ok(metadata) => Ok(metadata),
+        Err(e) => Err(format!("Failed to extract text metadata: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub fn extract_code_blocks(
+    file_path: String,
+    file_manager: State<'_, FileManager>,
+) -> Result<Vec<(String, String)>, String> {
+    // Get the file data
+    let data = match file_manager.get_file(&file_path) {
+        Ok(data) => data,
+        Err(e) => return Err(format!("Failed to read text file: {}", e)),
+    };
+    
+    // Extract code blocks
+    match crate::files::TextProcessor::extract_code(&data) {
+        Ok(code_blocks) => Ok(code_blocks),
+        Err(e) => Err(format!("Failed to extract code blocks: {}", e)),
     }
 }

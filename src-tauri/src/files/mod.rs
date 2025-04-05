@@ -1,4 +1,8 @@
-// src-tauri/src/files.rs
+// src-tauri/src/files/mod.rs
+mod image;
+mod audio;
+mod text;
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -7,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use tauri::api::path;
 use uuid::Uuid;
 use base64::Engine;
+
+pub use image::ImageProcessor;
+pub use audio::AudioProcessor;
+pub use text::TextProcessor;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileMetadata {
@@ -18,6 +26,7 @@ pub struct FileMetadata {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub thumbnail_path: Option<String>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -88,6 +97,28 @@ impl FileManager {
         // Create relative path from root_dir
         let relative_path = format!("{}/{}/{}", conversation_id, message_id, unique_filename);
         
+        // Generate thumbnail for images
+        let thumbnail_path = if mime_type.starts_with("image/") {
+            self.generate_image_thumbnail(data, &dir_path, &file_id)
+                .ok()
+                .map(|thumb_filename| {
+                    format!("{}/{}/{}", conversation_id, message_id, thumb_filename)
+                })
+        } else {
+            None
+        };
+        
+        // Extract additional metadata based on file type
+        let additional_metadata = if mime_type.starts_with("image/") {
+            ImageProcessor::extract_metadata(data).ok()
+        } else if mime_type.starts_with("audio/") {
+            AudioProcessor::extract_metadata(data).ok()
+        } else if mime_type.starts_with("text/") || mime_type.contains("json") || mime_type.contains("xml") {
+            TextProcessor::extract_metadata(data).ok()
+        } else {
+            None
+        };
+        
         Ok(FileMetadata {
             id: file_id,
             name: file_name.to_string(),
@@ -96,8 +127,23 @@ impl FileManager {
             size_bytes: metadata.len(),
             created_at: now,
             updated_at: now,
-            thumbnail_path: None,
+            thumbnail_path,
+            metadata: additional_metadata,
         })
+    }
+    
+    // Generate a thumbnail for an image
+    fn generate_image_thumbnail(&self, data: &[u8], dir_path: &Path, file_id: &str) -> Result<String, io::Error> {
+        // Generate thumbnail using ImageProcessor
+        let thumbnail_data = ImageProcessor::generate_thumbnail(data, 200, 200)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        
+        // Save thumbnail
+        let thumbnail_filename = format!("{}.thumbnail.jpg", file_id);
+        let thumbnail_path = dir_path.join(&thumbnail_filename);
+        fs::write(&thumbnail_path, thumbnail_data)?;
+        
+        Ok(thumbnail_filename)
     }
     
     // Get a file by its path
@@ -106,9 +152,61 @@ impl FileManager {
         fs::read(full_path)
     }
     
+    // Get a thumbnail for an image file
+    pub fn get_thumbnail(&self, file_path: &str) -> Result<Vec<u8>, io::Error> {
+        // Extract the directory and filename parts
+        let path = Path::new(file_path);
+        let parent = path.parent().unwrap_or(Path::new(""));
+        
+        // Get the file stem (filename without extension)
+        let file_stem = path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+            
+        // Construct the thumbnail path
+        let thumbnail_path = parent.join(format!("{}.thumbnail.jpg", file_stem));
+        let full_path = self.root_dir.join(thumbnail_path);
+        
+        // If thumbnail exists, return it
+        if full_path.exists() {
+            fs::read(full_path)
+        } else {
+            // If no thumbnail exists, generate one on-the-fly
+            let original_data = self.get_file(file_path)?;
+            let thumbnail_data = ImageProcessor::generate_thumbnail(&original_data, 200, 200)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                
+            Ok(thumbnail_data)
+        }
+    }
+    
+    // Optimize an image file
+    pub fn optimize_image(&self, file_path: &str, max_width: u32, max_height: u32, quality: u8) -> Result<Vec<u8>, io::Error> {
+        let original_data = self.get_file(file_path)?;
+        
+        ImageProcessor::optimize_image(&original_data, max_width, max_height, quality)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
+    
     // Delete a file by its path
     pub fn delete_file(&self, file_path: &str) -> Result<bool, io::Error> {
         let full_path = self.root_dir.join(file_path);
+        
+        // Also try to delete the thumbnail if it exists
+        let path = Path::new(file_path);
+        let parent = path.parent().unwrap_or(Path::new(""));
+        let file_stem = path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let thumbnail_path = parent.join(format!("{}.thumbnail.jpg", file_stem));
+        let full_thumbnail_path = self.root_dir.join(thumbnail_path);
+        
+        // Delete the thumbnail if it exists (ignore errors)
+        if full_thumbnail_path.exists() {
+            let _ = fs::remove_file(full_thumbnail_path);
+        }
+        
+        // Delete the main file
         if full_path.exists() {
             fs::remove_file(full_path)?;
             Ok(true)

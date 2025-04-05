@@ -52,6 +52,16 @@ fn main() {
             commands::get_file,
             commands::delete_file,
             commands::cleanup_empty_directories,
+            // Image processing commands
+            commands::get_image_thumbnail,
+            commands::optimize_image,
+            // Audio processing commands
+            commands::validate_audio,
+            commands::extract_audio_metadata,
+            // Text processing commands
+            commands::validate_text,
+            commands::extract_text_metadata,
+            commands::extract_code_blocks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
