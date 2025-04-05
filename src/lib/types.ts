@@ -6,6 +6,18 @@ export interface SystemPrompt {
     updated_at: string;
 }
 
+export interface FileMetadata {
+    id: string;
+    name: string;
+    path: string;
+    mime_type: string;
+    size_bytes: number;
+    created_at: string;
+    updated_at: string;
+    thumbnail_path?: string;
+    metadata?: any;
+}
+
 export interface Attachment {
     id?: string;
     message_id?: string;
@@ -16,6 +28,9 @@ export interface Attachment {
     description?: string;
     created_at?: Date;
     transcript?: string;
+    // New fields for file-based attachments
+    file_path?: string;
+    file_metadata?: FileMetadata;
 }
 
 // For display in UI

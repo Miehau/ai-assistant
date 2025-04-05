@@ -6,17 +6,25 @@
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Paperclip, Send, Square } from "lucide-svelte";
   import { chatService } from "$lib/services/chat";
+  import { fileService } from "$lib/services/fileService";
+  import type { Attachment, FileMetadata } from "$lib/types";
+  import { get } from "svelte/store";
+  import { currentConversation } from "$lib/stores/conversation";
 
   export let currentMessage: string = "";
-  export let attachments: FileAttachment[] = [];
+  export let attachments: Attachment[] = [];
   export let isLoading: boolean = false;
-
-  type FileAttachment = {
-    attachment_type: "audio" | "image" | "text/plain" | string;
-    name: string;
-    data: string;
-    transcript?: string;
-  };
+  
+  // Generate a temporary message ID for file uploads
+  // This will be replaced with the actual message ID when the message is saved
+  const tempMessageId = crypto.randomUUID();
+  
+  // Track upload progress
+  let uploading = false;
+  let uploadProgress: Record<string, number> = {};
+  
+  // Drag and drop state
+  let dragActive = false;
 
   let fileInput: HTMLInputElement;
   const dispatch = createEventDispatcher();
@@ -35,47 +43,135 @@
     });
   }
 
+  // Common function to handle files from both input change and drag-drop
+  async function handleFiles(files: File[]) {
+    const conversationData = get(currentConversation);
+    
+    // If no conversation is selected, create a fallback conversation ID
+    const conversationId = conversationData?.id || "temp-conversation-" + Date.now();
+
+    if (files.length > 0) {
+      // Set uploading state to true
+      uploading = true;
+      
+      try {
+        // Initialize progress for each file
+        files.forEach(file => {
+          uploadProgress[file.name] = 0;
+        });
+        
+        const newAttachments = await Promise.all(files.map(async (file, index) => {
+          // Simulate progress updates (in a real implementation, you would get this from the upload API)
+          const progressInterval = setInterval(() => {
+            if (uploadProgress[file.name] < 90) {
+              uploadProgress[file.name] += 5;
+              uploadProgress = {...uploadProgress};
+            }
+          }, 100);
+          
+          try {
+            // Convert file to base64 for upload
+            const base64Data = await fileToBase64(file);
+            
+            // Determine the attachment type based on file MIME type
+            let attachmentType = "";
+            if (file.type.startsWith('text/') || file.name.match(/\.(txt|md|json|js|ts|py|rs|svelte)$/)) {
+              attachmentType = "text/plain";
+            } else if (file.type.startsWith('audio/')) {
+              attachmentType = "audio";
+            } else if (file.type.startsWith('image/')) {
+              attachmentType = "image";
+            } else {
+              attachmentType = file.type || "application/octet-stream";
+            }
+            
+            // Update progress
+            uploadProgress[file.name] = 95;
+            uploadProgress = {...uploadProgress};
+            
+            // Upload the file to the Rust backend
+            const result = await fileService.uploadFile(
+              base64Data,
+              file.name,
+              file.type || "application/octet-stream",
+              conversationId,
+              tempMessageId
+            );
+            
+            // Complete progress
+            uploadProgress[file.name] = 100;
+            uploadProgress = {...uploadProgress};
+            
+            // Clear interval
+            clearInterval(progressInterval);
+            
+            // Create an attachment with file metadata
+            const attachment: Attachment = {
+              name: file.name,
+              attachment_type: attachmentType as "image" | "audio" | "text", // Cast to valid attachment type
+              data: base64Data, // Keep the data for immediate display
+              file_path: result.path,
+              file_metadata: result
+            };
+            
+            return attachment;
+          } catch (error) {
+            console.error("Error uploading file:", error);
+            
+            // Clear interval and mark as failed
+            clearInterval(progressInterval);
+            uploadProgress[file.name] = -1; // Use -1 to indicate failure
+            uploadProgress = {...uploadProgress};
+            
+            // Fallback to the old approach if upload fails
+            if (file.type.startsWith('text/') || file.name.match(/\.(txt|md|json|js|ts|py|rs|svelte)$/)) {
+              const text = await file.text();
+              return {
+                attachment_type: "text" as const, // Use "text" instead of "text/plain"
+                name: file.name,
+                data: text
+              };
+            } else {
+              // Need to get base64 data again for fallback since it might not be available in this scope
+              const fallbackBase64 = await fileToBase64(file);
+              if (file.type.startsWith('audio/')) {
+                return {
+                  attachment_type: "audio" as const,
+                  name: file.name,
+                  data: fallbackBase64
+                };
+              } else {
+                return {
+                  attachment_type: "image" as const, // Default to image for other types
+                  name: file.name,
+                  data: fallbackBase64
+                };
+              }
+            }
+          }
+        }));
+
+        attachments = [...attachments, ...newAttachments];
+      } catch (error) {
+        console.error("Error processing files:", error);
+      } finally {
+        // Reset uploading state
+        uploading = false;
+        uploadProgress = {};
+      }
+    }
+    
+    // Reset the file input
+    if (fileInput) {
+      fileInput.value = "";
+    }
+  }
+  
+  // Handler for file input change
   async function handleFileChange(event: Event) {
     const input = event.target as HTMLInputElement;
     const files = Array.from(input.files || []);
-
-    if (files.length > 0) {
-        try {
-            const newAttachments = await Promise.all(files.map(async (file) => {
-                if (file.type.startsWith('text/') || file.name.match(/\.(txt|md|json|js|ts|py|rs|svelte)$/)) {
-                    // For text files, read as text directly
-                    const text = await file.text();
-                    return {
-                        attachment_type: "text/plain" as const,
-                        name: file.name,
-                        data: text
-                    };
-                } else if (file.type.startsWith('audio/')) {
-                    // For audio files
-                    const base64 = await fileToBase64(file);
-                    return {
-                        attachment_type: "audio" as const,
-                        name: file.name,
-                        data: base64
-                    };
-                } else {
-                    // For images and other files, use base64
-                    const base64 = await fileToBase64(file);
-                    return {
-                        attachment_type: "image" as const,
-                        name: file.name,
-                        data: base64
-                    };
-                }
-            }));
-
-            attachments = [...attachments, ...newAttachments];
-        } catch (error) {
-            console.error("Error reading files:", error);
-        }
-    }
-    // Reset the input so the same files can be selected again
-    input.value = "";
+    await handleFiles(files);
   }
 
   function handleFileUpload() {
@@ -91,8 +187,127 @@
   }
 </script>
 
+<style>
+  .square-attachment {
+    position: relative;
+    width: 80px;
+    height: 80px;
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: hsl(var(--muted));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .square-attachment-thumbnail {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .square-attachment-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .square-attachment-icon-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  .square-attachment-icon {
+    width: 100%;
+    height: 100%;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .square-attachment-name {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    font-size: 0.7rem;
+    padding: 2px 4px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .square-attachment-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    cursor: pointer;
+  }
+
+  .square-attachment-remove:hover {
+    background-color: rgba(255, 0, 0, 0.7);
+  }
+  
+  /* Drag and drop styles */
+  .drag-active::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    background-color: hsl(var(--primary) / 0.1);
+    border: 2px dashed hsl(var(--primary));
+    border-radius: 0.5rem;
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
+
 <form
   class="relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring"
+  class:drag-active={dragActive}
+  on:dragenter={(e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragActive = true;
+  }}
+  on:dragover={(e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragActive = true;
+  }}
+  on:dragleave={(e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Simple implementation to avoid TypeScript errors
+    dragActive = false;
+  }}
+  on:drop={(e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragActive = false;
+    
+    if (e.dataTransfer?.files.length) {
+      const files = Array.from(e.dataTransfer.files);
+      handleFiles(files);
+    }
+  }}
 >
   <input
     type="file"
@@ -102,6 +317,31 @@
     style="display: none;"
     on:change={handleFileChange}
   />
+  {#if uploading}
+    <div class="px-3 pb-2">
+      {#each Object.entries(uploadProgress) as [fileName, progress]}
+        <div class="mb-2">
+          <div class="flex justify-between text-xs mb-1">
+            <span class="truncate max-w-[200px]">{fileName}</span>
+            <span>
+              {#if progress === -1}
+                <span class="text-destructive">Failed</span>
+              {:else}
+                {progress}%
+              {/if}
+            </span>
+          </div>
+          <div class="h-1 w-full bg-muted rounded-full overflow-hidden">
+            <div 
+              class="h-full {progress === -1 ? 'bg-destructive' : 'bg-primary'} transition-all duration-300" 
+              style="width: {progress === -1 ? '100' : progress}%"
+            ></div>
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
+  
   {#if attachments.length > 0}
     <div class="flex flex-wrap gap-2 px-3 pb-2">
       {#each attachments as attachment, index}
@@ -133,7 +373,7 @@
                       <path d="M6 20a2 2 0 0 0 4 0"></path>
                       <path d="M14 20a2 2 0 0 0 4 0"></path>
                     </svg>
-                  {:else if attachment.attachment_type === "text/plain" || attachment.attachment_type.startsWith("text/")}
+                  {:else if attachment.attachment_type === "text" || attachment.attachment_type === "text/plain"}
                     <svg 
                       class="square-attachment-icon" 
                       xmlns="http://www.w3.org/2000/svg" 
