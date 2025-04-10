@@ -2,21 +2,22 @@
     import { Input } from "$lib/components/ui/input";
     import { Button } from "$lib/components/ui/button";
     import { cn } from "$lib/utils";
-    import { invoke } from "@tauri-apps/api/tauri";
     import { onMount } from "svelte";
     import { Trash2 } from "lucide-svelte";
+    import { apiKeyService } from "$lib/models";
 
     export let provider: { value: string; label: string };
 
     let apiKey = "";
     let isApiKeyFocused = false;
     let isApiKeyHovered = false;
+    let isLoading = false;
 
     $: showApiKey = isApiKeyFocused || isApiKeyHovered;
 
     onMount(async () => {
         try {
-            const savedKey = await invoke<string | null>("get_api_key", { provider: provider.value });
+            const savedKey = await apiKeyService.getApiKey(provider.value);
             if (savedKey) {
                 apiKey = savedKey;
             }
@@ -26,21 +27,31 @@
     });
 
     async function submitApiKey() {
+        isLoading = true;
         try {
-            await invoke<string>("set_api_key", { provider: provider.value, apiKey });
-            console.log(`API key for ${provider.label} updated successfully`);
+            const success = await apiKeyService.setApiKey(provider.value, apiKey);
+            if (success) {
+                console.log(`API key for ${provider.label} updated successfully`);
+            }
         } catch (error) {
             console.error(`Error setting API key for ${provider.label}:`, error);
+        } finally {
+            isLoading = false;
         }
     }
 
     async function deleteApiKey() {
+        isLoading = true;
         try {
-            await invoke<void>("delete_api_key", { provider: provider.value });
-            apiKey = "";
-            console.log(`API key for ${provider.label} deleted successfully`);
+            const success = await apiKeyService.deleteApiKey(provider.value);
+            if (success) {
+                apiKey = "";
+                console.log(`API key for ${provider.label} deleted successfully`);
+            }
         } catch (error) {
             console.error(`Error deleting API key for ${provider.label}:`, error);
+        } finally {
+            isLoading = false;
         }
     }
 </script>

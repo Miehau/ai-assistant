@@ -1,0 +1,242 @@
+{
+  "models": [
+    {
+      "id": "gpt-4o",
+      "name": "GPT-4o",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": true,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 0.7,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "gpt-4o-mini",
+      "name": "GPT-4o Mini",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": true,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 0.7,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "gpt-4-turbo",
+      "name": "GPT-4 Turbo",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": false,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 0.7,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "o1",
+      "name": "O1",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 0.7,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "o1-mini",
+      "name": "O1 Mini",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 0.7,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "gpt-3.5-turbo",
+      "name": "GPT-3.5 Turbo",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": false,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true
+      },
+      "specs": {
+        "contextWindow": 16385,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 0.7,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "dall-e-3",
+      "name": "DALL-E 3",
+      "provider": "openai",
+      "capabilities": {
+        "text": false,
+        "vision": false,
+        "audio": false,
+        "embedding": false,
+        "function_calling": false,
+        "image_generation": true
+      },
+      "specs": {
+        "contextWindow": 4096,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "quality": "standard",
+        "size": "1024x1024"
+      }
+    },
+    {
+      "id": "whisper-1",
+      "name": "Whisper",
+      "provider": "openai",
+      "capabilities": {
+        "text": false,
+        "vision": false,
+        "audio": true,
+        "embedding": false,
+        "function_calling": false,
+        "transcription": true
+      },
+      "specs": {
+        "contextWindow": 0,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "response_format": "json",
+        "temperature": 0
+      }
+    },
+    {
+      "id": "claude-3-5-sonnet-20241022",
+      "name": "Claude 3.5 Sonnet",
+      "provider": "anthropic",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 0.7
+      }
+    },
+    {
+      "id": "claude-3-7-sonnet-20250219",
+      "name": "Claude 3.7 Sonnet",
+      "provider": "anthropic",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 0.7,
+        "top_p": 1
+      }
+    }
+  ]
+}

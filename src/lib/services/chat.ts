@@ -3,6 +3,7 @@ import { OpenAIService } from './openai';
 import { customProviderService } from './customProvider';
 import type { Message, Attachment } from '$lib/types';
 import { conversationService } from './conversation';
+import { modelService } from '$lib/models/modelService';
 import type { Model } from '$lib/types/models';
 import { formatMessages } from './messageFormatting';
 import { AnthropicService } from './anthropic';
@@ -21,11 +22,32 @@ export class ChatService {
   }
 
   private async getModelInfo(modelName: string): Promise<Model> {
+    // First try to get the model from the database
     const models = await invoke<Model[]>('get_models');
-    const selectedModel = models.find(m => m.model_name === modelName);
+    let selectedModel = models.find((m: Model) => m.model_name === modelName);
     
+    // If not found in the database, try to get it from the registry and add it
     if (!selectedModel) {
-      throw new Error(`Model ${modelName} not found`);
+      console.log(`Model ${modelName} not found in database, checking registry`);
+      const registryModels = modelService.getAvailableModelsWithCapabilities();
+      const registryModel = registryModels.find((m: Model) => m.model_name === modelName);
+      
+      if (registryModel) {
+        console.log(`Found model ${modelName} in registry, adding to database`);
+        // Add the model to the database
+        await modelService.addModel({
+          provider: registryModel.provider,
+          model_name: registryModel.model_name,
+          enabled: true,
+          url: '',
+          deployment_name: ''
+        });
+        
+        // Return the registry model
+        return registryModel;
+      }
+      
+      throw new Error(`Model ${modelName} not found in database or registry`);
     }
     
     return selectedModel;

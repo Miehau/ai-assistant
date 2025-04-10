@@ -21,14 +21,20 @@
   import ChatControls from "./chat/ChatControls.svelte";
   import { conversationService } from "$lib/services/conversation";
   import { fade } from "svelte/transition";
+  import { debugModels } from "./debug";
 
   let chatContainer: HTMLElement | null = null;
   let autoScroll = true;
   let isClearing = false;
 
   onMount(async () => {
-    loadModels();
+    await loadModels();
     loadSystemPrompts();
+
+    // Debug models after loading
+    setTimeout(() => {
+      debugModels();
+    }, 500);
 
     // Initial load of messages if there's a current conversation
     const currentConversation = conversationService.getCurrentConversation();

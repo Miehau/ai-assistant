@@ -1,0 +1,39 @@
+{
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "authType": "api_key",
+      "baseUrl": "https://api.openai.com/v1",
+      "defaultHeaders": {
+        "Authorization": "Bearer {api_key}"
+      }
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "authType": "api_key",
+      "baseUrl": "https://api.anthropic.com/v1/messages",
+      "defaultHeaders": {
+        "x-api-key": "{api_key}",
+        "anthropic-version": "2023-06-01"
+      }
+    },
+    {
+      "id": "azure",
+      "name": "Azure OpenAI",
+      "authType": "api_key",
+      "baseUrl": "https://{resource_name}.openai.azure.com/openai/deployments/{deployment_name}",
+      "defaultHeaders": {
+        "api-key": "{api_key}"
+      }
+    },
+    {
+      "id": "custom",
+      "name": "Custom Provider",
+      "authType": "api_key",
+      "baseUrl": "",
+      "defaultHeaders": {}
+    }
+  ]
+}

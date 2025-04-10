@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { chatService } from '$lib/services/chat';
 import { conversationService } from '$lib/services/conversation';
 import { titleGeneratorService } from '$lib/services/titleGenerator';
+import { modelService, apiKeyService } from '$lib/models';
 
 // State stores
 export const messages = writable<Message[]>([]);
@@ -32,8 +33,37 @@ export const hasAttachments = derived(
 // Actions
 export async function loadModels() {
   try {
-    const models = await invoke<Model[]>('get_models');
-    const enabledModels = models.filter(model => model.enabled);
+    // First load API keys to ensure model availability is updated
+    await apiKeyService.loadAllApiKeys();
+    
+    // Get models from both sources
+    const storedModels = await modelService.loadModels();
+    const registryModels = modelService.getAvailableModelsWithCapabilities();
+    
+    // Combine models, prioritizing registry models for their capabilities
+    const combinedModels = [...storedModels];
+    
+    // Add registry models that aren't already in stored models
+    for (const regModel of registryModels) {
+      const existingIndex = combinedModels.findIndex(
+        m => m.model_name === regModel.model_name && m.provider === regModel.provider
+      );
+      
+      if (existingIndex >= 0) {
+        // Update existing model with capabilities and specs
+        combinedModels[existingIndex] = {
+          ...combinedModels[existingIndex],
+          capabilities: regModel.capabilities,
+          specs: regModel.specs
+        };
+      } else {
+        // Add new model from registry
+        combinedModels.push(regModel);
+      }
+    }
+    
+    // Filter to only enabled models
+    const enabledModels = combinedModels.filter(model => model.enabled);
     availableModels.set(enabledModels);
 
     if (enabledModels.length > 0) {

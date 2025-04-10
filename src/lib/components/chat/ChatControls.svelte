@@ -6,6 +6,7 @@
   import type { Model } from "$lib/types/models";
   import type { SystemPrompt } from "$lib/types";
   import type { Selected } from "bits-ui";
+  import { Eye, Headphones, Zap, Database, Brain } from "lucide-svelte";
 
   export let availableModels: Model[] = [];
   export let systemPrompts: SystemPrompt[] = [];
@@ -17,9 +18,10 @@
 
   function selectModel(v: Selected<string> | undefined) {
     if (v) {
+      const model = availableModels.find((m) => m.model_name === v.value);
       selectedModel = {
-        value: v.value,
-        label: `${v.value} • ${availableModels.find((m) => m.model_name === v.value)?.provider ?? ""}`,
+        value: v.value, // This is the technical model_name
+        label: `${model?.name || v.value} • ${model?.provider ?? ""}`,
       };
       dispatch('modelSelect', selectedModel);
     }
@@ -37,6 +39,34 @@
 
   function removeMessages() {
     dispatch('removeMessages');
+  }
+
+  // Group models by provider for better organization in the dropdown
+  function getProviderGroups(models: Model[]) {
+    const groups: {provider: string, models: Model[]}[] = [];
+    
+    // Group models by provider
+    models.forEach(model => {
+      const existingGroup = groups.find(g => g.provider === model.provider);
+      if (existingGroup) {
+        existingGroup.models.push(model);
+      } else {
+        groups.push({
+          provider: model.provider,
+          models: [model]
+        });
+      }
+    });
+    
+    // Sort groups alphabetically by provider name
+    groups.sort((a, b) => a.provider.localeCompare(b.provider));
+    
+    // Sort models within each group by name
+    groups.forEach(group => {
+      group.models.sort((a, b) => a.model_name.localeCompare(b.model_name));
+    });
+    
+    return groups;
   }
 </script>
 
@@ -105,35 +135,91 @@
   </Select.Root>
 
   <Select.Root onSelectedChange={selectModel} selected={selectedModel}>
-    <Select.Trigger class="min-w-[180px] w-fit">
+    <Select.Trigger class="min-w-[180px] w-fit justify-between">
       <Select.Value placeholder="Select a model">
         {#if selectedModel}
           <div class="flex items-center gap-2">
-            <span>{selectedModel.value}</span>
-            {#if selectedModel.label}
-              <span class="text-sm text-muted-foreground">•</span>
-              <span class="text-sm text-muted-foreground">
-                {selectedModel.label.split(" • ")[1] ?? ""}
-              </span>
-            {/if}
+            {#each availableModels as model}
+              {#if model.model_name === selectedModel.value}
+                <span>{model.name || model.model_name}</span>
+              {/if}
+            {/each}
           </div>
         {/if}
       </Select.Value>
     </Select.Trigger>
-    <Select.Content>
+    <Select.Content class="w-[350px] text-xs">
       {#if availableModels.length === 0}
         <Select.Item value="" disabled>No models available</Select.Item>
       {:else}
-        {#each availableModels as model}
-          <Select.Item value={model.model_name}>
-            <div class="flex items-center gap-2 whitespace-nowrap">
-              <span>{model.model_name}</span>
-              <span class="text-sm text-muted-foreground">•</span>
-              <span class="text-sm text-muted-foreground"
-                >{model.provider}</span
-              >
-            </div>
-          </Select.Item>
+        <!-- Group models by provider -->
+        {#each getProviderGroups(availableModels) as group}
+          <div class="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50">
+            {group.provider}
+          </div>
+          
+          {#each group.models as model}
+            <Select.Item value={model.model_name} class="py-2">
+              <div class="flex flex-col gap-1 w-full">
+                <div class="grid grid-cols-[1fr_auto] items-center w-full">
+                  <span class="font-medium text-xs">{model.name || model.model_name}</span>
+                  
+                  {#if model.capabilities}
+                    <div class="flex gap-1 justify-self-end">
+                      {#if model.capabilities.reasoning}
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild let:builder>
+                            <span class="cursor-help">
+                              <Brain class="h-3 w-3 text-amber-500" />
+                            </span>
+                          </Tooltip.Trigger>
+                          <Tooltip.Content side="top">
+                            Advanced reasoning
+                          </Tooltip.Content>
+                        </Tooltip.Root>
+                      {/if}
+                      {#if model.capabilities.vision}
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild let:builder>
+                            <span class="cursor-help">
+                              <Eye class="h-3 w-3 text-blue-500" />
+                            </span>
+                          </Tooltip.Trigger>
+                          <Tooltip.Content side="top">
+                            Vision capability
+                          </Tooltip.Content>
+                        </Tooltip.Root>
+                      {/if}
+                      {#if model.capabilities.audio}
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild let:builder>
+                            <span class="cursor-help">
+                              <Headphones class="h-3 w-3 text-green-500" />
+                            </span>
+                          </Tooltip.Trigger>
+                          <Tooltip.Content side="top">
+                            Audio capability
+                          </Tooltip.Content>
+                        </Tooltip.Root>
+                      {/if}
+                      {#if model.capabilities.embedding}
+                        <Tooltip.Root>
+                          <Tooltip.Trigger asChild let:builder>
+                            <span class="cursor-help">
+                              <Database class="h-3 w-3 text-purple-500" />
+                            </span>
+                          </Tooltip.Trigger>
+                          <Tooltip.Content side="top">
+                            Embedding capability
+                          </Tooltip.Content>
+                        </Tooltip.Root>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            </Select.Item>
+          {/each}
         {/each}
       {/if}
     </Select.Content>

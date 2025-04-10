@@ -3,7 +3,6 @@
     import * as Select from "$lib/components/ui/select";
     import { Button } from "$lib/components/ui/button";
     import * as Card from "$lib/components/ui/card";
-    import { invoke } from "@tauri-apps/api/tauri";
     import type { Selected } from "bits-ui";
     import { slide } from 'svelte/transition';
     import { cubicOut } from 'svelte/easing';
@@ -11,23 +10,23 @@
     import { onMount } from "svelte";
     import { Switch } from "$lib/components/ui/switch";
     import type { Model } from "$lib/types/models";
-    import { Trash2 } from "lucide-svelte";
+    import { Trash2, Zap, Eye, Headphones, Database } from "lucide-svelte";
+    import { modelService, apiKeyService, modelRegistry } from "$lib/models";
 
     let models: Model[] = [];
+    let registryModels: Model[] = [];
 
     // Define the options for the Select component
     type Provider = {
-        value: "openai" | "anthropic" | "azure" | "deepseek" | "custom";
+        value: string;
         label: string;
     };
 
-    const providers: Provider[] = [
-        { value: "openai", label: "OpenAI" },
-        { value: "anthropic", label: "Anthropic" },
-        { value: "azure", label: "Azure" },
-        { value: "deepseek", label: "Deepseek" },
-        { value: "custom", label: "Custom Provider" }
-    ];
+    // Get providers from the registry
+    const providers: Provider[] = modelRegistry.getAllProviders().map(p => ({
+        value: p.id,
+        label: p.name
+    }));
 
     let selectedProvider: Provider = providers[0];
     let modelName = "";
@@ -37,14 +36,21 @@
 
     async function loadModels() {
         try {
-            models = await invoke<Model[]>("get_models");
+            // Load stored models
+            models = await modelService.loadModels();
+            
+            // Load registry models with capabilities
+            registryModels = modelService.getAvailableModelsWithCapabilities();
         } catch (error) {
             console.error("Failed to load models:", error);
         }
     }
 
-    onMount(() => {
-        loadModels();
+    onMount(async () => {
+        // Load API keys first
+        await apiKeyService.loadAllApiKeys();
+        // Then load models
+        await loadModels();
     });
 
     $: formData = {
@@ -66,34 +72,46 @@
         isSubmitting = true;
 
         try {
-            await invoke<string>("add_model", {model: formData});
-            await loadModels();
-            
-            // Reset form
-            modelName = "";
-            deploymentName = "";
-            deploymentUrl = "";
-            customUrl = "";
-            selectedProvider = providers[0];
+            const modelData = {
+                ...formData,
+                enabled: true // Add the required enabled property
+            };
+            const success = await modelService.addModel(modelData);
+            if (success) {
+                await loadModels();
+                
+                // Reset form
+                modelName = "";
+                deploymentName = "";
+                deploymentUrl = "";
+                customUrl = "";
+                selectedProvider = providers[0];
+            }
         } catch (error: any) {
             console.error(error);
         } finally {
             isSubmitting = false;
         }
     }
-    function handleFormModelUpdate(v: Selected<Provider> | undefined) {
+    
+    function handleFormModelUpdate(v: Selected<string> | undefined) {
         if (v) {
-            selectedProvider = v.value;
+            const provider = providers.find(p => p.value === v.value);
+            if (provider) {
+                selectedProvider = provider;
+            }
         }
     }
 
     async function toggleModel(model: Model) {
         try {
-            await invoke("toggle_model", { model: { 
+            const success = await modelService.toggleModel({ 
                 provider: model.provider, 
                 model_name: model.model_name 
-            }});
-            await loadModels();  // Refresh the list
+            });
+            if (success) {
+                await loadModels();  // Refresh the list
+            }
         } catch (error) {
             console.error("Failed to toggle model:", error);
         }
@@ -101,10 +119,23 @@
 
     async function deleteModel(model: Model) {
         try {
-            await invoke("delete_model", { model: model });
-            await loadModels();  // Refresh the list
+            const success = await modelService.deleteModel(model);
+            if (success) {
+                await loadModels();  // Refresh the list
+            }
         } catch (error) {
             console.error("Failed to delete model:", error);
+        }
+    }
+    
+    // Helper function to get capability icon
+    function getCapabilityIcon(capability: string) {
+        switch (capability) {
+            case 'vision': return Eye;
+            case 'audio': return Headphones;
+            case 'embedding': return Database;
+            case 'function_calling': return Zap;
+            default: return null;
         }
     }
 </script>
@@ -131,7 +162,7 @@
                         <Select.Root 
                             selected={selectedProvider}
                             onSelectedChange={handleFormModelUpdate}
-                            class="w-full max-w-sm text-sm">
+                            className="w-full max-w-sm text-sm">
                             <Select.Trigger class="w-full h-8">
                                 <Select.Value placeholder="Select provider" />
                             </Select.Trigger>
