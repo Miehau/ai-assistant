@@ -20,8 +20,8 @@
     if (v) {
       const model = availableModels.find((m) => m.model_name === v.value);
       selectedModel = {
-        value: v.value, // This is the technical model_name
-        label: `${model?.name || v.value} • ${model?.provider ?? ""}`,
+        value: v.value, // This is the technical model_name (ID)
+        label: model?.name || v.value, // Use the human-readable name only
       };
       dispatch('modelSelect', selectedModel);
     }

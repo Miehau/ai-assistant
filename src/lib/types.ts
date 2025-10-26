@@ -38,6 +38,7 @@ export type Message = {
     type: "sent" | "received";
     content: string;
     attachments?: Attachment[];
+    model?: string; // Optional model name for display
 };
 
 // For API communication

@@ -35,13 +35,13 @@ export class ChatService {
       if (registryModel) {
         console.log(`Found model ${modelName} in registry, adding to database`);
         // Add the model to the database
-        await modelService.addModel({
-          provider: registryModel.provider,
-          model_name: registryModel.model_name,
-          enabled: true,
-          url: '',
-          deployment_name: ''
-        });
+        // await modelService.addModel({
+        //   provider: registryModel.provider,
+        //   model_name: registryModel.model_name,
+        //   enabled: true,
+        //   url: '',
+        //   deployment_name: ''
+        // });
         
         // Return the registry model
         return registryModel;

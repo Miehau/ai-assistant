@@ -1,6 +1,150 @@
 {
   "models": [
     {
+      "id": "gpt-5",
+      "name": "GPT-5",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": true,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "gpt-5-mini",
+      "name": "GPT-5 Mini",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": true,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "gpt-5-nano",
+      "name": "GPT-5 Nano",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": true,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "gpt-4-1",
+      "name": "GPT-4.1",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": true,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 1000000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "gpt-4-1-mini",
+      "name": "GPT-4.1 Mini",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": true,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 1000000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "gpt-4-1-nano",
+      "name": "GPT-4.1 Nano",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": true,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 1000000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
+        "top_p": 1
+      }
+    },
+    {
       "id": "gpt-4o",
       "name": "GPT-4o",
       "provider": "openai",
@@ -20,7 +164,7 @@
         }
       },
       "defaultParameters": {
-        "temperature": 0.7,
+        "temperature": 1,
         "top_p": 1
       }
     },
@@ -44,17 +188,17 @@
         }
       },
       "defaultParameters": {
-        "temperature": 0.7,
+        "temperature": 1,
         "top_p": 1
       }
     },
     {
-      "id": "gpt-4-turbo",
-      "name": "GPT-4 Turbo",
+      "id": "o3",
+      "name": "O3",
       "provider": "openai",
       "capabilities": {
         "text": true,
-        "vision": false,
+        "vision": true,
         "audio": false,
         "embedding": false,
         "function_calling": true,
@@ -68,7 +212,31 @@
         }
       },
       "defaultParameters": {
-        "temperature": 0.7,
+        "temperature": 1,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "o3-mini",
+      "name": "O3 Mini",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
         "top_p": 1
       }
     },
@@ -92,7 +260,7 @@
         }
       },
       "defaultParameters": {
-        "temperature": 0.7,
+        "temperature": 1,
         "top_p": 1
       }
     },
@@ -116,7 +284,31 @@
         }
       },
       "defaultParameters": {
-        "temperature": 0.7,
+        "temperature": 1,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "gpt-4-turbo",
+      "name": "GPT-4 Turbo",
+      "provider": "openai",
+      "capabilities": {
+        "text": true,
+        "vision": false,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
         "top_p": 1
       }
     },
@@ -139,7 +331,7 @@
         }
       },
       "defaultParameters": {
-        "temperature": 0.7,
+        "temperature": 1,
         "top_p": 1
       }
     },
@@ -192,6 +384,75 @@
       }
     },
     {
+      "id": "claude-sonnet-4-5-20250929",
+      "name": "Claude Sonnet 4.5",
+      "provider": "anthropic",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1
+      }
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "name": "Claude Haiku 4.5",
+      "provider": "anthropic",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1
+      }
+    },
+    {
+      "id": "claude-opus-4-1-20250805",
+      "name": "Claude Opus 4.1",
+      "provider": "anthropic",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1
+      }
+    },
+    {
       "id": "claude-3-5-sonnet-20241022",
       "name": "Claude 3.5 Sonnet",
       "provider": "anthropic",
@@ -211,7 +472,7 @@
         }
       },
       "defaultParameters": {
-        "temperature": 0.7
+        "temperature": 1
       }
     },
     {
@@ -234,7 +495,7 @@
         }
       },
       "defaultParameters": {
-        "temperature": 0.7,
+        "temperature": 1,
         "top_p": 1
       }
     }

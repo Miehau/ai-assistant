@@ -20,6 +20,15 @@
       }
     },
     {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "authType": "api_key",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "defaultHeaders": {
+        "Authorization": "Bearer {api_key}"
+      }
+    },
+    {
       "id": "azure",
       "name": "Azure OpenAI",
       "authType": "api_key",

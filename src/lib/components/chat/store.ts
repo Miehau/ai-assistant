@@ -136,6 +136,7 @@ export async function sendMessage() {
       type: 'sent',
       content: currentMessageValue,
       attachments: attachmentsValue.length > 0 ? attachmentsValue : undefined,
+      model: selectedModelValue.label, // Include the human-readable model name
     };
     
     messages.update(msgs => [...msgs, userMessage]);

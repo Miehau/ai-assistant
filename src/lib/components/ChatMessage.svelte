@@ -28,6 +28,7 @@
   export let type: "sent" | "received";
   export let content: string;
   export let attachments: Attachment[] | undefined = undefined;
+  export let model: string | undefined = undefined;
 
   // Track loading states for attachments
   let loadingStates: Record<string, boolean> = {};
@@ -248,6 +249,9 @@
       ? 'bg-muted'
       : 'text-primary-foreground bg-primary/30'}"
   >
+    {#if type === 'sent' && model}
+      <div class="text-[10px] text-primary-foreground/50 mb-1 text-right">{model}</div>
+    {/if}
     <div class="prose prose-sm dark:prose-invert max-w-none">
       <div
         class="markdown-content"
