@@ -4,10 +4,18 @@ import { sveltekit } from "@sveltejs/kit/vite";
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
-  define: {global: "window"},
+  define: { global: "window" },
 
   build: {
     sourcemap: true,
+  },
+
+  optimizeDeps: {
+    exclude: ["bits-ui"],
+  },
+
+  ssr: {
+    noExternal: ["bits-ui"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
