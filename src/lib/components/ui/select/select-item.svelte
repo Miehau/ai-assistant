@@ -2,15 +2,13 @@
 	import { Select as SelectPrimitive } from "bits-ui";
 	import Check from "svelte-radix/Check.svelte";
 	import { cn } from "$lib/utils.js";
+	import type { Snippet } from "svelte";
 
-	type $$Props = SelectPrimitive.ItemProps;
-	type $$Events = Required<SelectPrimitive.ItemEvents>;
+	type $$Props = SelectPrimitive.ItemProps & {
+		children?: Snippet<[{ selected: boolean }]>;
+	};
 
-	let className: $$Props["class"] = undefined;
-	export let value: $$Props["value"];
-	export let label: $$Props["label"] = undefined;
-	export let disabled: $$Props["disabled"] = undefined;
-	export { className as class };
+	let { value, label = undefined, disabled = undefined, class: className, children: contentSnippet, ...restProps }: $$Props = $props();
 </script>
 
 <SelectPrimitive.Item
@@ -21,17 +19,17 @@
 		"relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
 		className
 	)}
-	{...$$restProps}
-	on:click
-	on:pointermove
-	on:focusin
+	{...restProps}
 >
-	<span class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
-		<SelectPrimitive.ItemIndicator>
-			<Check class="h-4 w-4" />
-		</SelectPrimitive.ItemIndicator>
-	</span>
-	<slot>
-		{label || value}
-	</slot>
+	{#snippet children({ selected })}
+		<span class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
+			{#if selected}
+				<Check class="h-4 w-4" />
+			{/if}
+		</span>
+		{@render contentSnippet?.({ selected })}
+		{#if !contentSnippet}
+			{label || value}
+		{/if}
+	{/snippet}
 </SelectPrimitive.Item>

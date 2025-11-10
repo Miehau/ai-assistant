@@ -46,19 +46,6 @@
     }
   });
 
-  afterUpdate(() => {
-    if (chatContainer) {
-      scrollToBottom();
-    }
-  });
-
-  function scrollToBottom() {
-    if (chatContainer && autoScroll) {
-      const newScrollTop = chatContainer.scrollHeight - chatContainer.clientHeight;
-      chatContainer.scrollTop = newScrollTop;
-    }
-  }
-
   function handleSendMessage() {
     sendMessage();
   }
