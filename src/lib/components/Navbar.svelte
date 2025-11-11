@@ -23,93 +23,102 @@
   }
 </script>
 
-<aside class="inset-y fixed left-0 z-20 flex h-full flex-col border-r">
-  <div class="border-b p-2">
-    <Button variant="outline" size="icon" aria-label="Home">
-      <Triangle class="size-5 fill-foreground" />
-    </Button>
-  </div>
-  <nav class="grid gap-1 p-2">
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
-        <a href="/">
-          <Button
-            variant="ghost"
-            size="icon"
-            class="rounded-lg {currentPath === '/' ? 'bg-muted' : ''}"
-            aria-label="Playground"
-            builders={[builder]}
-          >
-            <SquareTerminal class="size-5" />
-          </Button>
-        </a>
+<Tooltip.Provider>
+  <aside class="inset-y fixed left-0 z-20 flex h-full flex-col glass-panel border-r-0">
+    <div class="border-b border-white/10 p-2">
+      <Button variant="outline" size="icon" aria-label="Home" class="hover-glow-green">
+        <Triangle class="size-5 fill-foreground" />
+      </Button>
+    </div>
+    <nav class="grid gap-1 p-2">
+      <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        {#snippet child({ props })}
+          <a href="/" {...props}>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="rounded-lg transition-all {currentPath === '/' ? 'glass-light glow-green' : 'hover:glass-badge'}"
+              aria-label="Playground"
+            >
+              <SquareTerminal class="size-5" />
+            </Button>
+          </a>
+        {/snippet}
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Playground</Tooltip.Content>
     </Tooltip.Root>
     <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
-        <a href="/models">
-          <Button
-            variant="ghost"
-            size="icon"
-            class="rounded-lg {currentPath === '/models' ? 'bg-muted' : ''}"
-            aria-label="Models"
-            builders={[builder]}
-          >
-            <CodeXML class="size-5" />
-          </Button>
-        </a>
+      <Tooltip.Trigger asChild>
+        {#snippet child({ props })}
+          <a href="/models" {...props}>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="rounded-lg transition-all {currentPath === '/models' ? 'glass-light glow-green' : 'hover:glass-badge'}"
+              aria-label="Models"
+            >
+              <CodeXML class="size-5" />
+            </Button>
+          </a>
+        {/snippet}
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>API</Tooltip.Content>
     </Tooltip.Root>
     <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
-        <a href="/assistants">
-          <Button
-            variant="ghost"
-            size="icon"
-            class="rounded-lg {currentPath === '/assistants' ? 'bg-muted' : ''}"
-            aria-label="Assistants"
-            builders={[builder]}
-          >
-            <Users class="size-5" />
-          </Button>
-        </a>
+      <Tooltip.Trigger asChild>
+        {#snippet child({ props })}
+          <a href="/assistants" {...props}>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="rounded-lg transition-all {currentPath === '/assistants' ? 'glass-light glow-green' : 'hover:glass-badge'}"
+              aria-label="Assistants"
+            >
+              <Users class="size-5" />
+            </Button>
+          </a>
+        {/snippet}
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Assistants</Tooltip.Content>
     </Tooltip.Root>
     <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
-        <Button
-          variant="ghost"
-          size="icon"
-          class="rounded-lg {isConversationDrawerOpen ? 'bg-muted' : ''}"
-          aria-label="Conversation History"
-          builders={[builder]}
-          on:click={toggleConversationDrawer}
-        >
-          <History class="size-5" />
-        </Button>
+      <Tooltip.Trigger asChild>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            variant="ghost"
+            size="icon"
+            class="rounded-lg transition-all {isConversationDrawerOpen ? 'glass-light glow-green' : 'hover:glass-badge'}"
+            aria-label="Conversation History"
+            onclick={toggleConversationDrawer}
+          >
+            <History class="size-5" />
+          </Button>
+        {/snippet}
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Conversation History</Tooltip.Content>
     </Tooltip.Root>
   </nav>
   <nav class="mt-auto grid gap-1 p-2">
     <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
-        <Button
-          variant="ghost"
-          size="icon"
-          class="mt-auto rounded-lg"
-          aria-label="Help"
-          builders={[builder]}
-        >
-          <LifeBuoy class="size-5" />
-        </Button>
+      <Tooltip.Trigger asChild>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            variant="ghost"
+            size="icon"
+            class="mt-auto rounded-lg transition-all hover:glass-badge"
+            aria-label="Help"
+          >
+            <LifeBuoy class="size-5" />
+          </Button>
+        {/snippet}
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Help</Tooltip.Content>
     </Tooltip.Root>
   </nav>
 </aside>
+</Tooltip.Provider>
 
 <ConversationDrawer bind:isOpen={isConversationDrawerOpen} />

@@ -202,6 +202,7 @@
   }
 </script>
 
+<Tooltip.Provider>
 <style>
   .square-attachment {
     position: relative;
@@ -209,11 +210,19 @@
     height: 80px;
     border-radius: 8px;
     overflow: hidden;
-    background-color: hsl(var(--muted));
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    transition: all 0.3s ease;
+  }
+
+  .square-attachment:hover {
+    box-shadow: 0 0 20px rgba(82, 183, 136, 0.3);
+    transform: scale(1.05);
   }
 
   .square-attachment-thumbnail {
@@ -295,7 +304,7 @@
 </style>
 
 <form
-  class="relative overflow-hidden rounded-lg border bg-background focus-within:ring-1 focus-within:ring-ring"
+  class="relative overflow-hidden rounded-lg glass-panel border-white/10 focus-within:ring-1 focus-within:ring-ring focus-within:ring-primary focus-within:glow-green transition-all duration-300"
   class:drag-active={dragActive}
   on:dragenter={(e) => {
     e.preventDefault();
@@ -347,8 +356,8 @@
             </span>
           </div>
           <div class="h-1 w-full bg-muted rounded-full overflow-hidden">
-            <div 
-              class="h-full {progress === -1 ? 'bg-destructive' : 'bg-primary'} transition-all duration-300" 
+            <div
+              class="h-full {progress === -1 ? 'bg-destructive' : 'gradient-primary'} transition-all duration-300"
               style="width: {progress === -1 ? '100' : progress}%"
             ></div>
           </div>
@@ -362,7 +371,8 @@
       {#each attachments as attachment, index}
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
-            <div class="square-attachment">
+            {#snippet child({ props })}
+            <div class="square-attachment" {...props}>
               {#if attachment.attachment_type === "image"}
                 <div class="square-attachment-thumbnail">
                   <img 
@@ -432,6 +442,7 @@
                 </svg>
               </button>
             </div>
+            {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Content side="top">
             {attachment.name}
@@ -450,17 +461,19 @@
   />
   <div class="flex items-center p-3 pt-0">
     <Tooltip.Root>
-      <Tooltip.Trigger asChild let:builder>
+      <Tooltip.Trigger asChild>
+        {#snippet child({ props })}
         <Button
-          builders={[builder]}
+          {...props}
           variant="ghost"
           size="icon"
           type="button"
-          on:click={handleFileUpload}
+          onclick={handleFileUpload}
         >
           <Paperclip class="size-4" />
           <span class="sr-only">Upload File</span>
         </Button>
+        {/snippet}
       </Tooltip.Trigger>
       <Tooltip.Content side="top">Upload File (Text or Image)</Tooltip.Content>
     </Tooltip.Root>
@@ -471,7 +484,7 @@
       type="button"
       on:click={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
       size="sm"
-      class="ml-auto gap-1.5"
+      class="ml-auto gap-1.5 {!isLoading ? 'gradient-primary hover:glow-green transition-all duration-300' : ''}"
       variant={isLoading ? "destructive" : "default"}
     >
       {#if isLoading}
@@ -482,3 +495,4 @@
     </Button>
   </div>
 </form>
+</Tooltip.Provider>

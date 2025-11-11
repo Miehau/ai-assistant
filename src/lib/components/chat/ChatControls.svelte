@@ -76,29 +76,31 @@
 
 <div class="flex flex-wrap items-center gap-2">
     <Tooltip.Root>
-        <Tooltip.Trigger asChild let:builder>
-            <Button
-                builders={[builder]}
-                variant="ghost"
-                size="icon"
-                on:click={removeMessages}
-            >
-                <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
+        <Tooltip.Trigger asChild>
+            {#snippet child({ props })}
+                <Button
+                    {...props}
+                    variant="ghost"
+                    size="icon"
+                    onclick={removeMessages}
                 >
-                    <path d="M5 12h14" />
-                    <path d="M12 5v14" />
-                </svg>
-                <span class="sr-only">New Conversation</span>
-            </Button>
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <path d="M5 12h14" />
+                        <path d="M12 5v14" />
+                    </svg>
+                    <span class="sr-only">New Conversation</span>
+                </Button>
+            {/snippet}
         </Tooltip.Trigger>
         <Tooltip.Content side="top">Start New Conversation</Tooltip.Content>
     </Tooltip.Root>
@@ -115,16 +117,16 @@
             }
         }}
     >
-        <Select.Trigger class="min-w-[180px] w-fit mr-2">
-            <Select.Value placeholder="Select system prompt">
-                {#if selectedSystemPrompt}
-                    <div class="flex items-center gap-2">
-                        <span class="truncate max-w-[150px]"
-                            >{selectedSystemPrompt.name}</span
-                        >
-                    </div>
-                {/if}
-            </Select.Value>
+        <Select.Trigger class="min-w-[180px] w-fit mr-2 glass-badge hover:glass-light transition-all">
+            {#if selectedSystemPrompt}
+                <div class="flex items-center gap-2">
+                    <span class="truncate max-w-[150px]"
+                        >{selectedSystemPrompt.name}</span
+                    >
+                </div>
+            {:else}
+                <span class="text-muted-foreground">Select system prompt</span>
+            {/if}
         </Select.Trigger>
         <Select.Portal>
             <Select.Content>
@@ -150,18 +152,12 @@
     </Select.Root>
 
     <Select.Root onSelectedChange={selectModel} selected={selectedModel}>
-        <Select.Trigger class="min-w-[180px] w-fit justify-between">
-            <Select.Value placeholder="Select a model">
-                {#if selectedModel}
-                    <div class="flex items-center gap-2">
-                        {#each availableModels as model}
-                            {#if model.model_name === selectedModel.value}
-                                <span>{model.name || model.model_name}</span>
-                            {/if}
-                        {/each}
-                    </div>
-                {/if}
-            </Select.Value>
+        <Select.Trigger class="min-w-[180px] w-fit justify-between glass-badge hover:glass-light transition-all">
+            {#if selectedModel?.value}
+                <span>{selectedModel.label}</span>
+            {:else}
+                <span class="text-muted-foreground">Select a model</span>
+            {/if}
         </Select.Trigger>
         <Select.Portal>
             <Select.Content class="w-[350px] text-xs">
@@ -202,15 +198,17 @@
                                                         <Tooltip.Root>
                                                             <Tooltip.Trigger
                                                                 asChild
-                                                                let:builder
                                                             >
-                                                                <span
-                                                                    class="cursor-help"
-                                                                >
-                                                                    <Brain
-                                                                        class="h-3 w-3 text-amber-500"
-                                                                    />
-                                                                </span>
+                                                                {#snippet child({ props })}
+                                                                    <span
+                                                                        {...props}
+                                                                        class="cursor-help inline-block"
+                                                                    >
+                                                                        <Brain
+                                                                            class="h-3 w-3 text-accent-amber drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]"
+                                                                        />
+                                                                    </span>
+                                                                {/snippet}
                                                             </Tooltip.Trigger>
                                                             <Tooltip.Content
                                                                 side="top"
@@ -224,15 +222,17 @@
                                                         <Tooltip.Root>
                                                             <Tooltip.Trigger
                                                                 asChild
-                                                                let:builder
                                                             >
-                                                                <span
-                                                                    class="cursor-help"
-                                                                >
-                                                                    <Eye
-                                                                        class="h-3 w-3 text-blue-500"
-                                                                    />
-                                                                </span>
+                                                                {#snippet child({ props })}
+                                                                    <span
+                                                                        {...props}
+                                                                        class="cursor-help inline-block"
+                                                                    >
+                                                                        <Eye
+                                                                            class="h-3 w-3 text-accent-cyan drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]"
+                                                                        />
+                                                                    </span>
+                                                                {/snippet}
                                                             </Tooltip.Trigger>
                                                             <Tooltip.Content
                                                                 side="top"
@@ -246,15 +246,17 @@
                                                         <Tooltip.Root>
                                                             <Tooltip.Trigger
                                                                 asChild
-                                                                let:builder
                                                             >
-                                                                <span
-                                                                    class="cursor-help"
-                                                                >
-                                                                    <Headphones
-                                                                        class="h-3 w-3 text-green-500"
-                                                                    />
-                                                                </span>
+                                                                {#snippet child({ props })}
+                                                                    <span
+                                                                        {...props}
+                                                                        class="cursor-help inline-block"
+                                                                    >
+                                                                        <Headphones
+                                                                            class="h-3 w-3 text-primary drop-shadow-[0_0_4px_rgba(82,183,136,0.5)]"
+                                                                        />
+                                                                    </span>
+                                                                {/snippet}
                                                             </Tooltip.Trigger>
                                                             <Tooltip.Content
                                                                 side="top"
@@ -267,15 +269,17 @@
                                                         <Tooltip.Root>
                                                             <Tooltip.Trigger
                                                                 asChild
-                                                                let:builder
                                                             >
-                                                                <span
-                                                                    class="cursor-help"
-                                                                >
-                                                                    <Database
-                                                                        class="h-3 w-3 text-purple-500"
-                                                                    />
-                                                                </span>
+                                                                {#snippet child({ props })}
+                                                                    <span
+                                                                        {...props}
+                                                                        class="cursor-help inline-block"
+                                                                    >
+                                                                        <Database
+                                                                            class="h-3 w-3 text-accent-purple drop-shadow-[0_0_4px_rgba(168,85,247,0.5)]"
+                                                                        />
+                                                                    </span>
+                                                                {/snippet}
                                                             </Tooltip.Trigger>
                                                             <Tooltip.Content
                                                                 side="top"
@@ -300,36 +304,38 @@
     </Select.Root>
 
     <Tooltip.Root>
-        <Tooltip.Trigger asChild let:builder>
-            <Button
-                builders={[builder]}
-                variant="ghost"
-                size="icon"
-                type="button"
-                on:click={toggleStreaming}
-            >
-                <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    class={streamingEnabled
-                        ? "text-primary"
-                        : "text-muted-foreground"}
+        <Tooltip.Trigger asChild>
+            {#snippet child({ props })}
+                <Button
+                    {...props}
+                    variant="ghost"
+                    size="icon"
+                    type="button"
+                    onclick={toggleStreaming}
                 >
-                    <path
-                        d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
-                    />
-                    <path d="M12 12v9" />
-                    <path d="m8 17 4 4 4-4" />
-                </svg>
-                <span class="sr-only">Toggle Streaming</span>
-            </Button>
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        class={streamingEnabled
+                            ? "text-primary"
+                            : "text-muted-foreground"}
+                    >
+                        <path
+                            d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
+                        />
+                        <path d="M12 12v9" />
+                        <path d="m8 17 4 4 4-4" />
+                    </svg>
+                    <span class="sr-only">Toggle Streaming</span>
+                </Button>
+            {/snippet}
         </Tooltip.Trigger>
         <Tooltip.Content side="top">
             {streamingEnabled ? "Disable" : "Enable"} Streaming

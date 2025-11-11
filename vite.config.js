@@ -1,9 +1,21 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
 
+// Workaround for vite-plugin-svelte incorrectly parsing script blocks as CSS
+const fixSvelteStylePlugin = {
+  name: 'fix-svelte-style',
+  enforce: 'pre',
+  load(id) {
+    // Return empty CSS for incorrectly identified CSS modules from bits-ui
+    if (id.includes('node_modules/bits-ui') && id.includes('?svelte&type=style&lang.css')) {
+      return '';
+    }
+  },
+};
+
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
-  plugins: [sveltekit()],
+  plugins: [fixSvelteStylePlugin, sveltekit()],
   define: { global: "window" },
 
   build: {
