@@ -20,6 +20,7 @@
   import ChatInput from "./chat/ChatInput.svelte";
   import ChatControls from "./chat/ChatControls.svelte";
   import { conversationService } from "$lib/services/conversation";
+  import { currentConversation } from "$lib/stores/conversation";
   import { fade } from "svelte/transition";
   import { debugModels } from "./debug";
 
@@ -86,10 +87,13 @@
   </div>
   
   <div class="sticky bottom-0 bg-muted/50">
-    <ChatInput 
+    <ChatInput
       bind:currentMessage={$currentMessage}
       bind:attachments={$attachments}
       isLoading={$isLoading}
+      modelId={$selectedModel.value}
+      messages={$messages}
+      systemPrompt={$selectedSystemPrompt?.content || ''}
       on:sendMessage={handleSendMessage}
     >
       <div slot="controls">
@@ -99,6 +103,7 @@
           bind:selectedModel={$selectedModel}
           bind:selectedSystemPrompt={$selectedSystemPrompt}
           bind:streamingEnabled={$streamingEnabled}
+          conversationId={$currentConversation?.id}
           on:toggleStreaming={handleToggleStreaming}
           on:removeMessages={handleClearConversation}
         />

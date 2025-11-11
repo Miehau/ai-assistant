@@ -7,14 +7,18 @@
   import { Paperclip, Send, Square } from "lucide-svelte";
   import { chatService } from "$lib/services/chat";
   import { fileService } from "$lib/services/fileService";
-  import type { Attachment, FileMetadata } from "$lib/types";
+  import type { Attachment, FileMetadata, Message } from "$lib/types";
   import { get } from "svelte/store";
   import { currentConversation } from "$lib/stores/conversation";
   import { open } from '@tauri-apps/api/dialog';
+  import CostEstimator from "./CostEstimator.svelte";
 
   export let currentMessage: string = "";
   export let attachments: Attachment[] = [];
   export let isLoading: boolean = false;
+  export let modelId: string = "";
+  export let messages: Message[] = [];
+  export let systemPrompt: string = "";
   
   // Generate a temporary message ID for file uploads
   // This will be replaced with the actual message ID when the message is saved
@@ -304,7 +308,7 @@
 </style>
 
 <form
-  class="relative overflow-hidden rounded-lg glass-panel border-white/10 focus-within:ring-1 focus-within:ring-ring focus-within:ring-primary focus-within:glow-green transition-all duration-300"
+  class="relative overflow-hidden rounded-lg glass-panel border-white/10 focus-within:ring-1 focus-within:ring-ring focus-within:ring-primary focus-within:glow-green transition-all duration-300 mx-4"
   class:drag-active={dragActive}
   on:dragenter={(e) => {
     e.preventDefault();
@@ -477,9 +481,20 @@
       </Tooltip.Trigger>
       <Tooltip.Content side="top">Upload File (Text or Image)</Tooltip.Content>
     </Tooltip.Root>
-    
+
     <slot name="controls"></slot>
-    
+
+    <!-- Token meter and cost estimator -->
+    {#if modelId}
+      <CostEstimator
+        {modelId}
+        messageText={currentMessage}
+        {messages}
+        {systemPrompt}
+        {attachments}
+      />
+    {/if}
+
     <Button
       type="button"
       on:click={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
