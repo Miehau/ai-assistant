@@ -126,13 +126,11 @@ export interface BranchStats {
     branch_points: number;
 }
 
-// Extended message type with tree information
-export interface MessageWithTree extends Message {
-    id?: string;
-    has_branches?: boolean;
-    branch_count?: number;
-    is_branch_point?: boolean;
-}
+/**
+ * @deprecated Use MessageWithBranch from types/message.ts instead
+ * Kept for backward compatibility
+ */
+export type MessageWithTree = MessageWithBranch;
 
 // Branch state for UI
 export interface BranchState {

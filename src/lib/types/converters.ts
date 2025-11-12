@@ -18,7 +18,7 @@ import type { DisplayMessage, APIMessage, DBMessage } from './message';
  */
 export function toDisplayMessage(db: DBMessage): DisplayMessage {
   return {
-    id: db.id,
+    id: db.id!,  // Assert non-null since DB messages should have IDs
     type: db.role === 'user' ? 'sent' : 'received',
     content: db.content,
     attachments: db.attachments,
