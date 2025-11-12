@@ -173,6 +173,9 @@
 
       return `
         <div class="code-block-wrapper relative group mb-4">
+          <div class="code-block-header">
+            <span class="code-language-label">${language}</span>
+          </div>
           <button
             class="copy-button opacity-0 group-hover:opacity-100 absolute top-1 right-2
             p-1.5 rounded-md hover:bg-white/10 transition-all duration-200"
@@ -371,10 +374,11 @@
   :global(.markdown-content pre) {
     background-color: rgb(24 24 27); /* zinc-900 */
 
-    border-radius: 0.5rem;
-    padding: 0.25rem 0.75rem 0.75rem;
+    border-bottom-left-radius: 0.5rem;
+    border-bottom-right-radius: 0.5rem;
+    padding: 0.5rem 0.75rem 0.75rem;
     overflow-x: auto;
-    margin: 0.5rem 0;
+    margin: 0;
   }
 
   :global(.markdown-content pre code) {
@@ -384,7 +388,6 @@
     white-space: pre-wrap;
     background-color: transparent;
     display: block;
-    padding-top: 0.5rem;
   }
 
   /* Override Prism.js theme colors for better contrast */
@@ -445,6 +448,22 @@
     border-radius: 0.5rem;
     overflow: hidden;
     transition: all 300ms ease;
+  }
+
+  :global(.code-block-header) {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(59, 130, 246, 0.3)); /* purple to blue gradient */
+    padding: 0.375rem 0.75rem 0.25rem;
+    border-top-left-radius: 0.5rem;
+    border-top-right-radius: 0.5rem;
+    margin-bottom: 0;
+  }
+
+  :global(.code-language-label) {
+    color: rgb(212 212 216); /* zinc-300 - more visible */
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
   :global(.code-block-wrapper .copy-button) {

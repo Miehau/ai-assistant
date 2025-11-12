@@ -145,8 +145,8 @@
   // Track last streaming message length to avoid triggering on every chunk
   let lastStreamingLength = 0;
 
-  // Only scroll when messages actually change or streaming updates significantly
-  $: if (messages.length !== lastMessageCount || ($streamingMessage && $streamingMessage.length - lastStreamingLength > 50)) {
+  // Only scroll when messages actually change or streaming updates
+  $: if (messages.length !== lastMessageCount || ($streamingMessage && $streamingMessage.length !== lastStreamingLength)) {
     lastMessageCount = messages.length;
     lastStreamingLength = $streamingMessage.length;
     // Use requestAnimationFrame for smoother scrolling
