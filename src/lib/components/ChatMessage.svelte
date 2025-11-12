@@ -6,24 +6,25 @@
   import { onMount } from "svelte";
   import Prism from "prismjs";
   import "prismjs/themes/prism-tomorrow.css";
+
+  // Lazy-load Prism languages on demand using autoloader
+  import "prismjs/plugins/autoloader/prism-autoloader";
+
+  // Pre-load only the most common languages for instant availability
   import "prismjs/components/prism-javascript";
-  import "prismjs/components/prism-json";
   import "prismjs/components/prism-typescript";
   import "prismjs/components/prism-python";
-  import "prismjs/components/prism-bash";
-  import "prismjs/components/prism-markdown";
-  import "prismjs/components/prism-java";
-  import "prismjs/components/prism-kotlin";
-  import "prismjs/components/prism-rust";
-  import "prismjs/components/prism-sql";
-  import "prismjs/components/prism-mermaid";
-  import "prismjs/components/prism-typescript";
-  import "prismjs/components/prism-git";
-  import "prismjs/components/prism-docker";
-  import "prismjs/components/prism-csv";
+
+  // Configure autoloader to load other languages on demand
+  // This reduces initial bundle size while maintaining full language support
+  if (typeof Prism !== 'undefined' && Prism.plugins && Prism.plugins.autoloader) {
+    Prism.plugins.autoloader.languages_path =
+      'https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/components/';
+  }
   import type { Attachment } from "$lib/types";
   import { fileService } from "$lib/services/fileService";
   import { onDestroy } from "svelte";
+  import { getCachedParse, setCachedParse } from "$lib/utils/markdownCache";
 
   export let type: "sent" | "received";
   export let content: string;
@@ -129,10 +130,18 @@
   let parseTimeout: number | null = null;
   let lastContent = '';
 
-  // Parse markdown with debouncing
+  // Parse markdown with caching to prevent redundant parsing on remount
   function parseMarkdown(text: string) {
+    // Check cache first
+    const cached = getCachedParse(text);
+    if (cached) {
+      return cached;
+    }
+
     try {
-      return marked(text);
+      const result = marked(text);
+      setCachedParse(text, result);
+      return result;
     } catch (error) {
       console.error('Markdown parsing error:', error);
       return escapeHtml(text);
@@ -163,13 +172,21 @@
     renderer.code = ({ text, lang }: RendererCode) => {
       const code = text || "";
       const language = lang || "text";
-      const highlightedCode = language
-        ? Prism.highlight(
-            code,
-            Prism.languages[language] || Prism.languages.text,
-            language,
-          )
-        : escapeHtml(code);
+
+      // Prism autoloader will load languages on demand
+      // If language isn't loaded yet, fall back to plain text
+      let highlightedCode: string;
+      try {
+        if (language && Prism.languages[language]) {
+          highlightedCode = Prism.highlight(code, Prism.languages[language], language);
+        } else {
+          // Use plain text or escaped HTML if language not available
+          highlightedCode = escapeHtml(code);
+        }
+      } catch (error) {
+        console.warn(`Failed to highlight ${language} code:`, error);
+        highlightedCode = escapeHtml(code);
+      }
 
       return `
         <div class="code-block-wrapper relative group mb-4">
@@ -203,8 +220,18 @@
       renderer: renderer,
     });
 
-    // Initial parse
-    htmlContent = parseMarkdown(content);
+    // Defer initial parse to idle time to avoid blocking the main thread
+    // This allows the component to mount quickly and parse during idle time
+    const parseWhenIdle = () => {
+      htmlContent = parseMarkdown(content);
+    };
+
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(parseWhenIdle);
+    } else {
+      // Fallback for browsers without requestIdleCallback support
+      setTimeout(parseWhenIdle, 0);
+    }
   });
 
   onDestroy(() => {
