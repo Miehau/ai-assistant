@@ -8,6 +8,8 @@
   import { X, Trash2 } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import { goto } from "$app/navigation";
+  import SvelteVirtualList from "@humanspeak/svelte-virtual-list";
+  import { CONVERSATION_ITEM_HEIGHT } from "$lib/utils/virtualHeights";
 
   export let isOpen = false;
 
@@ -133,9 +135,13 @@
           <p>No previous conversations found</p>
         </div>
       {:else}
-        <ul class="divide-y">
-          {#each conversations as conversation (conversation.id)}
-            <li class="relative group">
+        <SvelteVirtualList
+          items={conversations}
+          defaultEstimatedItemHeight={CONVERSATION_ITEM_HEIGHT}
+          containerClass="divide-y"
+        >
+          {#snippet renderItem(conversation)}
+            <div class="relative group">
               <button
                 class="w-full text-left p-4 hover:bg-muted transition-colors"
                 on:click={() => selectConversation(conversation)}
@@ -145,16 +151,16 @@
                   {formatDate(conversation.created_at)}
                 </div>
               </button>
-              <button 
+              <button
                 class="absolute right-3 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-muted-foreground/10 rounded"
                 on:click={(e) => deleteConversation(e, conversation.id)}
                 title="Delete conversation"
               >
                 <Trash2 class="h-4 w-4 text-muted-foreground hover:text-destructive" />
               </button>
-            </li>
-          {/each}
-        </ul>
+            </div>
+          {/snippet}
+        </SvelteVirtualList>
       {/if}
     </div>
   </div>
