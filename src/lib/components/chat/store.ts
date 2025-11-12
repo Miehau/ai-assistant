@@ -20,6 +20,10 @@ export const attachments = writable<any[]>([]);
 export const currentMessage = writable<string>('');
 export const isFirstMessage = writable<boolean>(true);
 
+// Streaming-specific stores for smooth updates without array reactivity
+export const streamingMessage = writable<string>('');
+export const isStreaming = writable<boolean>(false);
+
 // Derived stores
 export const hasAttachments = derived(
   attachments,
@@ -105,6 +109,11 @@ export function toggleStreaming() {
   });
 }
 
+// Helper to generate unique message IDs
+function generateMessageId(): string {
+  return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
 export async function sendMessage() {
   let currentMessageValue = '';
   let attachmentsValue: any[] = [];
@@ -130,23 +139,24 @@ export async function sendMessage() {
       selectedModelObject = models.find(m => m.model_name === selectedModelValue);
     })();
 
-    // Create and display user message immediately
+    // Create and display user message immediately with unique ID
     const userMessage: Message = {
+      id: generateMessageId(),
       type: 'sent',
       content: currentMessageValue,
       attachments: attachmentsValue.length > 0 ? attachmentsValue : undefined,
       model: selectedModelObject ? `${selectedModelObject.model_name} • ${selectedModelObject.provider}` : selectedModelValue,
     };
-    
+
     messages.update(msgs => [...msgs, userMessage]);
-    
+
     // Clear input fields
     currentMessage.set('');
     attachments.set([]);
-    
+
     // Default system prompt
     const defaultSystemPrompt = 'You are a helpful assistant.';
-    
+
     // Get system prompt content safely
     let systemPromptContent = defaultSystemPrompt;
     if (selectedSystemPromptValue) {
@@ -154,36 +164,47 @@ export async function sendMessage() {
       const prompt = selectedSystemPromptValue as any;
       systemPromptContent = prompt.content || defaultSystemPrompt;
     }
-    
+
     // Get the current conversation
     const currentConversation = conversationService.getCurrentConversation();
-    
+
     // Check if this is the first message in a new conversation
     const shouldGenerateTitle = isFirstMessageValue;
     console.log('Should generate title?', shouldGenerateTitle, 'isFirstMessage:', isFirstMessageValue);
-    
+
     // Set isFirstMessage to false after the first message
     if (isFirstMessageValue) {
       isFirstMessage.set(false);
     }
-    
+
+    // Initialize streaming state - no array updates during streaming!
+    isStreaming.set(true);
+    streamingMessage.set('');
+
     const result = await chatService.handleSendMessage(
       currentMessageValue,
       selectedModelValue,
       (chunk: string) => {
-        messages.update(msgs => {
-          if (!msgs[msgs.length - 1] || msgs[msgs.length - 1].type !== 'received') {
-            return [...msgs, { type: 'received', content: chunk }];
-          } else {
-            const updatedMsgs = [...msgs];
-            updatedMsgs[updatedMsgs.length - 1].content += chunk;
-            return updatedMsgs;
-          }
-        });
+        // Update only the streaming store - no array reactivity!
+        streamingMessage.update(content => content + chunk);
       },
       systemPromptContent,
       attachmentsValue,
     );
+
+    // Streaming complete - add final message to array (single update)
+    const finalContent = get(streamingMessage);
+    if (finalContent) {
+      messages.update(msgs => [...msgs, {
+        id: generateMessageId(),
+        type: 'received',
+        content: finalContent
+      }]);
+    }
+
+    // Clean up streaming state
+    isStreaming.set(false);
+    streamingMessage.set('');
     
     // Generate a title for the conversation if this is the first message
     console.log('Generating title for conversation:', currentConversation?.id);
@@ -210,6 +231,9 @@ export function clearConversation() {
   messages.set([]);
   // Reset first message flag
   isFirstMessage.set(true);
+  // Clear streaming state
+  isStreaming.set(false);
+  streamingMessage.set('');
   conversationService.setCurrentConversation(null);
   // Reset branch context
   chatService.resetBranchContext();

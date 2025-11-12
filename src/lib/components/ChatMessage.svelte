@@ -24,11 +24,16 @@
   import type { Attachment } from "$lib/types";
   import { fileService } from "$lib/services/fileService";
   import { onDestroy } from "svelte";
+  import BranchButton from "./chat/BranchButton.svelte";
 
   export let type: "sent" | "received";
   export let content: string;
   export let attachments: Attachment[] | undefined = undefined;
   export let model: string | undefined = undefined;
+  export let messageId: string | undefined = undefined;
+  export let conversationId: string | undefined = undefined;
+  export let hasBranches: boolean = false;
+  export let branchCount: number = 0;
 
   // Track loading states for attachments
   let loadingStates: Record<string, boolean> = {};
@@ -124,6 +129,39 @@
       .replace(/'/g, "&#039;");
   }
 
+  // Progressive rendering: show raw text immediately, parse in background
+  let htmlContent = '';
+  let parseTimeout: number | null = null;
+  let lastContent = '';
+
+  // Parse markdown with debouncing
+  function parseMarkdown(text: string) {
+    try {
+      return marked(text);
+    } catch (error) {
+      console.error('Markdown parsing error:', error);
+      return escapeHtml(text);
+    }
+  }
+
+  // Progressive rendering during rapid updates (streaming)
+  $: {
+    if (content !== lastContent) {
+      lastContent = content;
+
+      // Clear existing timeout
+      if (parseTimeout !== null) {
+        clearTimeout(parseTimeout);
+      }
+
+      // Parse with minimal delay (16ms = 1 frame) for smooth streaming
+      parseTimeout = window.setTimeout(() => {
+        htmlContent = parseMarkdown(content);
+        parseTimeout = null;
+      }, 16) as unknown as number;
+    }
+  }
+
   onMount(async () => {
     const renderer = new marked.Renderer();
 
@@ -140,23 +178,23 @@
 
       return `
         <div class="code-block-wrapper relative group">
-          <div class="absolute top-0 left-0 right-0 h-8 bg-zinc-800 rounded-t-lg flex items-center px-3">
+          <div class="absolute top-0 left-0 right-0 h-8 code-block-gradient-bar rounded-t-lg flex items-center px-3">
             <div class="flex items-center gap-2">
-              <span class="text-[10px] uppercase tracking-wider text-zinc-400 font-medium">${language}</span>
+              <span class="text-[10px] uppercase tracking-wider text-white/90 font-medium">${language}</span>
             </div>
           </div>
           <button
-            class="copy-button opacity-0 group-hover:opacity-100 absolute top-1 right-2 
-            p-1.5 rounded-md hover:bg-zinc-700 transition-all duration-200"
+            class="copy-button opacity-0 group-hover:opacity-100 absolute top-1 right-2
+            p-1.5 rounded-md hover:bg-white/10 transition-all duration-200"
             data-copy="${encodeURIComponent(code)}"
           >
-            <svg class="w-3.5 h-3.5 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="w-3.5 h-3.5 text-white/90" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
           </button>
           <div class="mt-8">
-            <pre class="!bg-zinc-900 !border-zinc-700"><code class="language-${language}">${highlightedCode}</code></pre>
+            <pre class="code-block-glass"><code class="language-${language}">${highlightedCode}</code></pre>
           </div>
         </div>
       `;
@@ -173,10 +211,17 @@
       gfm: true,
       renderer: renderer,
     });
+
+    // Initial parse
+    htmlContent = parseMarkdown(content);
   });
 
-  // For sent messages, we'll let marked handle the escaping
-  $: htmlContent = marked(content);
+  onDestroy(() => {
+    // Clean up timeout on component destruction
+    if (parseTimeout !== null) {
+      clearTimeout(parseTimeout);
+    }
+  });
 
   async function handleInteraction(event: MouseEvent | KeyboardEvent) {
     // Only handle Enter or Space key for keyboard events
@@ -246,12 +291,21 @@
 <div class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}">
   <div
     class="rounded-2xl px-4 py-2 max-w-[75%] {type === 'received'
-      ? 'bg-muted'
-      : 'text-primary-foreground bg-primary/30'}"
+      ? 'message-glass-ai'
+      : 'text-primary-foreground message-glass-user'}"
   >
-    {#if type === 'sent' && model}
-      <div class="text-[10px] text-primary-foreground/50 mb-1 text-right">{model}</div>
-    {/if}
+    <!-- Message header with model and branch button -->
+    <div class="flex items-center justify-between gap-2 mb-1">
+      {#if type === 'sent' && model}
+        <div class="text-[10px] text-primary-foreground/50 text-right flex-1">{model}</div>
+      {/if}
+
+      {#if messageId && conversationId}
+        <div class="flex-shrink-0">
+          <BranchButton {messageId} {conversationId} {hasBranches} {branchCount} />
+        </div>
+      {/if}
+    </div>
     <div class="prose prose-sm dark:prose-invert max-w-none">
       <div
         class="markdown-content"
@@ -260,7 +314,11 @@
         role="textbox"
         tabindex="0"
       >
-        {@html htmlContent}
+        {#if htmlContent}
+          {@html htmlContent}
+        {:else}
+          <div style="white-space: pre-wrap;">{content}</div>
+        {/if}
       </div>
       {#if attachments && attachments.length > 0}
         <div class="mt-2 space-y-2">
@@ -406,39 +464,17 @@
     margin: 1rem 0;
     border-radius: 0.5rem;
     overflow: hidden;
-    transition: all 150ms ease;
-    background-color: rgb(24 24 27); /* zinc-900 */
-    border: 1px solid rgb(63 63 70); /* zinc-700 */
-  }
-
-  :global(.code-block-wrapper:hover) {
-    border-color: hsl(var(--primary) / 0.5);
+    transition: all 300ms ease;
   }
 
   :global(.code-block-wrapper .copy-button) {
     opacity: 1;
   }
 
-  /* Adjust backgrounds for different message types */
-  :global(.bg-muted .markdown-content pre) {
-    background-color: hsl(var(--background));
-  }
-
-  :global(.bg-primary .markdown-content pre) {
-    background-color: hsl(var(--background));
-    border-color: rgba(255, 255, 255, 0.1);
-  }
-
-  :global(.bg-primary .code-block-wrapper) {
-    background-color: hsl(var(--background));
-    border-color: rgba(255, 255, 255, 0.1);
-  }
-
-  :global(.bg-primary .code-block-wrapper .bg-gradient-to-r) {
-    background: linear-gradient(
-      to right,
-      rgba(255, 255, 255, 0.1),
-      transparent
-    );
+  /* Ensure glass effects work within message bubbles */
+  :global(.message-glass-ai .code-block-wrapper),
+  :global(.message-glass-user .code-block-wrapper) {
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(20px);
   }
 </style>

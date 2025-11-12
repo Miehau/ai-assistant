@@ -4,14 +4,19 @@
   import { fade, fly, scale } from "svelte/transition";
   import { backOut } from "svelte/easing";
   import type { Message } from "$lib/types";
+  import { streamingMessage, isStreaming } from "./store";
 
   export let messages: Message[] = [];
   export let chatContainer: HTMLElement | null = null;
   export let autoScroll = true;
+  export let conversationId: string | undefined = undefined;
 
   let lastScrollHeight = 0;
   let lastScrollTop = 0;
   let scrollTimeout: NodeJS.Timeout | null = null;
+  let lastMessageCount = 0;
+  let scrollThrottleTimeout: number | null = null;
+  let resizeThrottleTimeout: number | null = null;
 
   function preserveScrollFromBottom() {
     if (chatContainer) {
@@ -32,17 +37,33 @@
     }
   }
 
-  // Add resize observer
+  // Throttled version to reduce frequency of scroll preservation
+  function throttledPreserveScroll() {
+    if (resizeThrottleTimeout !== null) {
+      return; // Skip if already scheduled
+    }
+
+    resizeThrottleTimeout = window.setTimeout(() => {
+      preserveScrollFromBottom();
+      resizeThrottleTimeout = null;
+    }, 100) as unknown as number; // Throttle to max 10 times per second
+  }
+
+  // Add resize observer with throttling
   onMount(() => {
     if (chatContainer) {
       const resizeObserver = new ResizeObserver(() => {
-        preserveScrollFromBottom();
+        throttledPreserveScroll();
       });
 
       resizeObserver.observe(chatContainer);
 
       return () => {
         resizeObserver.disconnect();
+        // Clean up throttle timeout
+        if (resizeThrottleTimeout !== null) {
+          clearTimeout(resizeThrottleTimeout);
+        }
       };
     }
   });
@@ -78,6 +99,7 @@
       return () => {
         chatContainer?.removeEventListener('scroll', handleScroll);
         if (scrollTimeout) clearTimeout(scrollTimeout);
+        if (scrollThrottleTimeout !== null) clearTimeout(scrollThrottleTimeout);
       };
     }
   });
@@ -91,10 +113,26 @@
     }
   }
 
-  // Scroll to bottom when messages change
-  afterUpdate(() => {
-    scrollToBottom();
-  });
+  // Throttled scroll to bottom to reduce DOM thrashing
+  function throttledScrollToBottom() {
+    if (scrollThrottleTimeout !== null) {
+      return; // Skip if already scheduled
+    }
+
+    scrollThrottleTimeout = window.setTimeout(() => {
+      scrollToBottom();
+      scrollThrottleTimeout = null;
+    }, 16) as unknown as number; // ~60fps
+  }
+
+  // Only scroll when messages actually change or streaming updates
+  $: if (messages.length !== lastMessageCount || $streamingMessage) {
+    lastMessageCount = messages.length;
+    // Use requestAnimationFrame for smoother scrolling
+    requestAnimationFrame(() => {
+      throttledScrollToBottom();
+    });
+  }
 </script>
 
 <div
@@ -102,7 +140,7 @@
   class="h-full overflow-y-auto pr-4 space-y-4 w-full"
   on:scroll={handleScroll}
 >
-  {#each messages as msg, i (i)}
+  {#each messages as msg, i (msg.id || `${msg.type}-${i}`)}
     <div
       in:fly={{ y: 10, duration: 150, delay: i * 10, easing: backOut }}
       out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
@@ -112,9 +150,25 @@
         type={msg.type}
         content={msg.content}
         attachments={msg.attachments}
+        messageId={msg.id}
+        conversationId={conversationId}
       />
     </div>
   {/each}
+
+  <!-- Streaming message displayed separately to avoid array reactivity -->
+  {#if $isStreaming && $streamingMessage}
+    <div
+      in:fly={{ y: 10, duration: 150, easing: backOut }}
+      class="w-full message-container"
+    >
+      <ChatMessage
+        type="received"
+        content={$streamingMessage}
+        conversationId={conversationId}
+      />
+    </div>
+  {/if}
 </div>
 
 <style>
