@@ -104,18 +104,18 @@
 </script>
 
 {#if isOpen}
-  <div 
-    class="fixed inset-y-0 left-[58px] z-10 w-80 bg-background border-r shadow-lg"
+  <div
+    class="fixed inset-y-0 left-[58px] z-10 w-80 bg-background border-r shadow-lg flex flex-col"
     transition:fly={{ x: -320, duration: 200 }}
   >
-    <div class="flex items-center justify-between p-4 border-b">
+    <div class="flex items-center justify-between p-4 border-b bg-background shrink-0">
       <h2 class="text-lg font-semibold">Conversation History</h2>
-      <Button variant="ghost" size="icon" on:click={() => isOpen = false}>
+      <Button variant="ghost" size="icon" onclick={() => isOpen = false}>
         <X class="h-4 w-4" />
       </Button>
     </div>
-    
-    <div class="overflow-y-auto h-[calc(100vh-64px)]">
+
+    <div class="flex-1 overflow-y-auto min-h-0 relative">
       {#if loading}
         <div class="flex justify-center items-center h-32">
           <div class="loading-spinner"></div>
@@ -123,9 +123,9 @@
       {:else if error}
         <div class="p-4 text-destructive">
           <p>Error: {error}</p>
-          <button 
-            class="text-sm text-primary mt-2 underline" 
-            on:click={loadConversations}
+          <button
+            class="text-sm text-primary mt-2 underline"
+            onclick={loadConversations}
           >
             Try again
           </button>
@@ -144,7 +144,7 @@
             <div class="relative group">
               <button
                 class="w-full text-left p-4 hover:bg-muted transition-colors"
-                on:click={() => selectConversation(conversation)}
+                onclick={() => selectConversation(conversation)}
               >
                 <div class="font-medium truncate pr-8">{getPreviewText(conversation)}</div>
                 <div class="text-xs text-muted-foreground mt-1">
@@ -153,7 +153,7 @@
               </button>
               <button
                 class="absolute right-3 top-1/2 transform -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-muted-foreground/10 rounded"
-                on:click={(e) => deleteConversation(e, conversation.id)}
+                onclick={(e) => deleteConversation(e, conversation.id)}
                 title="Delete conversation"
               >
                 <Trash2 class="h-4 w-4 text-muted-foreground hover:text-destructive" />
