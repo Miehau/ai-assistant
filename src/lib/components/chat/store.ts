@@ -7,6 +7,8 @@ import { chatService } from '$lib/services/chat';
 import { conversationService } from '$lib/services/conversation';
 import { titleGeneratorService } from '$lib/services/titleGenerator';
 import { modelService, apiKeyService } from '$lib/models';
+import { v4 as uuidv4 } from 'uuid';
+import { branchStore } from '$lib/stores/branches';
 
 // State stores
 export const messages = writable<Message[]>([]);
@@ -126,24 +128,18 @@ export function toggleStreaming() {
   });
 }
 
-// Helper to generate unique message IDs
+// Helper to generate unique message IDs using UUID v4
 function generateMessageId(): string {
-  return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  return uuidv4();
 }
 
 export async function sendMessage() {
-  let currentMessageValue = '';
-  let attachmentsValue: any[] = [];
-  let selectedModelValue: string = '';
-  let selectedSystemPromptValue: SystemPrompt | null = null;
-  let isFirstMessageValue = false;
-
-  // Get current values from stores
-  currentMessage.subscribe(value => { currentMessageValue = value; })();
-  attachments.subscribe(value => { attachmentsValue = [...value]; })();
-  selectedModel.subscribe(value => { selectedModelValue = value; })();
-  selectedSystemPrompt.subscribe(value => { selectedSystemPromptValue = value; })();
-  isFirstMessage.subscribe(value => { isFirstMessageValue = value; })();
+  // Get current values from stores using get() instead of subscribe
+  const currentMessageValue = get(currentMessage);
+  const attachmentsValue = [...get(attachments)];
+  const selectedModelValue = get(selectedModel);
+  const selectedSystemPromptValue = get(selectedSystemPrompt);
+  const isFirstMessageValue = get(isFirstMessage);
 
   if (!currentMessageValue.trim() && attachmentsValue.length === 0) return;
 
@@ -151,10 +147,8 @@ export async function sendMessage() {
 
   try {
     // Find the model object to get its display name
-    let selectedModelObject: Model | undefined;
-    availableModels.subscribe(models => {
-      selectedModelObject = models.find(m => m.model_name === selectedModelValue);
-    })();
+    const models = get(availableModels);
+    const selectedModelObject = models.find(m => m.model_name === selectedModelValue);
 
     // Create and display user message immediately with unique ID
     const userMessage: Message = {
@@ -198,6 +192,9 @@ export async function sendMessage() {
     isStreaming.set(true);
     streamingMessage.set('');
 
+    // Generate assistant message ID before streaming
+    const assistantMessageId = generateMessageId();
+
     const result = await chatService.handleSendMessage(
       currentMessageValue,
       selectedModelValue,
@@ -207,13 +204,15 @@ export async function sendMessage() {
       },
       systemPromptContent,
       attachmentsValue,
+      userMessage.id,  // Pass user message ID
+      assistantMessageId  // Pass assistant message ID
     );
 
     // Streaming complete - add final message to array (single update)
     const finalContent = get(streamingMessage);
     if (finalContent) {
       messages.update(msgs => [...msgs, {
-        id: generateMessageId(),
+        id: assistantMessageId,  // Use the same ID
         type: 'received',
         content: finalContent
       }]);
@@ -254,6 +253,8 @@ export function clearConversation() {
   conversationService.setCurrentConversation(null);
   // Reset branch context
   chatService.resetBranchContext();
+  // Reset branch store
+  branchStore.reset();
 }
 
 // Initialize streaming setting

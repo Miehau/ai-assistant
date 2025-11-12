@@ -21,12 +21,75 @@
   import ChatControls from "./chat/ChatControls.svelte";
   import { conversationService, currentConversation } from "$lib/services/conversation";
   import { chatService } from "$lib/services/chat";
+  import { branchService } from "$lib/services/branchService";
+  import { branchStore } from "$lib/stores/branches";
   import { fade } from "svelte/transition";
   import { debugModels } from "./debug";
 
   let chatContainer: HTMLElement | null = null;
   let autoScroll = true;
   let isClearing = false;
+
+  // Track previous IDs to prevent infinite loops
+  let previousConversationId: string | null = null;
+  let previousBranchId: string | null = null;
+  let isLoadingBranches = false;
+  let isLoadingMessages = false;
+
+  // Load branches for the current conversation
+  async function loadBranches(conversationId: string) {
+    // Prevent re-entry and infinite loops
+    if (isLoadingBranches || previousConversationId === conversationId) {
+      return;
+    }
+
+    try {
+      isLoadingBranches = true;
+      previousConversationId = conversationId;
+
+      const branches = await branchService.getConversationBranches(conversationId);
+      const mainBranch = branches.find(b => b.name === 'Main') || branches[0];
+      branchStore.setBranches(branches);
+      if (mainBranch) {
+        branchStore.setCurrentBranch(mainBranch.id);
+      }
+      console.log('Loaded branches:', branches);
+    } catch (error) {
+      console.error('Failed to load branches:', error);
+    } finally {
+      isLoadingBranches = false;
+    }
+  }
+
+  // Load messages for a specific branch
+  async function loadBranchMessages(branchId: string) {
+    // Prevent re-entry and infinite loops
+    if (isLoadingMessages || previousBranchId === branchId) {
+      return;
+    }
+
+    try {
+      isLoadingMessages = true;
+      previousBranchId = branchId;
+
+      const branchPath = await branchService.getBranchPath(branchId);
+
+      // Convert to display format
+      const branchMessages = branchPath.messages.map(msg => ({
+        id: msg.id,
+        type: msg.role === 'user' ? 'sent' : 'received',
+        content: msg.content,
+        attachments: msg.attachments || []
+      }));
+
+      $messages = branchMessages;
+      console.log(`Switched to branch "${branchPath.branch.name}" with ${branchMessages.length} messages`);
+    } catch (error) {
+      console.error('Failed to load branch messages:', error);
+    } finally {
+      isLoadingMessages = false;
+    }
+  }
 
   onMount(async () => {
     await loadModels();
@@ -40,15 +103,34 @@
     // Initial load of messages if there's a current conversation
     const currentConversation = conversationService.getCurrentConversation();
     if (currentConversation) {
-      const loadedMessages = await conversationService.getDisplayHistory(
-        currentConversation.id,
-      );
-      $messages = loadedMessages;
-
       // Initialize branch context for existing conversation
       await chatService.initializeBranchContext(currentConversation.id);
+
+      // Load branches for this conversation
+      await loadBranches(currentConversation.id);
+
+      // Load messages for the current branch
+      if ($branchStore.currentBranchId) {
+        await loadBranchMessages($branchStore.currentBranchId);
+      } else {
+        // Fallback: load all messages if no branch set
+        const loadedMessages = await conversationService.getDisplayHistory(
+          currentConversation.id
+        );
+        $messages = loadedMessages;
+      }
     }
   });
+
+  // Watch for conversation changes and reload branches
+  $: if ($currentConversation?.id) {
+    loadBranches($currentConversation.id);
+  }
+
+  // Watch for branch changes and reload messages
+  $: if ($branchStore.currentBranchId && $currentConversation?.id) {
+    loadBranchMessages($branchStore.currentBranchId);
+  }
 
   function handleSendMessage() {
     sendMessage();
@@ -62,13 +144,19 @@
     if ($messages.length > 0) {
       isClearing = true;
       clearConversation();
-      
+
+      // Reset tracking IDs to allow fresh loads
+      previousConversationId = null;
+      previousBranchId = null;
+
       // Reset the clearing state almost immediately - just enough time for a brief visual feedback
       setTimeout(() => {
         isClearing = false;
       }, 200); // Very short delay for visual feedback
     } else {
       clearConversation();
+      previousConversationId = null;
+      previousBranchId = null;
     }
   }
 </script>

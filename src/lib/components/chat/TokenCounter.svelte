@@ -24,21 +24,50 @@
   const usage = $derived($currentConversationUsage);
   const cost = $derived($formattedCost);
 
-  // Calculate live token estimation
-  const displayTokens = $derived(() => {
-    const baseTokens = usage?.total_tokens || 0;
+  // Debounced values for token estimation
+  let debouncedCurrentMessage = $state('');
+  let debouncedStreamingContent = $state('');
+  let typingDebounceTimeout: number | null = null;
+  let streamingDebounceTimeout: number | null = null;
 
-    // Estimate tokens from current message being typed
-    const typingEstimate = currentMessage ? estimateTokens(currentMessage) : 0;
+  // Debounce current message changes (300ms)
+  $effect(() => {
+    if (typingDebounceTimeout !== null) {
+      clearTimeout(typingDebounceTimeout);
+    }
+    typingDebounceTimeout = window.setTimeout(() => {
+      debouncedCurrentMessage = currentMessage;
+      typingDebounceTimeout = null;
+    }, 300) as unknown as number;
+  });
 
-    // Estimate tokens from streaming AI response
-    let streamingEstimate = 0;
+  // Debounce streaming content changes (200ms)
+  $effect(() => {
     if (isLoading && messages.length > 0) {
       const lastMessage = messages[messages.length - 1];
       if (lastMessage.type === 'received') {
-        streamingEstimate = estimateTokens(lastMessage.content);
+        if (streamingDebounceTimeout !== null) {
+          clearTimeout(streamingDebounceTimeout);
+        }
+        streamingDebounceTimeout = window.setTimeout(() => {
+          debouncedStreamingContent = lastMessage.content;
+          streamingDebounceTimeout = null;
+        }, 200) as unknown as number;
       }
+    } else {
+      debouncedStreamingContent = '';
     }
+  });
+
+  // Calculate live token estimation using debounced values
+  const displayTokens = $derived(() => {
+    const baseTokens = usage?.total_tokens || 0;
+
+    // Estimate tokens from current message being typed (debounced)
+    const typingEstimate = debouncedCurrentMessage ? estimateTokens(debouncedCurrentMessage) : 0;
+
+    // Estimate tokens from streaming AI response (debounced)
+    const streamingEstimate = debouncedStreamingContent ? estimateTokens(debouncedStreamingContent) : 0;
 
     const total = baseTokens + typingEstimate + streamingEstimate;
     const isEstimating = typingEstimate > 0 || streamingEstimate > 0;

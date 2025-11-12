@@ -183,6 +183,8 @@ export class ChatService {
     onStreamResponse: (chunk: string) => void,
     systemPrompt?: string,
     attachments: Attachment[] = [],
+    userMessageId?: string,
+    assistantMessageId?: string,
   ) {
     try {
       this.currentController = new AbortController();
@@ -235,69 +237,72 @@ export class ChatService {
         this.currentBranchId = mainBranch.id;
       }
 
-      // Step 8: Save both messages to the conversation
-      const [userMessageId, assistantMessageId] = await Promise.all([
-        conversationService.saveMessage('user', message.content, message.attachments || []),
-        conversationService.saveMessage('assistant', modelResponse, [])
+      // Step 8: Save both messages to the conversation with their IDs
+      const [savedUserMessageId, savedAssistantMessageId] = await Promise.all([
+        conversationService.saveMessage('user', message.content, message.attachments || [], undefined, userMessageId),
+        conversationService.saveMessage('assistant', modelResponse, [], undefined, assistantMessageId)
       ]);
 
-      // Step 9: Create tree nodes for both messages
+      // Step 9: Create tree nodes for both messages in parallel
       try {
-        // User message links to last message as parent
-        await branchService.createMessageTreeNode(
-          userMessageId,
-          this.lastMessageId,
-          this.currentBranchId,
-          false // Not a branch point by default
-        );
-
-        // Assistant message links to user message as parent
-        await branchService.createMessageTreeNode(
-          assistantMessageId,
-          userMessageId,
-          this.currentBranchId,
-          false // Not a branch point by default
-        );
+        // Create both tree nodes simultaneously since they're independent
+        await Promise.all([
+          branchService.createMessageTreeNode(
+            savedUserMessageId,
+            this.lastMessageId,
+            this.currentBranchId,
+            false // Not a branch point by default
+          ),
+          branchService.createMessageTreeNode(
+            savedAssistantMessageId,
+            savedUserMessageId,
+            this.currentBranchId,
+            false // Not a branch point by default
+          )
+        ]);
 
         // Update last message ID to assistant message
-        this.lastMessageId = assistantMessageId;
+        this.lastMessageId = savedAssistantMessageId;
       } catch (branchError) {
         // Don't fail the chat if branch tracking fails
         console.warn('Failed to create message tree nodes:', branchError);
       }
 
-      // Step 10: Track usage if available
-      if (usage && assistantMessageId) {
-        try {
-          const cost = calculateCost(
-            selectedModel.model_name,
-            usage.prompt_tokens,
-            usage.completion_tokens
-          );
+      // Step 10: Track usage in background (non-blocking)
+      if (usage && savedAssistantMessageId) {
+        // Run usage tracking in background without blocking the response
+        Promise.resolve().then(async () => {
+          try {
+            const cost = calculateCost(
+              selectedModel.model_name,
+              usage.prompt_tokens,
+              usage.completion_tokens
+            );
 
-          // Save usage data for the assistant message
-          await invoke('save_message_usage', {
-            input: {
-              message_id: assistantMessageId,
-              model_name: selectedModel.model_name,
-              prompt_tokens: usage.prompt_tokens,
-              completion_tokens: usage.completion_tokens,
-              total_tokens: usage.prompt_tokens + usage.completion_tokens,
-              estimated_cost: cost
-            }
-          });
+            // Save usage data and update summary in parallel
+            const [, updatedUsage] = await Promise.all([
+              invoke('save_message_usage', {
+                input: {
+                  message_id: savedAssistantMessageId,
+                  model_name: selectedModel.model_name,
+                  prompt_tokens: usage.prompt_tokens,
+                  completion_tokens: usage.completion_tokens,
+                  total_tokens: usage.prompt_tokens + usage.completion_tokens,
+                  estimated_cost: cost
+                }
+              }),
+              invoke<ConversationUsageSummary>('update_conversation_usage', {
+                conversationId: conversation.id
+              })
+            ]);
 
-          // Update conversation usage summary and capture the updated data
-          const updatedUsage = await invoke<ConversationUsageSummary>('update_conversation_usage', {
-            conversationId: conversation.id
-          });
-
-          // Update the store to refresh the UI immediately
-          currentConversationUsage.set(updatedUsage);
-        } catch (usageError) {
-          // Don't fail the chat if usage tracking fails
-          console.warn('Failed to save usage data:', usageError);
-        }
+            // Update the store to refresh the UI
+            currentConversationUsage.set(updatedUsage);
+          } catch (usageError) {
+            // Don't fail the chat if usage tracking fails
+            console.warn('Failed to save usage data:', usageError);
+          }
+        });
       }
 
       return {

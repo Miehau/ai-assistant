@@ -7,6 +7,7 @@
     import type { SystemPrompt, Message } from "$lib/types";
     import { Eye, Headphones, Zap, Database, Brain } from "lucide-svelte";
     import TokenCounter from "./TokenCounter.svelte";
+    import BranchSwitcher from "./BranchSwitcher.svelte";
 
     export let availableModels: Model[] = [];
     export let systemPrompts: SystemPrompt[] = [];
@@ -35,12 +36,12 @@
         dispatch("removeMessages");
     }
 
-    // Group models by provider for better organization in the dropdown
-    function getProviderGroups(models: Model[]) {
+    // Memoized provider groups - only recalculates when availableModels changes
+    $: providerGroups = (() => {
         const groups: { provider: string; models: Model[] }[] = [];
 
         // Group models by provider
-        models.forEach((model) => {
+        availableModels.forEach((model) => {
             const existingGroup = groups.find(
                 (g) => g.provider === model.provider,
             );
@@ -65,7 +66,7 @@
         });
 
         return groups;
-    }
+    })();
 </script>
 
 <div class="flex items-center justify-between w-full gap-2">
@@ -144,7 +145,7 @@
                         >
                     {:else}
                         <!-- Group models by provider -->
-                        {#each getProviderGroups(availableModels) as group}
+                        {#each providerGroups as group}
                             <div
                                 class="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50"
                             >
@@ -279,8 +280,13 @@
     </Select.Root>
     </div>
 
-    <!-- Right section: Token counter and utility buttons -->
+    <!-- Right section: Branch switcher, token counter, and utility buttons -->
     <div class="flex items-center gap-1">
+        <!-- Branch switcher - show when conversationId exists -->
+        {#if conversationId}
+            <BranchSwitcher {conversationId} />
+        {/if}
+
         <!-- Token usage counter - always visible -->
         <TokenCounter
             {conversationId}

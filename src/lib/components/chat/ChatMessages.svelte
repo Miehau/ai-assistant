@@ -130,6 +130,7 @@
   }
 
   // Throttled scroll to bottom to reduce DOM thrashing
+  // Use longer throttle during streaming to reduce performance impact
   function throttledScrollToBottom() {
     if (scrollThrottleTimeout !== null) {
       return; // Skip if already scheduled
@@ -138,12 +139,16 @@
     scrollThrottleTimeout = window.setTimeout(() => {
       scrollToBottom();
       scrollThrottleTimeout = null;
-    }, 16) as unknown as number; // ~60fps
+    }, 100) as unknown as number; // Increased from 16ms to 100ms to reduce frequency
   }
 
-  // Only scroll when messages actually change or streaming updates
-  $: if (messages.length !== lastMessageCount || $streamingMessage) {
+  // Track last streaming message length to avoid triggering on every chunk
+  let lastStreamingLength = 0;
+
+  // Only scroll when messages actually change or streaming updates significantly
+  $: if (messages.length !== lastMessageCount || ($streamingMessage && $streamingMessage.length - lastStreamingLength > 50)) {
     lastMessageCount = messages.length;
+    lastStreamingLength = $streamingMessage.length;
     // Use requestAnimationFrame for smoother scrolling
     requestAnimationFrame(() => {
       throttledScrollToBottom();
