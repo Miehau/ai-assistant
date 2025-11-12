@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/tauri';
-import { writable, get } from 'svelte/store';
+import { writable, get, derived } from 'svelte/store';
 import type { Message, APIMessage, Attachment, Conversation, ConversationState, DBMessage } from '$lib/types';
 
 export class ConversationService {
@@ -10,6 +10,12 @@ export class ConversationService {
 
   // Subscribe to state changes
   subscribe = this.state.subscribe;
+
+  // Expose currentConversation as a derived store for reactive components
+  currentConversation = derived(
+    this.state,
+    $state => $state.currentConversation
+  );
 
   async setCurrentConversation(conversationId: string | null) {
     const conversation = await this.getOrCreate(conversationId);
@@ -32,7 +38,7 @@ export class ConversationService {
 
   async getDisplayHistory(conversationId: string): Promise<Message[]> {
     const history = await invoke<DBMessage[]>('get_conversation_history', { conversationId });
-    
+
     return history
       .sort((a, b) => {
         return (a.timestamp ?? 0) - (b.timestamp ?? 0);
@@ -41,6 +47,7 @@ export class ConversationService {
         let content = msg.content;
 
         return {
+          id: msg.id, // Preserve message ID for branching
           type: msg.role === 'user' ? 'sent' : 'received',
           content,
           attachments: msg.attachments
@@ -62,24 +69,26 @@ export class ConversationService {
   }
 
   async saveMessage(
-    role: 'user' | 'assistant', 
+    role: 'user' | 'assistant',
     content: string,
     attachments: Attachment[] = [],
     conversationId?: string
-  ): Promise<void> {
+  ): Promise<string> {
     const currentState = get(this.state);
     const targetConversationId = conversationId || currentState.currentConversationId;
-    
+
     if (!targetConversationId) {
       throw new Error('No conversation selected');
     }
 
-    await invoke('save_message', { 
-      conversationId: targetConversationId, 
-      role, 
+    const messageId = await invoke<string>('save_message', {
+      conversationId: targetConversationId,
+      role,
       content,
-      attachments 
+      attachments
     });
+
+    return messageId;
   }
 
   async getAllConversations(): Promise<Conversation[]> {
@@ -137,3 +146,6 @@ export class ConversationService {
 }
 
 export const conversationService = new ConversationService();
+
+// Export the currentConversation store for reactive components
+export const currentConversation = conversationService.currentConversation;

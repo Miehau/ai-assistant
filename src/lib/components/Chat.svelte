@@ -1,26 +1,26 @@
 <script lang="ts">
   import { onMount, afterUpdate } from "svelte";
-  import { 
-    messages, 
-    availableModels, 
-    systemPrompts, 
-    selectedModel, 
-    selectedSystemPrompt, 
-    streamingEnabled, 
-    isLoading, 
-    currentMessage, 
+  import {
+    messages,
+    availableModels,
+    systemPrompts,
+    selectedModel,
+    selectedSystemPrompt,
+    streamingEnabled,
+    isLoading,
+    currentMessage,
     attachments,
-    loadModels, 
-    loadSystemPrompts, 
-    toggleStreaming, 
-    sendMessage, 
+    loadModels,
+    loadSystemPrompts,
+    toggleStreaming,
+    sendMessage,
     clearConversation
   } from "./chat/store";
   import ChatMessages from "./chat/ChatMessages.svelte";
   import ChatInput from "./chat/ChatInput.svelte";
   import ChatControls from "./chat/ChatControls.svelte";
-  import { conversationService } from "$lib/services/conversation";
-  import { currentConversation } from "$lib/stores/conversation";
+  import { conversationService, currentConversation } from "$lib/services/conversation";
+  import { chatService } from "$lib/services/chat";
   import { fade } from "svelte/transition";
   import { debugModels } from "./debug";
 
@@ -44,6 +44,9 @@
         currentConversation.id,
       );
       $messages = loadedMessages;
+
+      // Initialize branch context for existing conversation
+      await chatService.initializeBranchContext(currentConversation.id);
     }
   });
 
@@ -83,7 +86,7 @@
         </div>
       </div>
     {/if}
-    <ChatMessages messages={$messages} bind:chatContainer bind:autoScroll />
+    <ChatMessages messages={$messages} bind:chatContainer bind:autoScroll conversationId={$currentConversation?.id} />
   </div>
   
   <div class="sticky bottom-0 bg-muted/50">
@@ -91,7 +94,7 @@
       bind:currentMessage={$currentMessage}
       bind:attachments={$attachments}
       isLoading={$isLoading}
-      modelId={$selectedModel.value}
+      modelId={$selectedModel}
       messages={$messages}
       systemPrompt={$selectedSystemPrompt?.content || ''}
       on:sendMessage={handleSendMessage}
@@ -104,6 +107,9 @@
           bind:selectedSystemPrompt={$selectedSystemPrompt}
           bind:streamingEnabled={$streamingEnabled}
           conversationId={$currentConversation?.id}
+          currentMessage={$currentMessage}
+          messages={$messages}
+          isLoading={$isLoading}
           on:toggleStreaming={handleToggleStreaming}
           on:removeMessages={handleClearConversation}
         />

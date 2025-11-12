@@ -9,7 +9,7 @@
   import { fileService } from "$lib/services/fileService";
   import type { Attachment, FileMetadata, Message } from "$lib/types";
   import { get } from "svelte/store";
-  import { currentConversation } from "$lib/stores/conversation";
+  import { currentConversation } from "$lib/services/conversation";
   import { open } from '@tauri-apps/api/dialog';
   import CostEstimator from "./CostEstimator.svelte";
 
@@ -463,51 +463,48 @@
     placeholder="Type your message here..."
     class="min-h-12 resize-none border-0 p-3 shadow-none focus-visible:ring-0"
   />
-  <div class="flex items-center p-3 pt-0">
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        {#snippet child({ props })}
-        <Button
-          {...props}
-          variant="ghost"
-          size="icon"
-          type="button"
-          onclick={handleFileUpload}
-        >
-          <Paperclip class="size-4" />
-          <span class="sr-only">Upload File</span>
-        </Button>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content side="top">Upload File (Text or Image)</Tooltip.Content>
-    </Tooltip.Root>
+  <div class="flex flex-col">
+    <!-- Top row: Action buttons and send -->
+    <div class="flex items-center justify-between px-3 pt-0 pb-2">
+      <div class="flex items-center gap-1">
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            {#snippet child({ props })}
+            <Button
+              {...props}
+              variant="ghost"
+              size="icon"
+              type="button"
+              onclick={handleFileUpload}
+            >
+              <Paperclip class="size-4" />
+              <span class="sr-only">Upload File</span>
+            </Button>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Content side="top">Upload File (Text or Image)</Tooltip.Content>
+        </Tooltip.Root>
+      </div>
 
-    <slot name="controls"></slot>
+      <Button
+        type="button"
+        on:click={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
+        size="sm"
+        class="gap-1.5 {!isLoading ? 'gradient-primary hover:glow-green transition-all duration-300' : ''}"
+        variant={isLoading ? "destructive" : "default"}
+      >
+        {#if isLoading}
+          <Square class="size-3.5" />
+        {:else}
+          <Send class="size-3.5" />
+        {/if}
+      </Button>
+    </div>
 
-    <!-- Token meter and cost estimator -->
-    {#if modelId}
-      <CostEstimator
-        {modelId}
-        messageText={currentMessage}
-        {messages}
-        {systemPrompt}
-        {attachments}
-      />
-    {/if}
-
-    <Button
-      type="button"
-      on:click={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
-      size="sm"
-      class="ml-auto gap-1.5 {!isLoading ? 'gradient-primary hover:glow-green transition-all duration-300' : ''}"
-      variant={isLoading ? "destructive" : "default"}
-    >
-      {#if isLoading}
-        <Square class="size-3.5" />
-      {:else}
-        <Send class="size-3.5" />
-      {/if}
-    </Button>
+    <!-- Bottom row: Model controls and token info -->
+    <div class="px-3 pb-3">
+      <slot name="controls"></slot>
+    </div>
   </div>
 </form>
 </Tooltip.Provider>

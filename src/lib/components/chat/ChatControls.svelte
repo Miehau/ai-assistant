@@ -4,28 +4,22 @@
     import { Button } from "$lib/components/ui/button";
     import * as Select from "$lib/components/ui/select";
     import type { Model } from "$lib/types/models";
-    import type { SystemPrompt } from "$lib/types";
-    import type { Selected } from "bits-ui";
+    import type { SystemPrompt, Message } from "$lib/types";
     import { Eye, Headphones, Zap, Database, Brain } from "lucide-svelte";
+    import TokenCounter from "./TokenCounter.svelte";
 
     export let availableModels: Model[] = [];
     export let systemPrompts: SystemPrompt[] = [];
-    export let selectedModel: Selected<string>;
+    export let selectedModel: string;
     export let selectedSystemPrompt: SystemPrompt | null = null;
     export let streamingEnabled: boolean = true;
+    export let conversationId: string | undefined = undefined;
+    export let currentMessage: string = '';
+    export let messages: Message[] = [];
+    export let isLoading: boolean = false;
 
     const dispatch = createEventDispatcher();
 
-    function selectModel(v: Selected<string> | undefined) {
-        if (v) {
-            const model = availableModels.find((m) => m.model_name === v.value);
-            selectedModel = {
-                value: v.value, // This is the technical model_name (ID)
-                label: model?.name || v.value, // Use the human-readable name only
-            };
-            dispatch("modelSelect", selectedModel);
-        }
-    }
 
     function selectSystemPrompt(prompt: SystemPrompt) {
         selectedSystemPrompt = prompt;
@@ -74,38 +68,10 @@
     }
 </script>
 
-<div class="flex flex-wrap items-center gap-2">
-    <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-            {#snippet child({ props })}
-                <Button
-                    {...props}
-                    variant="ghost"
-                    size="icon"
-                    onclick={removeMessages}
-                >
-                    <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                    >
-                        <path d="M5 12h14" />
-                        <path d="M12 5v14" />
-                    </svg>
-                    <span class="sr-only">New Conversation</span>
-                </Button>
-            {/snippet}
-        </Tooltip.Trigger>
-        <Tooltip.Content side="top">Start New Conversation</Tooltip.Content>
-    </Tooltip.Root>
-
-    <Select.Root
+<div class="flex items-center justify-between w-full gap-2">
+    <!-- Left section: Selectors -->
+    <div class="flex items-center gap-2 flex-1">
+        <Select.Root
         selected={{
             value: selectedSystemPrompt?.id ?? "",
             label: selectedSystemPrompt?.name ?? "",
@@ -117,10 +83,10 @@
             }
         }}
     >
-        <Select.Trigger class="min-w-[180px] w-fit mr-2 glass-badge hover:glass-light transition-all">
+        <Select.Trigger class="min-w-[150px] w-fit glass-badge hover:glass-light transition-all">
             {#if selectedSystemPrompt}
                 <div class="flex items-center gap-2">
-                    <span class="truncate max-w-[150px]"
+                    <span class="truncate max-w-[120px]"
                         >{selectedSystemPrompt.name}</span
                     >
                 </div>
@@ -151,10 +117,19 @@
         </Select.Portal>
     </Select.Root>
 
-    <Select.Root onSelectedChange={selectModel} selected={selectedModel}>
-        <Select.Trigger class="min-w-[180px] w-fit justify-between glass-badge hover:glass-light transition-all">
-            {#if selectedModel?.value}
-                <span>{selectedModel.label}</span>
+    <Select.Root
+        type="single"
+        bind:value={selectedModel}
+        onValueChange={(v) => {
+            if (v) {
+                dispatch("modelSelect", v);
+            }
+        }}
+    >
+        <Select.Trigger class="min-w-[150px] max-w-[220px] w-fit justify-between glass-badge hover:glass-light transition-all">
+            {#if selectedModel}
+                {@const model = availableModels.find(m => m.model_name === selectedModel)}
+                <span class="truncate">{model ? `${model.model_name} • ${model.provider}` : selectedModel}</span>
             {:else}
                 <span class="text-muted-foreground">Select a model</span>
             {/if}
@@ -302,43 +277,88 @@
             </Select.Content>
         </Select.Portal>
     </Select.Root>
+    </div>
 
-    <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-            {#snippet child({ props })}
-                <Button
-                    {...props}
-                    variant="ghost"
-                    size="icon"
-                    type="button"
-                    onclick={toggleStreaming}
-                >
-                    <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="16"
-                        height="16"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        class={streamingEnabled
-                            ? "text-primary"
-                            : "text-muted-foreground"}
+    <!-- Right section: Token counter and utility buttons -->
+    <div class="flex items-center gap-1">
+        <!-- Token usage counter - always visible -->
+        <TokenCounter
+            {conversationId}
+            modelId={selectedModel}
+            {currentMessage}
+            {messages}
+            {isLoading}
+        />
+
+        <Tooltip.Root>
+            <Tooltip.Trigger asChild>
+                {#snippet child({ props })}
+                    <Button
+                        {...props}
+                        variant="ghost"
+                        size="icon"
+                        onclick={removeMessages}
+                        class="shrink-0"
                     >
-                        <path
-                            d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
-                        />
-                        <path d="M12 12v9" />
-                        <path d="m8 17 4 4 4-4" />
-                    </svg>
-                    <span class="sr-only">Toggle Streaming</span>
-                </Button>
-            {/snippet}
-        </Tooltip.Trigger>
-        <Tooltip.Content side="top">
-            {streamingEnabled ? "Disable" : "Enable"} Streaming
-        </Tooltip.Content>
-    </Tooltip.Root>
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <path d="M5 12h14" />
+                            <path d="M12 5v14" />
+                        </svg>
+                        <span class="sr-only">New Conversation</span>
+                    </Button>
+                {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content side="top">Start New Conversation</Tooltip.Content>
+        </Tooltip.Root>
+
+        <Tooltip.Root>
+            <Tooltip.Trigger asChild>
+                {#snippet child({ props })}
+                    <Button
+                        {...props}
+                        variant="ghost"
+                        size="icon"
+                        type="button"
+                        onclick={toggleStreaming}
+                        class="shrink-0"
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class={streamingEnabled
+                                ? "text-primary"
+                                : "text-muted-foreground"}
+                        >
+                            <path
+                                d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
+                            />
+                            <path d="M12 12v9" />
+                            <path d="m8 17 4 4 4-4" />
+                        </svg>
+                        <span class="sr-only">Toggle Streaming</span>
+                    </Button>
+                {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content side="top">
+                {streamingEnabled ? "Disable" : "Enable"} Streaming
+            </Tooltip.Content>
+        </Tooltip.Root>
+    </div>
 </div>

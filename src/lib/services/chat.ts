@@ -1,17 +1,22 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { OpenAIService } from './openai';
 import { customProviderService } from './customProvider';
-import type { Message, Attachment } from '$lib/types';
+import type { Message, Attachment, ConversationUsageSummary } from '$lib/types';
 import { conversationService } from './conversation';
 import { modelService } from '$lib/models/modelService';
 import type { Model } from '$lib/types/models';
 import { formatMessages } from './messageFormatting';
 import { AnthropicService } from './anthropic';
 import { DeepSeekService } from './deepseek';
+import { calculateCost } from '$lib/utils/costCalculator';
+import { branchService } from './branchService';
+import { currentConversationUsage } from '$lib/stores/tokenUsage';
 
 export class ChatService {
   private streamResponse = true;
   private currentController: AbortController | null = null;
+  private currentBranchId: string | null = null;
+  private lastMessageId: string | null = null;
 
   private async getApiKeyForProvider(provider: string): Promise<string> {
     const apiKey = await invoke<string | null>('get_api_key', { provider });
@@ -137,6 +142,41 @@ export class ChatService {
     }
   }
 
+  /**
+   * Initialize branch context when loading an existing conversation
+   */
+  async initializeBranchContext(conversationId: string) {
+    try {
+      // Get or create main branch
+      const mainBranch = await branchService.getOrCreateMainBranch(conversationId);
+      this.currentBranchId = mainBranch.id;
+
+      // Get all messages in this conversation to find the last one
+      const history = await conversationService.getDisplayHistory(conversationId);
+      if (history.length > 0) {
+        const lastMessage = history[history.length - 1];
+        this.lastMessageId = lastMessage.id || null;
+      } else {
+        this.lastMessageId = null;
+      }
+
+      console.log('Branch context initialized:', {
+        branchId: this.currentBranchId,
+        lastMessageId: this.lastMessageId
+      });
+    } catch (error) {
+      console.warn('Failed to initialize branch context:', error);
+    }
+  }
+
+  /**
+   * Reset branch context (call when starting a new conversation)
+   */
+  resetBranchContext() {
+    this.currentBranchId = null;
+    this.lastMessageId = null;
+  }
+
   async handleSendMessage(
     content: string,
     model: string,
@@ -173,7 +213,7 @@ export class ChatService {
       const selectedModel = await this.getModelInfo(model);
       
       // Step 6: Send to AI and get response
-      const modelResponse = await this.createChatCompletion(
+      const aiResponse = await this.createChatCompletion(
         selectedModel,
         history,
         message,
@@ -185,11 +225,80 @@ export class ChatService {
 
       this.currentController = null;
 
-      // Step 7: Save both messages to the conversation
-      await Promise.all([
+      // Extract response content and usage
+      const modelResponse = typeof aiResponse === 'string' ? aiResponse : aiResponse.content;
+      const usage = typeof aiResponse === 'object' ? aiResponse.usage : undefined;
+
+      // Step 7: Get or create main branch for this conversation
+      if (!this.currentBranchId) {
+        const mainBranch = await branchService.getOrCreateMainBranch(conversation.id);
+        this.currentBranchId = mainBranch.id;
+      }
+
+      // Step 8: Save both messages to the conversation
+      const [userMessageId, assistantMessageId] = await Promise.all([
         conversationService.saveMessage('user', message.content, message.attachments || []),
         conversationService.saveMessage('assistant', modelResponse, [])
       ]);
+
+      // Step 9: Create tree nodes for both messages
+      try {
+        // User message links to last message as parent
+        await branchService.createMessageTreeNode(
+          userMessageId,
+          this.lastMessageId,
+          this.currentBranchId,
+          false // Not a branch point by default
+        );
+
+        // Assistant message links to user message as parent
+        await branchService.createMessageTreeNode(
+          assistantMessageId,
+          userMessageId,
+          this.currentBranchId,
+          false // Not a branch point by default
+        );
+
+        // Update last message ID to assistant message
+        this.lastMessageId = assistantMessageId;
+      } catch (branchError) {
+        // Don't fail the chat if branch tracking fails
+        console.warn('Failed to create message tree nodes:', branchError);
+      }
+
+      // Step 10: Track usage if available
+      if (usage && assistantMessageId) {
+        try {
+          const cost = calculateCost(
+            selectedModel.model_name,
+            usage.prompt_tokens,
+            usage.completion_tokens
+          );
+
+          // Save usage data for the assistant message
+          await invoke('save_message_usage', {
+            input: {
+              message_id: assistantMessageId,
+              model_name: selectedModel.model_name,
+              prompt_tokens: usage.prompt_tokens,
+              completion_tokens: usage.completion_tokens,
+              total_tokens: usage.prompt_tokens + usage.completion_tokens,
+              estimated_cost: cost
+            }
+          });
+
+          // Update conversation usage summary and capture the updated data
+          const updatedUsage = await invoke<ConversationUsageSummary>('update_conversation_usage', {
+            conversationId: conversation.id
+          });
+
+          // Update the store to refresh the UI immediately
+          currentConversationUsage.set(updatedUsage);
+        } catch (usageError) {
+          // Don't fail the chat if usage tracking fails
+          console.warn('Failed to save usage data:', usageError);
+        }
+      }
 
       return {
         text: modelResponse,
@@ -225,15 +334,15 @@ export class ChatService {
   }
 
   private async createChatCompletion(
-    model: Model, 
-    history: any[], 
-    message: Message, 
+    model: Model,
+    history: any[],
+    message: Message,
     systemPrompt: string,
     streamResponse: boolean,
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal,
     customMessages?: any[]
-  ): Promise<string> {
+  ): Promise<string | { content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     
     // Use custom messages if provided, otherwise format the history and message
     const formattedMessages = customMessages || await formatMessages(history, message, systemPrompt);
