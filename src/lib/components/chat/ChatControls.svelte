@@ -7,7 +7,6 @@
     import type { SystemPrompt, Message } from "$lib/types";
     import { Eye, Headphones, Zap, Database, Brain } from "lucide-svelte";
     import TokenCounter from "./TokenCounter.svelte";
-    import BranchSwitcher from "./BranchSwitcher.svelte";
 
     export let availableModels: Model[] = [];
     export let systemPrompts: SystemPrompt[] = [];
@@ -280,13 +279,8 @@
     </Select.Root>
     </div>
 
-    <!-- Right section: Branch switcher, token counter, and utility buttons -->
+    <!-- Right section: Token counter and utility buttons -->
     <div class="flex items-center gap-1">
-        <!-- Branch switcher - show when conversationId exists -->
-        {#if conversationId}
-            <BranchSwitcher {conversationId} />
-        {/if}
-
         <!-- Token usage counter - always visible -->
         <TokenCounter
             {conversationId}
@@ -325,46 +319,6 @@
                 {/snippet}
             </Tooltip.Trigger>
             <Tooltip.Content side="top">Start New Conversation</Tooltip.Content>
-        </Tooltip.Root>
-
-        <Tooltip.Root>
-            <Tooltip.Trigger asChild>
-                {#snippet child({ props })}
-                    <Button
-                        {...props}
-                        variant="ghost"
-                        size="icon"
-                        type="button"
-                        onclick={toggleStreaming}
-                        class="shrink-0"
-                    >
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            class={streamingEnabled
-                                ? "text-primary"
-                                : "text-muted-foreground"}
-                        >
-                            <path
-                                d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
-                            />
-                            <path d="M12 12v9" />
-                            <path d="m8 17 4 4 4-4" />
-                        </svg>
-                        <span class="sr-only">Toggle Streaming</span>
-                    </Button>
-                {/snippet}
-            </Tooltip.Trigger>
-            <Tooltip.Content side="top">
-                {streamingEnabled ? "Disable" : "Enable"} Streaming
-            </Tooltip.Content>
         </Tooltip.Root>
     </div>
 </div>

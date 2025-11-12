@@ -87,11 +87,6 @@
         {displayTokens().isEstimating ? '~' : ''}{displayTokens().total.toLocaleString()} / {maxTokens.toLocaleString()}
       </span>
     </div>
-    <div class="h-3 w-px bg-border"></div>
-    <div class="flex items-center gap-1">
-      <span class="text-muted-foreground">Cost:</span>
-      <span class="font-medium">{cost}</span>
-    </div>
   {:else}
     <span class="text-muted-foreground">No usage data</span>
   {/if}

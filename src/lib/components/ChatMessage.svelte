@@ -24,16 +24,11 @@
   import type { Attachment } from "$lib/types";
   import { fileService } from "$lib/services/fileService";
   import { onDestroy } from "svelte";
-  import BranchButton from "./chat/BranchButton.svelte";
 
   export let type: "sent" | "received";
   export let content: string;
   export let attachments: Attachment[] | undefined = undefined;
   export let model: string | undefined = undefined;
-  export let messageId: string | undefined = undefined;
-  export let conversationId: string | undefined = undefined;
-  export let hasBranches: boolean = false;
-  export let branchCount: number = 0;
 
   // Track loading states for attachments
   let loadingStates: Record<string, boolean> = {};
@@ -287,18 +282,10 @@
       ? 'message-glass-ai'
       : 'text-primary-foreground message-glass-user'}"
   >
-    <!-- Message header with model and branch button -->
-    <div class="flex items-center justify-between gap-2 mb-1">
-      {#if type === 'sent' && model}
-        <div class="text-[10px] text-primary-foreground/50 text-right flex-1">{model}</div>
-      {/if}
-
-      {#if messageId && conversationId}
-        <div class="flex-shrink-0">
-          <BranchButton {messageId} {conversationId} {hasBranches} {branchCount} />
-        </div>
-      {/if}
-    </div>
+    <!-- Message header with model -->
+    {#if type === 'sent' && model}
+      <div class="text-[10px] text-primary-foreground/50 text-right mb-1">{model}</div>
+    {/if}
     <div class="prose prose-sm dark:prose-invert max-w-none">
       <div
         class="markdown-content"
