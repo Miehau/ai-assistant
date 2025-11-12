@@ -10,13 +10,14 @@
 	export let variant: $$Props["variant"] = "default";
 	export let size: $$Props["size"] = "default";
 	export let builders: $$Props["builders"] = [];
+	export let type: "button" | "submit" | "reset" = "button";
 	export { className as class };
 </script>
 
 <ButtonPrimitive.Root
 	{builders}
 	class={cn(buttonVariants({ variant, size, className }))}
-	type="button"
+	{type}
 	{...$$restProps}
 	on:click
 	on:keydown

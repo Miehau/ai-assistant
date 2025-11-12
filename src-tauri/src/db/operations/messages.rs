@@ -15,21 +15,36 @@ pub trait MessageOperations: DbOperations {
         role: &str,
         content: &str,
         attachments: &[IncomingAttachment],
-    ) -> RusqliteResult<()> {
-        let message_id = Uuid::new_v4().to_string();
+        message_id: Option<String>,
+    ) -> RusqliteResult<String> {
+        // Use provided message_id if valid, otherwise generate new UUID
+        let message_id = match message_id {
+            Some(id) if !id.is_empty() => {
+                // Validate that it's a valid UUID format (basic validation)
+                // Accept both standard UUID format and our custom format for backwards compatibility
+                if Uuid::parse_str(&id).is_ok() {
+                    id
+                } else {
+                    // If not a valid UUID, generate a new one
+                    Uuid::new_v4().to_string()
+                }
+            },
+            _ => Uuid::new_v4().to_string(),
+        };
+
         let created_at = Utc::now();
         let created_at_timestamp = created_at.timestamp();
-        
+
         let binding = self.conn();
         let mut conn = binding.lock().unwrap();
         let tx = conn.transaction()?;
-        
+
         tx.execute(
-            "INSERT INTO messages (id, conversation_id, role, content, created_at) 
+            "INSERT INTO messages (id, conversation_id, role, content, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![message_id, conversation_id, role, content, created_at_timestamp],
         )?;
-        
+
         for attachment in attachments {
             let file_path = if attachment.attachment_type.starts_with("text/") {
                 // For text attachments, store the content directly
@@ -59,9 +74,9 @@ pub trait MessageOperations: DbOperations {
                 ],
             )?;
         }
-        
+
         tx.commit()?;
-        Ok(())
+        Ok(message_id)
     }
 
     fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {

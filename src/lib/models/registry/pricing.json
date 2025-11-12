@@ -1,0 +1,162 @@
+{
+  "pricing": {
+    "gpt-5": {
+      "input": 0.020,
+      "output": 0.080,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Estimated pricing for GPT-5"
+    },
+    "gpt-5-mini": {
+      "input": 0.005,
+      "output": 0.020,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Estimated pricing for GPT-5 Mini"
+    },
+    "gpt-5-nano": {
+      "input": 0.001,
+      "output": 0.005,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Estimated pricing for GPT-5 Nano"
+    },
+    "gpt-4-1": {
+      "input": 0.015,
+      "output": 0.060,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Estimated pricing for GPT-4.1"
+    },
+    "gpt-4-1-mini": {
+      "input": 0.003,
+      "output": 0.012,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Estimated pricing for GPT-4.1 Mini"
+    },
+    "gpt-4-1-nano": {
+      "input": 0.001,
+      "output": 0.004,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Estimated pricing for GPT-4.1 Nano"
+    },
+    "gpt-4o": {
+      "input": 0.005,
+      "output": 0.015,
+      "per": 1000,
+      "currency": "USD",
+      "note": "GPT-4o standard pricing"
+    },
+    "gpt-4o-mini": {
+      "input": 0.00015,
+      "output": 0.0006,
+      "per": 1000,
+      "currency": "USD",
+      "note": "GPT-4o Mini pricing"
+    },
+    "o3": {
+      "input": 0.015,
+      "output": 0.060,
+      "per": 1000,
+      "currency": "USD",
+      "note": "O3 reasoning model pricing"
+    },
+    "o3-mini": {
+      "input": 0.0011,
+      "output": 0.0044,
+      "per": 1000,
+      "currency": "USD",
+      "note": "O3 Mini reasoning model pricing"
+    },
+    "o1": {
+      "input": 0.015,
+      "output": 0.060,
+      "per": 1000,
+      "currency": "USD",
+      "note": "O1 reasoning model pricing"
+    },
+    "o1-mini": {
+      "input": 0.003,
+      "output": 0.012,
+      "per": 1000,
+      "currency": "USD",
+      "note": "O1 Mini reasoning model pricing"
+    },
+    "gpt-4-turbo": {
+      "input": 0.010,
+      "output": 0.030,
+      "per": 1000,
+      "currency": "USD",
+      "note": "GPT-4 Turbo pricing"
+    },
+    "gpt-3.5-turbo": {
+      "input": 0.0005,
+      "output": 0.0015,
+      "per": 1000,
+      "currency": "USD",
+      "note": "GPT-3.5 Turbo pricing"
+    },
+    "dall-e-3": {
+      "standard_1024": 0.040,
+      "standard_1792": 0.080,
+      "hd_1024": 0.080,
+      "hd_1792": 0.120,
+      "per": "image",
+      "currency": "USD",
+      "note": "DALL-E 3 pricing per image"
+    },
+    "whisper-1": {
+      "audio": 0.006,
+      "per": "minute",
+      "currency": "USD",
+      "note": "Whisper audio transcription pricing"
+    },
+    "claude-sonnet-4-5-20250929": {
+      "input": 0.003,
+      "output": 0.015,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Claude Sonnet 4.5 pricing"
+    },
+    "claude-haiku-4-5-20251001": {
+      "input": 0.0008,
+      "output": 0.004,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Claude Haiku 4.5 pricing"
+    },
+    "claude-opus-4-1-20250805": {
+      "input": 0.015,
+      "output": 0.075,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Claude Opus 4.1 pricing"
+    },
+    "claude-3-5-sonnet-20241022": {
+      "input": 0.003,
+      "output": 0.015,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Claude 3.5 Sonnet pricing"
+    },
+    "claude-3-7-sonnet-20250219": {
+      "input": 0.003,
+      "output": 0.015,
+      "per": 1000,
+      "currency": "USD",
+      "note": "Claude 3.7 Sonnet pricing"
+    }
+  },
+  "metadata": {
+    "lastUpdated": "2025-11-11",
+    "source": "OpenAI and Anthropic official pricing as of November 2025",
+    "notes": [
+      "Prices are per 1000 tokens unless otherwise specified",
+      "Pricing for unreleased models (GPT-5, GPT-4.1) are estimates",
+      "DALL-E 3 prices vary by resolution and quality",
+      "Whisper pricing is per minute of audio"
+    ]
+  }
+}

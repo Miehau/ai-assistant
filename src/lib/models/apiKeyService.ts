@@ -59,7 +59,7 @@ export class ApiKeyService {
    */
   public async setApiKey(providerId: string, apiKey: string): Promise<boolean> {
     try {
-      await invoke<string>("set_api_key", { provider: providerId, apiKey });
+      await invoke<string>("set_api_key", { provider: providerId, api_key: apiKey });
       this.apiKeys[providerId] = apiKey;
       
       // Update available models after setting a new API key

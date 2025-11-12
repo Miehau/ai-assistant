@@ -1,4 +1,6 @@
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import { ChatOpenAI } from '@langchain/openai';
+import type { Attachment } from '$lib/types';
 
 export class OpenAIService {
   constructor(private apiKey: string) {}
@@ -9,7 +11,7 @@ export class OpenAIService {
     streamResponse: boolean,
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
-  ): Promise<string> {
+  ): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     const timeoutDuration = 300000; // 5 minutes timeout
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => timeoutController.abort('Request timed out'), timeoutDuration);
@@ -28,7 +30,8 @@ export class OpenAIService {
         body: JSON.stringify({
           model,
           messages,
-          stream: streamResponse
+          stream: streamResponse,
+          stream_options: streamResponse ? { include_usage: true } : undefined
         }),
         signal: combinedController.signal,
       });
@@ -40,13 +43,17 @@ export class OpenAIService {
       if (!streamResponse) {
         const data = await response.json();
         const content = data.choices[0]?.message?.content || '';
+        const usage = data.usage ? {
+          prompt_tokens: data.usage.prompt_tokens,
+          completion_tokens: data.usage.completion_tokens
+        } : undefined;
         onStreamResponse(content);
-        return content;
+        return { content, usage };
       }
 
       return this.handleStreamingResponse(response, onStreamResponse);
-    } catch (error) {
-      if (error.name === 'AbortError') {
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
         throw new Error('Request timed out or was aborted');
       }
       throw error;
@@ -62,7 +69,7 @@ export class OpenAIService {
     });
     let formattedMessages = messages.map((message) => ({role: message.role, content: message.content}));
     console.log('Formatted messages:', formattedMessages);
-    return openai.invoke(formattedMessages, {signal: signal}).then((response) => {
+    return openai.invoke(formattedMessages, {signal: signal}).then((response: any) => {
         return {
             message: {message: response.content?.toString(), role: 'assistant'},
             usage: {
@@ -75,13 +82,14 @@ export class OpenAIService {
   }
 
   private async handleStreamingResponse(
-    response: Response, 
+    response: Response,
     onStreamResponse: (chunk: string) => void
-  ): Promise<string> {
+  ): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body reader available');
-    
+
     let fullResponse = '';
+    let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
     const decoder = new TextDecoder();
 
     try {
@@ -90,7 +98,7 @@ export class OpenAIService {
         if (done) break;
 
         const lines = decoder.decode(value).split('\n');
-        const chunks = lines
+        const parsedLines = lines
           .map(line => line.replace(/^data: /, '').trim())
           .filter(line => line && line !== '[DONE]')
           .map(line => {
@@ -100,15 +108,26 @@ export class OpenAIService {
               return null;
             }
           })
-          .filter(data => data?.choices?.[0]?.delta?.content)
-          .map(data => data.choices[0].delta.content);
+          .filter(data => data);
 
-        for (const chunk of chunks) {
-          fullResponse += chunk;
-          onStreamResponse(chunk);
+        for (const data of parsedLines) {
+          // Extract text chunks
+          if (data?.choices?.[0]?.delta?.content) {
+            const chunk = data.choices[0].delta.content;
+            fullResponse += chunk;
+            onStreamResponse(chunk);
+          }
+
+          // Extract usage information (sent at the end of stream)
+          if (data?.usage) {
+            usage = {
+              prompt_tokens: data.usage.prompt_tokens,
+              completion_tokens: data.usage.completion_tokens
+            };
+          }
         }
       }
-      return fullResponse;
+      return { content: fullResponse, usage };
     } finally {
       reader.releaseLock();
     }

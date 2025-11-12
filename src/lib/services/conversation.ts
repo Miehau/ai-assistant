@@ -72,7 +72,8 @@ export class ConversationService {
     role: 'user' | 'assistant',
     content: string,
     attachments: Attachment[] = [],
-    conversationId?: string
+    conversationId?: string,
+    messageId?: string
   ): Promise<string> {
     const currentState = get(this.state);
     const targetConversationId = conversationId || currentState.currentConversationId;
@@ -81,14 +82,15 @@ export class ConversationService {
       throw new Error('No conversation selected');
     }
 
-    const messageId = await invoke<string>('save_message', {
+    const savedMessageId = await invoke<string>('save_message', {
       conversationId: targetConversationId,
       role,
       content,
-      attachments
+      attachments,
+      messageId
     });
 
-    return messageId;
+    return savedMessageId;
   }
 
   async getAllConversations(): Promise<Conversation[]> {

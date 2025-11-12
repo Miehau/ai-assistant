@@ -1,16 +1,19 @@
-use rusqlite::{Connection, Result as RusqliteResult};
+use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
-use crate::db::models::*;
 
-mod messages;
+mod branches;
 mod conversations;
+mod messages;
 mod models;
 mod system_prompts;
+mod usage;
 
-pub use messages::*;
+pub use branches::*;
 pub use conversations::*;
+pub use messages::*;
 pub use models::*;
 pub use system_prompts::*;
+pub use usage::*;
 
 pub trait DbOperations {
     fn conn(&self) -> Arc<Mutex<Connection>>;

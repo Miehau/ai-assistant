@@ -91,7 +91,7 @@ export class AnthropicService {
     stream: boolean,
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal,
-  ): Promise<string> {
+  ): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     // Extract system message
     const systemMessage = messages.find((m) => m.role === "system");
     const systemContent = systemMessage?.content;
@@ -156,6 +156,7 @@ export class AnthropicService {
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let fullText = "";
+      let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
 
       if (!reader) throw new Error("No reader available");
 
@@ -183,6 +184,14 @@ export class AnthropicService {
                 fullText += text;
                 onStreamResponse(text);
               }
+
+              // Handle message_delta events with usage
+              if (parsed.type === "message_delta" && parsed.usage) {
+                usage = {
+                  prompt_tokens: parsed.usage.input_tokens || 0,
+                  completion_tokens: parsed.usage.output_tokens || 0
+                };
+              }
             } catch (e) {
               console.error("Error parsing stream:", e);
             }
@@ -190,12 +199,16 @@ export class AnthropicService {
         }
       }
 
-      return fullText;
+      return { content: fullText, usage };
     } else {
       const data = await response.json();
       const text = data.content[0]?.text || "";
+      const usage = data.usage ? {
+        prompt_tokens: data.usage.input_tokens,
+        completion_tokens: data.usage.output_tokens
+      } : undefined;
       onStreamResponse(text);
-      return text;
+      return { content: text, usage };
     }
   }
 }

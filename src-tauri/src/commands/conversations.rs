@@ -16,8 +16,9 @@ pub fn save_message(
     role: String,
     content: String,
     attachments: Vec<IncomingAttachment>,
-) -> Result<(), String> {
-    MessageOperations::save_message(&*state, &conversation_id, &role, &content, &attachments)
+    message_id: Option<String>,
+) -> Result<String, String> {
+    MessageOperations::save_message(&*state, &conversation_id, &role, &content, &attachments, message_id)
         .map_err(|e| e.to_string())
 }
 

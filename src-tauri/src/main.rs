@@ -72,6 +72,25 @@ fn main() {
             commands::validate_text,
             commands::extract_text_metadata,
             commands::extract_code_blocks,
+            // Usage tracking commands
+            commands::save_message_usage,
+            commands::update_conversation_usage,
+            commands::get_conversation_usage,
+            commands::get_usage_statistics,
+            commands::get_message_usage,
+            // Branch management commands
+            commands::create_branch,
+            commands::create_message_tree_node,
+            commands::get_conversation_branches,
+            commands::get_conversation_tree,
+            commands::get_branch_path,
+            commands::rename_branch,
+            commands::delete_branch,
+            commands::get_branch_stats,
+            commands::get_or_create_main_branch,
+            commands::create_branch_from_message,
+            commands::check_message_tree_consistency,
+            commands::repair_message_tree,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

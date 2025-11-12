@@ -9,17 +9,30 @@
   import SquareUser from "lucide-svelte/icons/square-user";
   import Users from "lucide-svelte/icons/users";
   import History from "lucide-svelte/icons/history";
+  import TrendingUp from "lucide-svelte/icons/trending-up";
+  import Network from "lucide-svelte/icons/network";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import { page } from "$app/stores";
   import ConversationDrawer from "$lib/components/conversation/ConversationDrawer.svelte";
+  import BranchDrawer from "$lib/components/branch/BranchDrawer.svelte";
+  import { currentConversation } from "$lib/services/conversation";
 
   $: currentPath = $page.url.pathname;
-  
+
   let isConversationDrawerOpen = false;
-  
+  let isBranchDrawerOpen = false;
+
   function toggleConversationDrawer() {
     isConversationDrawerOpen = !isConversationDrawerOpen;
+  }
+
+  function toggleBranchDrawer() {
+    isBranchDrawerOpen = !isBranchDrawerOpen;
+  }
+
+  function handleBranchDrawerClose() {
+    isBranchDrawerOpen = false;
   }
 </script>
 
@@ -99,6 +112,40 @@
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Conversation History</Tooltip.Content>
     </Tooltip.Root>
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        {#snippet child({ props })}
+          <a href="/usage" {...props}>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="rounded-lg transition-all {currentPath === '/usage' ? 'glass-light glow-cyan' : 'hover:glass-badge'}"
+              aria-label="Usage Statistics"
+            >
+              <TrendingUp class="size-5" />
+            </Button>
+          </a>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Tooltip.Content side="right" sideOffset={5}>Usage Statistics</Tooltip.Content>
+    </Tooltip.Root>
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            variant="ghost"
+            size="icon"
+            class="rounded-lg transition-all {isBranchDrawerOpen ? 'glass-light glow-purple' : 'hover:glass-badge'}"
+            aria-label="Branch Tree"
+            onclick={toggleBranchDrawer}
+          >
+            <Network class="size-5" />
+          </Button>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Tooltip.Content side="right" sideOffset={5}>Branch Tree</Tooltip.Content>
+    </Tooltip.Root>
   </nav>
   <nav class="mt-auto grid gap-1 p-2">
     <Tooltip.Root>
@@ -122,3 +169,10 @@
 </Tooltip.Provider>
 
 <ConversationDrawer bind:isOpen={isConversationDrawerOpen} />
+{#if $currentConversation?.id}
+  <BranchDrawer
+    conversationId={$currentConversation.id}
+    open={isBranchDrawerOpen}
+    onClose={handleBranchDrawerClose}
+  />
+{/if}
