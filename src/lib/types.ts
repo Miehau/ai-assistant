@@ -6,48 +6,50 @@ export interface SystemPrompt {
     updated_at: string;
 }
 
-export interface FileMetadata {
-    id: string;
-    name: string;
-    path: string;
-    mime_type: string;
-    size_bytes: number;
-    created_at: string;
-    updated_at: string;
-    thumbnail_path?: string;
-    metadata?: any;
-}
+// Import types first so we can create aliases
+import type {
+    DisplayMessage,
+    APIMessage,
+    DBMessage,
+    MessageWithBranch as MessageWithBranchType,
+    MessageUsage as MessageUsageType,
+    MessageTreeNode as MessageTreeNodeType,
+    BaseMessage
+} from './types/message';
+import type { Attachment, FileMetadata } from './types/attachments';
 
-export interface Attachment {
-    id?: string;
-    message_id?: string;
-    name: string;
-    data: string;
-    attachment_url?: string;
-    attachment_type: "image" | "audio" | "text";
-    description?: string;
-    created_at?: Date;
-    transcript?: string;
-    // New fields for file-based attachments
-    file_path?: string;
-    file_metadata?: FileMetadata;
-}
-
-// For display in UI
-export type Message = {
-    id?: string; // Optional message ID for branching
-    type: "sent" | "received";
-    content: string;
-    attachments?: Attachment[];
-    model?: string; // Optional model name for display
+// Re-export everything
+export type {
+    Attachment,
+    FileMetadata,
+    DisplayMessage,
+    APIMessage,
+    DBMessage,
+    BaseMessage
 };
 
-// For API communication
-export type APIMessage = {
-    role: 'user' | 'assistant' | 'system';
-    content: string;
-    attachments?: Attachment[];
-};
+// Re-export with original names
+export type MessageWithBranch = MessageWithBranchType;
+export type MessageUsage = MessageUsageType;
+export type MessageTreeNode = MessageTreeNodeType;
+
+// Export converters for easy access
+export {
+    toDisplayMessage,
+    toAPIMessage,
+    toDBMessage,
+    dbToAPIMessage,
+    apiToDisplayMessage,
+    toDisplayMessages,
+    toAPIMessages,
+    dbToAPIMessages
+} from './types/converters';
+
+/**
+ * @deprecated Use DisplayMessage instead
+ * Kept for backward compatibility during migration
+ */
+export type Message = DisplayMessage;
 
 export interface Conversation {
     id: string;
@@ -60,24 +62,8 @@ export interface ConversationState {
     currentConversation: Conversation | null;
 }
 
-export interface DBMessage {
-    id?: string; // Message ID from database
-    role: 'user' | 'assistant';
-    content: string;
-    attachments?: Attachment[];
-    timestamp?: number;
-}
-
-export interface MessageUsage {
-    id: string;
-    message_id: string;
-    model_name: string;
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-    estimated_cost: number;
-    created_at: string;
-}
+// MessageUsage kept here as it's not strictly a message type
+// but usage tracking metadata
 
 export interface ConversationUsageSummary {
     conversation_id: string;
@@ -119,13 +105,7 @@ export interface Branch {
     created_at: string;
 }
 
-export interface MessageTreeNode {
-    message_id: string;
-    parent_message_id: string | null;
-    branch_id: string;
-    branch_point: boolean;
-    created_at: string;
-}
+// MessageTreeNode now exported from types/message.ts
 
 export interface ConversationTree {
     conversation_id: string;
