@@ -5,6 +5,7 @@
   import { backOut } from "svelte/easing";
   import type { Message } from "$lib/types";
   import { streamingMessage, isStreaming } from "./store";
+  import { pageVisible } from "$lib/stores/visibility";
 
   export let messages: Message[] = [];
   export let chatContainer: HTMLElement | null = null;
@@ -152,6 +153,27 @@
     // Use requestAnimationFrame for smoother scrolling
     requestAnimationFrame(() => {
       throttledScrollToBottom();
+    });
+  }
+
+  // Handle visibility changes - scroll to bottom when page becomes visible
+  // This ensures proper scroll position after deferred markdown parsing completes
+  $: if ($pageVisible && messages.length > 0) {
+    // Scroll immediately for instant feedback
+    requestAnimationFrame(() => {
+      scrollToBottom();
+
+      // Then wait for deferred content to render and scroll again
+      // This catches any height changes from requestIdleCallback parsing in ChatMessage
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => {
+          scrollToBottom();
+        });
+      } else {
+        setTimeout(() => {
+          scrollToBottom();
+        }, 100);
+      }
     });
   }
 </script>
