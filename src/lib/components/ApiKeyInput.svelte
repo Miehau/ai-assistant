@@ -80,7 +80,7 @@
                  onmouseleave={() => isApiKeyHovered = false}>
                 <Input id={`apiKey-${provider.value}`}
                        class={cn(
-                           "pr-[164px] transition-all duration-200",
+                           "pr-[164px] transition-all duration-200 glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50 glow-green",
                            !showApiKey && "filter blur-sm"
                        )}
                        bind:value={apiKey}
@@ -94,7 +94,7 @@
                 <div class="flex">
                     <Button
                         type="submit"
-                        class="rounded-r-none"
+                        class="rounded-r-none glass-badge hover:glass-light transition-all duration-200"
                         onclick={submitApiKey}
                         aria-label={`Submit ${provider.label} API Key`}
                     >
@@ -103,7 +103,7 @@
                     <Button
                         type="button"
                         variant="destructive"
-                        class="rounded-l-none border-l-0"
+                        class="rounded-l-none border-l-0 glass-badge hover:glass-light transition-all duration-200"
                         onclick={deleteApiKey}
                         aria-label={`Delete ${provider.label} API Key`}
                     >

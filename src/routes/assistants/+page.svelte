@@ -91,11 +91,11 @@
             <h1 class="text-base font-medium">System Prompts</h1>
             {#if selectedPromptId}
                 <div class="space-x-2">
-                    <Button variant="outline" size="sm" class="h-7 text-xs" on:click={cancelEdit}>Cancel</Button>
-                    <Button size="sm" class="h-7 text-xs" on:click={savePrompt}>Update Prompt</Button>
+                    <Button variant="outline" size="sm" class="h-7 text-xs glass-badge hover:glass-light transition-all duration-200" on:click={cancelEdit}>Cancel</Button>
+                    <Button size="sm" class="h-7 text-xs glass-badge hover:glass-light transition-all duration-200" on:click={savePrompt}>Update Prompt</Button>
                 </div>
             {:else}
-                <Button size="sm" class="h-7 text-xs" on:click={savePrompt}>Save New Prompt</Button>
+                <Button size="sm" class="h-7 text-xs glass-badge hover:glass-light transition-all duration-200" on:click={savePrompt}>Save New Prompt</Button>
             {/if}
         </div>
 
@@ -103,12 +103,12 @@
             <Input
                 bind:value={currentName}
                 placeholder="Enter prompt name..."
-                class="w-full h-8 text-sm"
+                class="w-full h-8 text-sm glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50 glow-green"
             />
-            <Textarea 
+            <Textarea
                 bind:value={currentPrompt}
                 placeholder="Enter your system prompt here..."
-                class="min-h-[150px] resize-y text-sm"
+                class="min-h-[150px] resize-y text-sm glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50 glow-green"
             />
 
             {#if isLoading}
@@ -116,7 +116,7 @@
             {:else}
                 <div class="grid gap-2">
                     {#each prompts as prompt (prompt.id)}
-                        <div class="border rounded-lg p-2">
+                        <div class="glass-badge hover:glass-light transition-all duration-200 rounded-lg p-2">
                             <div class="flex justify-between items-start gap-4">
                                 <div>
                                     <h3 class="text-sm font-medium">{prompt.name}</h3>
@@ -129,18 +129,18 @@
                                     </p>
                                 </div>
                                 <div class="flex gap-1.5 h-3">
-                                    <Button 
-                                        variant="ghost" 
+                                    <Button
+                                        variant="ghost"
                                         size="sm"
-                                        class="text-xs"
+                                        class="text-xs glass-badge-sm hover:glass-light transition-all duration-200"
                                         on:click={() => editPrompt(prompt)}
                                     >
                                         Edit
                                     </Button>
-                                    <Button 
-                                        variant="ghost" 
+                                    <Button
+                                        variant="ghost"
                                         size="sm"
-                                        class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                        class="text-destructive hover:bg-destructive/10 hover:text-destructive glass-badge-sm hover:glass-light transition-all duration-200"
                                         on:click={() => deletePrompt(prompt.id)}
                                     >
                                         <Trash2 class="size-4" />

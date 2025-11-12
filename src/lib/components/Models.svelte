@@ -26,11 +26,11 @@
 <div class="container max-w-2xl mx-auto py-6">
     <h1 class="text-sm font-medium tracking-wide uppercase text-muted-foreground mb-4">API Keys</h1>
     
-    <Card.Root class="border-0 overflow-hidden shadow-sm bg-card/50 backdrop-blur-[2px] rounded-xl">
+    <Card.Root class="glass-panel border-0 overflow-hidden rounded-xl">
         <Card.Content class="p-5">
             <div class="space-y-5">
                 {#each providers as provider}
-                    <div class="pb-5 border-b border-border/40 last:border-0 last:pb-0">
+                    <div class="pb-5 border-b border-white/10 last:border-0 last:pb-0">
                         <h3 class="text-xs font-medium mb-2.5 text-muted-foreground">{provider.label}</h3>
                         <ApiKeyInput {provider} />
                     </div>
