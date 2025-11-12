@@ -5,15 +5,24 @@
     import { onMount } from "svelte";
     import { Trash2 } from "lucide-svelte";
     import { apiKeyService } from "$lib/models";
+    import { loadModels } from "$lib/components/chat/store";
 
-    export let provider: { value: string; label: string };
+    let { provider }: { provider: { value: string; label: string } } = $props();
 
-    let apiKey = "";
-    let isApiKeyFocused = false;
-    let isApiKeyHovered = false;
-    let isLoading = false;
+    let apiKey = $state("");
+    let isApiKeyFocused = $state(false);
+    let isApiKeyHovered = $state(false);
+    let isLoading = $state(false);
 
-    $: showApiKey = isApiKeyFocused || isApiKeyHovered;
+    let showApiKey = $derived(isApiKeyFocused || isApiKeyHovered);
+
+    // Sync local state with service's reactive state
+    $effect(() => {
+        const serviceKey = apiKeyService.apiKeys[provider.value];
+        if (serviceKey !== undefined) {
+            apiKey = serviceKey;
+        }
+    });
 
     onMount(async () => {
         try {
@@ -32,6 +41,8 @@
             const success = await apiKeyService.setApiKey(provider.value, apiKey);
             if (success) {
                 console.log(`API key for ${provider.label} updated successfully`);
+                // Reload models to reflect API key changes in model selector
+                await loadModels();
             }
         } catch (error) {
             console.error(`Error setting API key for ${provider.label}:`, error);
@@ -47,6 +58,8 @@
             if (success) {
                 apiKey = "";
                 console.log(`API key for ${provider.label} deleted successfully`);
+                // Reload models to reflect API key changes in model selector
+                await loadModels();
             }
         } catch (error) {
             console.error(`Error deleting API key for ${provider.label}:`, error);
@@ -63,16 +76,16 @@
             <div class="relative"
                  role="button"
                  tabindex="0"
-                 on:mouseenter={() => isApiKeyHovered = true}
-                 on:mouseleave={() => isApiKeyHovered = false}>
+                 onmouseenter={() => isApiKeyHovered = true}
+                 onmouseleave={() => isApiKeyHovered = false}>
                 <Input id={`apiKey-${provider.value}`}
                        class={cn(
                            "pr-[164px] transition-all duration-200",
                            !showApiKey && "filter blur-sm"
                        )}
-                       bind:value={apiKey} 
-                       on:focus={() => isApiKeyFocused = true}
-                       on:blur={() => isApiKeyFocused = false}
+                       bind:value={apiKey}
+                       onfocus={() => isApiKeyFocused = true}
+                       onblur={() => isApiKeyFocused = false}
                        placeholder={`Enter ${provider.label} API Key`}
                        aria-label={`${provider.label} API Key`}
                        aria-describedby={`apiKeyDescription-${provider.value}`} />
@@ -82,7 +95,7 @@
                     <Button
                         type="submit"
                         class="rounded-r-none"
-                        on:click={submitApiKey}
+                        onclick={submitApiKey}
                         aria-label={`Submit ${provider.label} API Key`}
                     >
                         Submit
@@ -91,7 +104,7 @@
                         type="button"
                         variant="destructive"
                         class="rounded-l-none border-l-0"
-                        on:click={deleteApiKey}
+                        onclick={deleteApiKey}
                         aria-label={`Delete ${provider.label} API Key`}
                     >
                         <Trash2 class="h-4 w-4" />

@@ -33,22 +33,31 @@ export const hasAttachments = derived(
 // Actions
 export async function loadModels() {
   try {
+    console.log('[ChatStore] Starting loadModels...');
+
     // First load API keys to ensure model availability is updated
+    console.log('[ChatStore] Loading API keys...');
     await apiKeyService.loadAllApiKeys();
-    
+    console.log('[ChatStore] API keys loaded');
+
     // Get models from both sources
+    console.log('[ChatStore] Loading stored models...');
     const storedModels = await modelService.loadModels();
+    console.log('[ChatStore] Stored models count:', storedModels.length);
+
+    console.log('[ChatStore] Getting registry models with capabilities...');
     const registryModels = modelService.getAvailableModelsWithCapabilities();
-    
+    console.log('[ChatStore] Registry models count:', registryModels.length);
+
     // Combine models, prioritizing registry models for their capabilities
     const combinedModels = [...storedModels];
-    
+
     // Add registry models that aren't already in stored models
     for (const regModel of registryModels) {
       const existingIndex = combinedModels.findIndex(
         m => m.model_name === regModel.model_name && m.provider === regModel.provider
       );
-      
+
       if (existingIndex >= 0) {
         // Update existing model with capabilities and specs
         combinedModels[existingIndex] = {
@@ -61,16 +70,24 @@ export async function loadModels() {
         combinedModels.push(regModel);
       }
     }
-    
+
+    console.log('[ChatStore] Combined models count:', combinedModels.length);
+
     // Filter to only enabled models
     const enabledModels = combinedModels.filter(model => model.enabled);
+    console.log('[ChatStore] Enabled models count:', enabledModels.length);
+    console.log('[ChatStore] Enabled models:', enabledModels.map(m => `${m.model_name} (${m.provider})`));
+
     availableModels.set(enabledModels);
 
     if (enabledModels.length > 0) {
       selectedModel.set(enabledModels[0].model_name);
+      console.log('[ChatStore] Selected default model:', enabledModels[0].model_name);
+    } else {
+      console.warn('[ChatStore] No enabled models available!');
     }
   } catch (error) {
-    console.error('Failed to load models:', error);
+    console.error('[ChatStore] Failed to load models:', error);
   }
 }
 

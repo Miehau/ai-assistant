@@ -1,5 +1,5 @@
 export * from './registry';
-import { ApiKeyService } from './apiKeyService';
+import { ApiKeyService } from './apiKeyService.svelte';
 import { ModelService } from './modelService';
 
 // Create and export singleton instances

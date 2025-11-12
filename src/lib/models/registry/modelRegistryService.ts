@@ -25,17 +25,22 @@ export class ModelRegistryService {
    */
   public updateAvailableModels(apiKeys: Record<string, string> = {}): void {
     this.availableModels = {};
-    
-    console.log('Updating available models with API keys:', Object.keys(apiKeys));
-    
-    // For development/testing, make all models available regardless of API keys
-    // This ensures models show up in the UI even without API keys
+
+    console.log('[ModelRegistry] Updating available models with API keys:', Object.keys(apiKeys));
+    console.log('[ModelRegistry] Total models to check:', Object.keys(this.models).length);
+
+    // Only include models whose provider has an API key
     Object.entries(this.models).forEach(([modelName, modelConfig]) => {
-      this.availableModels[modelName] = modelConfig;
-      console.log(`Added model ${modelName} from provider ${modelConfig.provider}`);
+      if (apiKeys[modelConfig.provider]) {
+        this.availableModels[modelName] = modelConfig;
+        console.log(`[ModelRegistry] ✓ Added model ${modelName} from provider ${modelConfig.provider}`);
+      } else {
+        console.log(`[ModelRegistry] ✗ Skipped model ${modelName} from provider ${modelConfig.provider} (no API key)`);
+      }
     });
-    
-    console.log('Available models after update:', Object.keys(this.availableModels).length);
+
+    console.log('[ModelRegistry] Available models after update:', Object.keys(this.availableModels).length);
+    console.log('[ModelRegistry] Available model IDs:', Object.keys(this.availableModels));
   }
 
   /**
