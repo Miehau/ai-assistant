@@ -73,11 +73,11 @@
   }
 </script>
 
-<div class="relative flex flex-col h-full min-h-[50vh] rounded-xl bg-muted/50 p-4 lg:col-span-2 w-full">
-  <div class="flex-1 overflow-hidden mb-4 relative">
+<div class="relative flex flex-col h-full min-h-[50vh] max-h-screen rounded-xl bg-muted/50 p-4 lg:col-span-2 w-full">
+  <div class="flex-1 overflow-auto mb-4 relative">
     {#if isClearing}
-      <div 
-        class="absolute inset-0 flex items-center justify-center z-10 bg-background/30 backdrop-blur-sm" 
+      <div
+        class="absolute inset-0 flex items-center justify-center z-10 bg-background/30 backdrop-blur-sm"
         transition:fade={{ duration: 200 }}
       >
         <div class="text-center">
@@ -88,8 +88,8 @@
     {/if}
     <ChatMessages messages={$messages} bind:chatContainer bind:autoScroll conversationId={$currentConversation?.id} />
   </div>
-  
-  <div class="sticky bottom-0 bg-muted/50">
+
+  <div class="bg-muted/50">
     <ChatInput
       bind:currentMessage={$currentMessage}
       bind:attachments={$attachments}

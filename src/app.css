@@ -262,4 +262,40 @@
   .scroll-shadow.visible {
     opacity: 1;
   }
+
+  /* Message bubble glass effects */
+  .message-glass-user {
+    background: rgba(82, 183, 136, 0.1);
+    backdrop-filter: blur(20px) saturate(180%);
+    transition: all 0.3s ease;
+  }
+
+  .message-glass-user:hover {
+    box-shadow: 0 0 20px rgba(82, 183, 136, 0.4);
+    background: rgba(82, 183, 136, 0.15);
+  }
+
+  .message-glass-ai {
+    background: rgba(34, 211, 238, 0.1);
+    backdrop-filter: blur(20px) saturate(180%);
+    transition: all 0.3s ease;
+  }
+
+  .message-glass-ai:hover {
+    box-shadow: 0 0 20px rgba(34, 211, 238, 0.4);
+    background: rgba(34, 211, 238, 0.15);
+  }
+
+  /* Code block glass effects */
+  .code-block-glass {
+    background: rgba(0, 0, 0, 0.4) !important;
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    transition: all 0.3s ease;
+  }
+
+  .code-block-glass:hover {
+    border-color: rgba(34, 211, 238, 0.3) !important;
+    box-shadow: 0 0 20px rgba(34, 211, 238, 0.2);
+  }
 }

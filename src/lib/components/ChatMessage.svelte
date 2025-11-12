@@ -177,12 +177,7 @@
         : escapeHtml(code);
 
       return `
-        <div class="code-block-wrapper relative group">
-          <div class="absolute top-0 left-0 right-0 h-8 code-block-gradient-bar rounded-t-lg flex items-center px-3">
-            <div class="flex items-center gap-2">
-              <span class="text-[10px] uppercase tracking-wider text-white/90 font-medium">${language}</span>
-            </div>
-          </div>
+        <div class="code-block-wrapper relative group mb-4">
           <button
             class="copy-button opacity-0 group-hover:opacity-100 absolute top-1 right-2
             p-1.5 rounded-md hover:bg-white/10 transition-all duration-200"
@@ -193,9 +188,7 @@
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
           </button>
-          <div class="mt-8">
-            <pre class="code-block-glass"><code class="language-${language}">${highlightedCode}</code></pre>
-          </div>
+          <pre class="code-block-glass"><code class="language-${language}">${highlightedCode}</code></pre>
         </div>
       `;
     };
@@ -290,7 +283,7 @@
 
 <div class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}">
   <div
-    class="rounded-2xl px-4 py-2 max-w-[75%] {type === 'received'
+    class="rounded-3xl px-4 py-2 max-w-[75%] {type === 'received'
       ? 'message-glass-ai'
       : 'text-primary-foreground message-glass-user'}"
   >

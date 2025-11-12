@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, afterUpdate } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import ChatMessage from "../ChatMessage.svelte";
   import { fade, fly, scale } from "svelte/transition";
   import { backOut } from "svelte/easing";
@@ -17,24 +17,25 @@
   let lastMessageCount = 0;
   let scrollThrottleTimeout: number | null = null;
   let resizeThrottleTimeout: number | null = null;
+  let resizeObserver: ResizeObserver | null = null;
 
   function preserveScrollFromBottom() {
-    if (chatContainer) {
-      const newScrollHeight = chatContainer.scrollHeight;
-      const visibleHeight = chatContainer.clientHeight;
+    if (!chatContainer) return;
 
-      // Calculate distance from bottom before resize
-      const distanceFromBottom =
-        lastScrollHeight - (lastScrollTop + visibleHeight);
+    const newScrollHeight = chatContainer.scrollHeight;
+    const visibleHeight = chatContainer.clientHeight;
 
-      // Restore the same distance from bottom after resize
-      chatContainer.scrollTop =
-        newScrollHeight - (distanceFromBottom + visibleHeight);
+    // Calculate distance from bottom before resize
+    const distanceFromBottom =
+      lastScrollHeight - (lastScrollTop + visibleHeight);
 
-      // Update values for next resize
-      lastScrollHeight = newScrollHeight;
-      lastScrollTop = chatContainer.scrollTop;
-    }
+    // Restore the same distance from bottom after resize
+    chatContainer.scrollTop =
+      newScrollHeight - (distanceFromBottom + visibleHeight);
+
+    // Update values for next resize
+    lastScrollHeight = newScrollHeight;
+    lastScrollTop = chatContainer.scrollTop;
   }
 
   // Throttled version to reduce frequency of scroll preservation
@@ -49,36 +50,17 @@
     }, 100) as unknown as number; // Throttle to max 10 times per second
   }
 
-  // Add resize observer with throttling
-  onMount(() => {
-    if (chatContainer) {
-      const resizeObserver = new ResizeObserver(() => {
-        throttledPreserveScroll();
-      });
-
-      resizeObserver.observe(chatContainer);
-
-      return () => {
-        resizeObserver.disconnect();
-        // Clean up throttle timeout
-        if (resizeThrottleTimeout !== null) {
-          clearTimeout(resizeThrottleTimeout);
-        }
-      };
-    }
-  });
-
   function handleScroll() {
     if (!chatContainer) return;
-    
+
     // Clear existing timeout
     if (scrollTimeout) {
       clearTimeout(scrollTimeout);
     }
 
-    const isScrolledToBottom = 
+    const isScrolledToBottom =
       Math.abs((chatContainer.scrollHeight - chatContainer.scrollTop) - chatContainer.clientHeight) < 10;
-    
+
     // If user scrolls up, disable auto-scroll
     if (!isScrolledToBottom) {
       autoScroll = false;
@@ -92,16 +74,50 @@
     }
   }
 
-  // Add the scroll event listener in onMount
-  onMount(() => {
+  // Setup event listeners and observers
+  function setupScrollBehavior() {
+    if (!chatContainer) return;
+
+    // Setup scroll event listener
+    chatContainer.addEventListener('scroll', handleScroll);
+
+    // Setup resize observer
+    resizeObserver = new ResizeObserver(() => {
+      throttledPreserveScroll();
+    });
+    resizeObserver.observe(chatContainer);
+  }
+
+  // Cleanup function
+  function cleanup() {
     if (chatContainer) {
-      chatContainer.addEventListener('scroll', handleScroll);
-      return () => {
-        chatContainer?.removeEventListener('scroll', handleScroll);
-        if (scrollTimeout) clearTimeout(scrollTimeout);
-        if (scrollThrottleTimeout !== null) clearTimeout(scrollThrottleTimeout);
-      };
+      chatContainer.removeEventListener('scroll', handleScroll);
     }
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = null;
+    }
+    if (scrollThrottleTimeout !== null) {
+      clearTimeout(scrollThrottleTimeout);
+      scrollThrottleTimeout = null;
+    }
+    if (resizeThrottleTimeout !== null) {
+      clearTimeout(resizeThrottleTimeout);
+      resizeThrottleTimeout = null;
+    }
+  }
+
+  // Initialize on mount
+  onMount(() => {
+    setupScrollBehavior();
+  });
+
+  onDestroy(() => {
+    cleanup();
   });
 
   export function scrollToBottom() {
