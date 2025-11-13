@@ -144,6 +144,36 @@
     border: 1px solid rgba(255, 255, 255, 0.15);
   }
 
+  .glass-panel-enhanced {
+    background: rgba(255, 255, 255, 0.06);
+    backdrop-filter: blur(30px) saturate(200%);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow:
+      0 8px 32px 0 rgba(0, 0, 0, 0.37),
+      0 0 20px 0 rgba(82, 183, 136, 0.15);
+  }
+
+  .glass-panel-minimal {
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  .glass-trigger {
+    background: rgba(255, 255, 255, 0.02);
+    backdrop-filter: blur(12px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.1);
+    transition: all 0.2s ease;
+  }
+
+  .glass-trigger:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.15);
+  }
+
   /* Glass badges */
   .glass-badge {
     background: rgba(0, 0, 0, 0.4);
@@ -163,6 +193,23 @@
     font-size: 0.625rem;
   }
 
+  .glass-badge-subtle {
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(15px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  /* Glass menu for dropdowns */
+  .glass-panel-menu {
+    background: rgba(10, 10, 10, 0.85);
+    backdrop-filter: blur(25px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow:
+      0 8px 32px 0 rgba(0, 0, 0, 0.5),
+      0 0 0 1px rgba(82, 183, 136, 0.1);
+  }
+
   /* Gradient utilities */
   .gradient-primary {
     background: linear-gradient(135deg, #52b788 0%, #06ffa5 100%);
@@ -178,6 +225,22 @@
 
   .gradient-amber {
     background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+  }
+
+  .gradient-primary-glass {
+    background: linear-gradient(135deg, #52b788 0%, #06ffa5 100%);
+    backdrop-filter: blur(10px);
+    box-shadow:
+      0 4px 16px 0 rgba(82, 183, 136, 0.3),
+      0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    transition: all 0.3s ease;
+  }
+
+  .gradient-primary-glass:hover {
+    box-shadow:
+      0 6px 24px 0 rgba(82, 183, 136, 0.5),
+      0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+    transform: translateY(-1px);
   }
 
   /* Animated gradient background */

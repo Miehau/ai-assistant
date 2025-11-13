@@ -83,7 +83,7 @@
             }
         }}
     >
-        <Select.Trigger class="min-w-[150px] w-fit glass-badge hover:glass-light transition-all">
+        <Select.Trigger class="min-w-[150px] w-fit">
             {#if selectedSystemPrompt}
                 <div class="flex items-center gap-2">
                     <span class="truncate max-w-[120px]"
@@ -126,7 +126,7 @@
             }
         }}
     >
-        <Select.Trigger class="min-w-[150px] max-w-[220px] w-fit justify-between glass-badge hover:glass-light transition-all">
+        <Select.Trigger class="min-w-[150px] max-w-[220px] w-fit justify-between">
             {#if selectedModel}
                 {@const model = availableModels.find(m => m.model_name === selectedModel)}
                 <span class="truncate">{model ? `${model.model_name} • ${model.provider}` : selectedModel}</span>

@@ -308,7 +308,7 @@
 </style>
 
 <form
-  class="relative overflow-hidden rounded-lg glass-panel border-white/10 focus-within:ring-1 focus-within:ring-ring focus-within:ring-primary focus-within:glow-green transition-all duration-300 mx-4"
+  class="relative overflow-hidden rounded-2xl glass-panel-enhanced border-white/10 focus-within:ring-1 focus-within:ring-ring focus-within:ring-primary focus-within:glow-green transition-all duration-300 mx-6 mb-4"
   class:drag-active={dragActive}
   on:dragenter={(e) => {
     e.preventDefault();
@@ -488,15 +488,14 @@
 
       <Button
         type="button"
+        size="icon"
+        variant={isLoading ? "destructive" : "ghost"}
         on:click={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
-        size="sm"
-        class="gap-1.5 {!isLoading ? 'gradient-primary hover:glow-green transition-all duration-300' : ''}"
-        variant={isLoading ? "destructive" : "default"}
       >
         {#if isLoading}
-          <Square class="size-3.5" />
+          <Square class="size-4" />
         {:else}
-          <Send class="size-3.5" />
+          <Send class="size-4" />
         {/if}
       </Button>
     </div>

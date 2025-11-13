@@ -79,15 +79,15 @@
   const maxTokens = $derived(modelId ? getModelContextWindow(modelId) : 128000);
 </script>
 
-<div class="glass-badge px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm">
+<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground/50 hover:text-muted-foreground/70 transition-colors duration-200">
   {#if usage}
     <div class="flex items-center gap-1">
-      <span class="text-muted-foreground">Tokens:</span>
-      <span class="font-medium">
-        {displayTokens().isEstimating ? '~' : ''}{displayTokens().total.toLocaleString()} / {maxTokens.toLocaleString()}
+      <span>Tokens:</span>
+      <span class="font-mono text-foreground/60">
+        {displayTokens().isEstimating ? '~' : ''}{displayTokens().total.toLocaleString()}<span class="text-muted-foreground/40 mx-0.5">/</span>{maxTokens.toLocaleString()}
       </span>
     </div>
   {:else}
-    <span class="text-muted-foreground">No usage data</span>
+    <span>No usage data</span>
   {/if}
 </div>

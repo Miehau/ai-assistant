@@ -31,7 +31,7 @@
     {outTransitionConfig}
     {sideOffset}
     class={cn(
-        "relative z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md focus:outline-none",
+        "relative z-50 min-w-[8rem] overflow-hidden rounded-xl glass-panel-menu text-popover-foreground focus:outline-none",
         className,
     )}
     {...restProps}

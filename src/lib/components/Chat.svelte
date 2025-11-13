@@ -71,7 +71,7 @@
   }
 </script>
 
-<div class="relative flex flex-col h-full min-h-[50vh] max-h-screen rounded-xl bg-muted/50 px-6 py-4 md:px-12 lg:px-16 lg:col-span-2 w-full">
+<div class="relative flex flex-col h-full min-h-[50vh] max-h-screen rounded-xl bg-muted/50 px-6 pt-4 pb-6 md:px-12 lg:px-16 lg:col-span-2 w-full">
   <div class="flex-1 overflow-auto mb-4 relative">
     {#if isClearing}
       <div
@@ -87,33 +87,31 @@
     <ChatMessages messages={$messages} bind:chatContainer bind:autoScroll conversationId={$currentConversation?.id} />
   </div>
 
-  <div class="bg-muted/50">
-    <ChatInput
-      bind:currentMessage={$currentMessage}
-      bind:attachments={$attachments}
-      isLoading={$isLoading}
-      modelId={$selectedModel}
-      messages={$messages}
-      systemPrompt={$selectedSystemPrompt?.content || ''}
-      on:sendMessage={handleSendMessage}
-    >
-      <div slot="controls">
-        <ChatControls
-          availableModels={$availableModels}
-          systemPrompts={$systemPrompts}
-          bind:selectedModel={$selectedModel}
-          bind:selectedSystemPrompt={$selectedSystemPrompt}
-          bind:streamingEnabled={$streamingEnabled}
-          conversationId={$currentConversation?.id}
-          currentMessage={$currentMessage}
-          messages={$messages}
-          isLoading={$isLoading}
-          on:toggleStreaming={handleToggleStreaming}
-          on:removeMessages={handleClearConversation}
-        />
-      </div>
-    </ChatInput>
-  </div>
+  <ChatInput
+    bind:currentMessage={$currentMessage}
+    bind:attachments={$attachments}
+    isLoading={$isLoading}
+    modelId={$selectedModel}
+    messages={$messages}
+    systemPrompt={$selectedSystemPrompt?.content || ''}
+    on:sendMessage={handleSendMessage}
+  >
+    <div slot="controls">
+      <ChatControls
+        availableModels={$availableModels}
+        systemPrompts={$systemPrompts}
+        bind:selectedModel={$selectedModel}
+        bind:selectedSystemPrompt={$selectedSystemPrompt}
+        bind:streamingEnabled={$streamingEnabled}
+        conversationId={$currentConversation?.id}
+        currentMessage={$currentMessage}
+        messages={$messages}
+        isLoading={$isLoading}
+        on:toggleStreaming={handleToggleStreaming}
+        on:removeMessages={handleClearConversation}
+      />
+    </div>
+  </ChatInput>
 </div>
 
 <style>
