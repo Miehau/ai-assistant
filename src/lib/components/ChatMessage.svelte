@@ -308,7 +308,7 @@
 
 <div class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}">
   <div
-    class="rounded-3xl px-4 py-2 max-w-[75%] {type === 'received'
+    class="rounded-3xl px-4 py-2 w-full max-w-5xl {type === 'received'
       ? 'message-glass-ai'
       : 'text-primary-foreground message-glass-user'}"
   >

@@ -71,7 +71,7 @@
   }
 </script>
 
-<div class="relative flex flex-col h-full min-h-[50vh] max-h-screen rounded-xl bg-muted/50 p-4 lg:col-span-2 w-full">
+<div class="relative flex flex-col h-full min-h-[50vh] max-h-screen rounded-xl bg-muted/50 px-6 py-4 md:px-12 lg:px-16 lg:col-span-2 w-full">
   <div class="flex-1 overflow-auto mb-4 relative">
     {#if isClearing}
       <div

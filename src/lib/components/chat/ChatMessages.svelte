@@ -180,7 +180,7 @@
 
 <div
   bind:this={chatContainer}
-  class="h-full overflow-y-auto pr-4 space-y-4 w-full"
+  class="h-full overflow-y-auto pr-4 space-y-4 w-full px-2 md:px-4 lg:px-6"
   on:scroll={handleScroll}
 >
   {#each messages as msg, i (msg.id || `${msg.type}-${i}`)}
