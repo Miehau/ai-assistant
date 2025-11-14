@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { createEventDispatcher } from "svelte";
     import * as Tooltip from "$lib/components/ui/tooltip";
     import { Button } from "$lib/components/ui/button";
     import * as Select from "$lib/components/ui/select";
@@ -8,35 +7,57 @@
     import { Eye, Headphones, Zap, Database, Brain } from "lucide-svelte";
     import TokenCounter from "./TokenCounter.svelte";
 
-    export let availableModels: Model[] = [];
-    export let systemPrompts: SystemPrompt[] = [];
-    export let selectedModel: string;
-    export let selectedSystemPrompt: SystemPrompt | null = null;
-    export let streamingEnabled: boolean = true;
-    export let conversationId: string | undefined = undefined;
-    export let currentMessage: string = '';
-    export let messages: Message[] = [];
-    export let isLoading: boolean = false;
+    interface Props {
+        availableModels?: Model[];
+        systemPrompts?: SystemPrompt[];
+        selectedModel: string;
+        selectedSystemPrompt?: SystemPrompt | null;
+        streamingEnabled?: boolean;
+        conversationId?: string;
+        currentMessage?: string;
+        messages?: Message[];
+        isLoading?: boolean;
+        onSystemPromptSelect?: (prompt: SystemPrompt) => void;
+        onToggleStreaming?: (enabled: boolean) => void;
+        onRemoveMessages?: () => void;
+        onModelSelect?: (modelName: string) => void;
+    }
 
-    const dispatch = createEventDispatcher();
-
+    let {
+        availableModels = [],
+        systemPrompts = [],
+        selectedModel = $bindable(),
+        selectedSystemPrompt = $bindable(null),
+        streamingEnabled = $bindable(true),
+        conversationId = undefined,
+        currentMessage = '',
+        messages = [],
+        isLoading = false,
+        onSystemPromptSelect,
+        onToggleStreaming,
+        onRemoveMessages,
+        onModelSelect
+    }: Props = $props();
 
     function selectSystemPrompt(prompt: SystemPrompt) {
         selectedSystemPrompt = prompt;
-        dispatch("systemPromptSelect", prompt);
+        onSystemPromptSelect?.(prompt);
     }
 
     function toggleStreaming() {
         streamingEnabled = !streamingEnabled;
-        dispatch("toggleStreaming", streamingEnabled);
+        onToggleStreaming?.(streamingEnabled);
     }
 
     function removeMessages() {
-        dispatch("removeMessages");
+        onRemoveMessages?.();
     }
 
+    // Track if model dropdown is open for lazy-loading tooltips
+    let modelDropdownOpen = $state(false);
+
     // Memoized provider groups - only recalculates when availableModels changes
-    $: providerGroups = (() => {
+    const providerGroups = $derived.by(() => {
         const groups: { provider: string; models: Model[] }[] = [];
 
         // Group models by provider
@@ -65,7 +86,7 @@
         });
 
         return groups;
-    })();
+    });
 </script>
 
 <div class="flex items-center justify-between w-full gap-2">
@@ -122,8 +143,11 @@
         bind:value={selectedModel}
         onValueChange={(v) => {
             if (v) {
-                dispatch("modelSelect", v);
+                onModelSelect?.(v);
             }
+        }}
+        onOpenChange={(open) => {
+            modelDropdownOpen = open;
         }}
     >
         <Select.Trigger class="min-w-[150px] max-w-[220px] w-fit justify-between">
@@ -169,100 +193,124 @@
                                                 <div
                                                     class="flex gap-1 justify-self-end"
                                                 >
-                                                    {#if model.capabilities.reasoning}
-                                                        <Tooltip.Root>
-                                                            <Tooltip.Trigger
-                                                                asChild
-                                                            >
-                                                                {#snippet child({ props })}
-                                                                    <span
-                                                                        {...props}
-                                                                        class="cursor-help inline-block"
-                                                                    >
-                                                                        <Brain
-                                                                            class="h-3 w-3 text-accent-amber drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]"
-                                                                        />
-                                                                    </span>
-                                                                {/snippet}
-                                                            </Tooltip.Trigger>
-                                                            <Tooltip.Content
-                                                                side="top"
-                                                            >
-                                                                Advanced
-                                                                reasoning
-                                                            </Tooltip.Content>
-                                                        </Tooltip.Root>
-                                                    {/if}
-                                                    {#if model.capabilities.vision}
-                                                        <Tooltip.Root>
-                                                            <Tooltip.Trigger
-                                                                asChild
-                                                            >
-                                                                {#snippet child({ props })}
-                                                                    <span
-                                                                        {...props}
-                                                                        class="cursor-help inline-block"
-                                                                    >
-                                                                        <Eye
-                                                                            class="h-3 w-3 text-accent-cyan drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]"
-                                                                        />
-                                                                    </span>
-                                                                {/snippet}
-                                                            </Tooltip.Trigger>
-                                                            <Tooltip.Content
-                                                                side="top"
-                                                            >
-                                                                Vision
-                                                                capability
-                                                            </Tooltip.Content>
-                                                        </Tooltip.Root>
-                                                    {/if}
-                                                    {#if model.capabilities.audio}
-                                                        <Tooltip.Root>
-                                                            <Tooltip.Trigger
-                                                                asChild
-                                                            >
-                                                                {#snippet child({ props })}
-                                                                    <span
-                                                                        {...props}
-                                                                        class="cursor-help inline-block"
-                                                                    >
-                                                                        <Headphones
-                                                                            class="h-3 w-3 text-primary drop-shadow-[0_0_4px_rgba(82,183,136,0.5)]"
-                                                                        />
-                                                                    </span>
-                                                                {/snippet}
-                                                            </Tooltip.Trigger>
-                                                            <Tooltip.Content
-                                                                side="top"
-                                                            >
-                                                                Audio capability
-                                                            </Tooltip.Content>
-                                                        </Tooltip.Root>
-                                                    {/if}
-                                                    {#if model.capabilities.embedding}
-                                                        <Tooltip.Root>
-                                                            <Tooltip.Trigger
-                                                                asChild
-                                                            >
-                                                                {#snippet child({ props })}
-                                                                    <span
-                                                                        {...props}
-                                                                        class="cursor-help inline-block"
-                                                                    >
-                                                                        <Database
-                                                                            class="h-3 w-3 text-accent-purple drop-shadow-[0_0_4px_rgba(168,85,247,0.5)]"
-                                                                        />
-                                                                    </span>
-                                                                {/snippet}
-                                                            </Tooltip.Trigger>
-                                                            <Tooltip.Content
-                                                                side="top"
-                                                            >
-                                                                Embedding
-                                                                capability
-                                                            </Tooltip.Content>
-                                                        </Tooltip.Root>
+                                                    {#if modelDropdownOpen}
+                                                        {#if model.capabilities.reasoning}
+                                                            <Tooltip.Root>
+                                                                <Tooltip.Trigger
+                                                                    asChild
+                                                                >
+                                                                    {#snippet child({ props })}
+                                                                        <span
+                                                                            {...props}
+                                                                            class="cursor-help inline-block"
+                                                                        >
+                                                                            <Brain
+                                                                                class="h-3 w-3 text-accent-amber drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]"
+                                                                            />
+                                                                        </span>
+                                                                    {/snippet}
+                                                                </Tooltip.Trigger>
+                                                                <Tooltip.Content
+                                                                    side="top"
+                                                                >
+                                                                    Advanced
+                                                                    reasoning
+                                                                </Tooltip.Content>
+                                                            </Tooltip.Root>
+                                                        {/if}
+                                                        {#if model.capabilities.vision}
+                                                            <Tooltip.Root>
+                                                                <Tooltip.Trigger
+                                                                    asChild
+                                                                >
+                                                                    {#snippet child({ props })}
+                                                                        <span
+                                                                            {...props}
+                                                                            class="cursor-help inline-block"
+                                                                        >
+                                                                            <Eye
+                                                                                class="h-3 w-3 text-accent-cyan drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]"
+                                                                            />
+                                                                        </span>
+                                                                    {/snippet}
+                                                                </Tooltip.Trigger>
+                                                                <Tooltip.Content
+                                                                    side="top"
+                                                                >
+                                                                    Vision
+                                                                    capability
+                                                                </Tooltip.Content>
+                                                            </Tooltip.Root>
+                                                        {/if}
+                                                        {#if model.capabilities.audio}
+                                                            <Tooltip.Root>
+                                                                <Tooltip.Trigger
+                                                                    asChild
+                                                                >
+                                                                    {#snippet child({ props })}
+                                                                        <span
+                                                                            {...props}
+                                                                            class="cursor-help inline-block"
+                                                                        >
+                                                                            <Headphones
+                                                                                class="h-3 w-3 text-primary drop-shadow-[0_0_4px_rgba(82,183,136,0.5)]"
+                                                                            />
+                                                                        </span>
+                                                                    {/snippet}
+                                                                </Tooltip.Trigger>
+                                                                <Tooltip.Content
+                                                                    side="top"
+                                                                >
+                                                                    Audio capability
+                                                                </Tooltip.Content>
+                                                            </Tooltip.Root>
+                                                        {/if}
+                                                        {#if model.capabilities.embedding}
+                                                            <Tooltip.Root>
+                                                                <Tooltip.Trigger
+                                                                    asChild
+                                                                >
+                                                                    {#snippet child({ props })}
+                                                                        <span
+                                                                            {...props}
+                                                                            class="cursor-help inline-block"
+                                                                        >
+                                                                            <Database
+                                                                                class="h-3 w-3 text-accent-purple drop-shadow-[0_0_4px_rgba(168,85,247,0.5)]"
+                                                                            />
+                                                                        </span>
+                                                                    {/snippet}
+                                                                </Tooltip.Trigger>
+                                                                <Tooltip.Content
+                                                                    side="top"
+                                                                >
+                                                                    Embedding
+                                                                    capability
+                                                                </Tooltip.Content>
+                                                            </Tooltip.Root>
+                                                        {/if}
+                                                    {:else}
+                                                        <!-- Show icons without tooltips when dropdown is closed -->
+                                                        {#if model.capabilities.reasoning}
+                                                            <Brain
+                                                                class="h-3 w-3 text-accent-amber drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]"
+                                                            />
+                                                        {/if}
+                                                        {#if model.capabilities.vision}
+                                                            <Eye
+                                                                class="h-3 w-3 text-accent-cyan drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]"
+                                                            />
+                                                        {/if}
+                                                        {#if model.capabilities.audio}
+                                                            <Headphones
+                                                                class="h-3 w-3 text-primary drop-shadow-[0_0_4px_rgba(82,183,136,0.5)]"
+                                                            />
+                                                        {/if}
+                                                        {#if model.capabilities.embedding}
+                                                            <Database
+                                                                class="h-3 w-3 text-accent-purple drop-shadow-[0_0_4px_rgba(168,85,247,0.5)]"
+                                                            />
+                                                        {/if}
                                                     {/if}
                                                 </div>
                                             {/if}

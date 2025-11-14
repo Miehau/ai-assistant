@@ -16,7 +16,7 @@
 	{disabled}
 	{label}
 	class={cn(
-		"relative flex w-full cursor-default select-none items-center rounded-lg py-1.5 pl-2 pr-8 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-white/10 data-[highlighted]:text-foreground data-[disabled]:opacity-50 transition-colors duration-150",
+		"relative flex w-full cursor-default select-none items-center rounded-lg py-1.5 pl-2 pr-8 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-white/10 data-[highlighted]:text-foreground data-[disabled]:opacity-50 transition-colors duration-50 [contain:layout_style]",
 		className
 	)}
 	{...restProps}

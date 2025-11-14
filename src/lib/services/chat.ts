@@ -12,6 +12,14 @@ import { calculateCost } from '$lib/utils/costCalculator';
 import { branchService } from './branchService';
 import { currentConversationUsage } from '$lib/stores/tokenUsage';
 
+// Register tools on module load
+import { toolRegistry } from './toolRegistry';
+import { respondTool } from '$lib/tools/respond';
+import { apiCallTool } from '$lib/tools/apiCall';
+
+toolRegistry.register(respondTool);
+toolRegistry.register(apiCallTool);
+
 export class ChatService {
   private streamResponse = true;
   private currentController: AbortController | null = null;

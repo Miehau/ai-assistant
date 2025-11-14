@@ -35,7 +35,8 @@
     "tailwind-variants": "^0.2.1",
     "uuid": "^13.0.0",
     "vaul-svelte": "^0.3.2",
-    "zod": "^3.23.8"
+    "zod": "^4.1.12",
+    "zod-to-json-schema": "^3.24.6"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.1",
