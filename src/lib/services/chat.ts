@@ -16,9 +16,13 @@ import { currentConversationUsage } from '$lib/stores/tokenUsage';
 import { toolRegistry } from './toolRegistry';
 import { respondTool } from '$lib/tools/respond';
 import { apiCallTool } from '$lib/tools/apiCall';
+import { dbSearchTool } from '$lib/tools/dbSearch';
+import { orchestrator } from './orchestrator';
+import type { AgentResult } from '$lib/types/agent';
 
 toolRegistry.register(respondTool);
 toolRegistry.register(apiCallTool);
+toolRegistry.register(dbSearchTool);
 
 export class ChatService {
   private streamResponse = true;
@@ -408,6 +412,156 @@ export class ChatService {
     }
     
     throw new Error(`Unsupported provider: ${model.provider}`);
+  }
+
+  /**
+   * Handles sending a message with agent tool use capabilities
+   * This uses the dual-model architecture: agent LLM executes tools, user-facing LLM presents results
+   */
+  async handleSendMessageWithAgent(
+    content: string,
+    onStreamResponse: (chunk: string) => void,
+    onAgentActivity?: (activity: { status: string; toolsUsed?: any[]; iterations?: number }) => void,
+    attachments: Attachment[] = [],
+    userMessageId?: string,
+    assistantMessageId?: string
+  ) {
+    try {
+      this.currentController = new AbortController();
+
+      // Step 1: Process attachments
+      const processedAttachments = await this.processAttachments(attachments, content);
+
+      // Step 2: Prepare content with transcripts
+      let processedContent = content;
+      const audioTranscripts = processedAttachments
+        .filter((att) => att.attachment_type.startsWith('audio') && att.transcript)
+        .map((att) => `[Audio Transcript]: ${att.transcript}`);
+
+      if (audioTranscripts.length > 0) {
+        processedContent += '\n' + audioTranscripts.join('\n');
+      }
+
+      // Step 3: Get or create conversation
+      const conversation =
+        conversationService.getCurrentConversation() ??
+        (await conversationService.setCurrentConversation(null));
+      const history = await conversationService.getAPIHistory(conversation.id);
+
+      // Step 4: Get or create main branch
+      if (!this.currentBranchId) {
+        const mainBranch = await branchService.getOrCreateMainBranch(conversation.id);
+        this.currentBranchId = mainBranch.id;
+      }
+
+      // Step 5: Use orchestrator to handle the message with agent
+      let fullResponse = '';
+      let agentResult: AgentResult | undefined;
+
+      for await (const event of orchestrator.handleUserMessage(
+        processedContent,
+        conversation.id,
+        history
+      )) {
+        if (event.type === 'agent_status') {
+          onAgentActivity?.({ status: event.data.message });
+        } else if (event.type === 'agent_complete') {
+          agentResult = {
+            success: event.data.success,
+            toolsUsed: event.data.toolsUsed,
+            iterations: event.data.iterations,
+            metadata: event.data.metadata
+          };
+          onAgentActivity?.({
+            status: 'complete',
+            toolsUsed: event.data.toolsUsed,
+            iterations: event.data.iterations
+          });
+        } else if (event.type === 'stream_chunk') {
+          fullResponse += event.data;
+          onStreamResponse(event.data);
+        } else if (event.type === 'error') {
+          throw new Error(event.data.message);
+        }
+      }
+
+      this.currentController = null;
+
+      // Step 6: Save messages to conversation
+      const [savedUserMessageId, savedAssistantMessageId] = await Promise.all([
+        conversationService.saveMessage(
+          'user',
+          processedContent,
+          processedAttachments || [],
+          undefined,
+          userMessageId
+        ),
+        conversationService.saveMessage('assistant', fullResponse, [], undefined, assistantMessageId)
+      ]);
+
+      // Step 7: Create tree nodes for branching
+      try {
+        await Promise.all([
+          branchService.createMessageTreeNode(
+            savedUserMessageId,
+            this.lastMessageId,
+            this.currentBranchId,
+            false
+          ),
+          branchService.createMessageTreeNode(
+            savedAssistantMessageId,
+            savedUserMessageId,
+            this.currentBranchId,
+            false
+          )
+        ]);
+
+        this.lastMessageId = savedAssistantMessageId;
+      } catch (branchError) {
+        console.warn('Failed to create message tree nodes:', branchError);
+      }
+
+      // Step 8: Track usage if agent was used
+      if (agentResult && savedAssistantMessageId) {
+        Promise.resolve().then(async () => {
+          try {
+            const totalTokens = agentResult.metadata.tokensUsed;
+            const cost = agentResult.metadata.cost || 0;
+
+            await Promise.all([
+              invoke('save_message_usage', {
+                input: {
+                  message_id: savedAssistantMessageId,
+                  model_name: agentResult.metadata.modelUsed,
+                  prompt_tokens: Math.floor(totalTokens * 0.6), // Estimate
+                  completion_tokens: Math.floor(totalTokens * 0.4), // Estimate
+                  total_tokens: totalTokens,
+                  estimated_cost: cost
+                }
+              }),
+              invoke('update_conversation_usage', {
+                conversationId: conversation.id
+              }).then((usage) => currentConversationUsage.set(usage))
+            ]);
+          } catch (usageError) {
+            console.warn('Failed to save usage data:', usageError);
+          }
+        });
+      }
+
+      return {
+        text: fullResponse,
+        conversationId: conversation.id,
+        agentResult
+      };
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('Request was cancelled');
+        return;
+      }
+      console.error('Failed to send chat message with agent:', error);
+      throw error;
+    }
   }
 
   async transcribeAudio(base64Audio: string, prompt: string = ''): Promise<string> {
