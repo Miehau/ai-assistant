@@ -21,6 +21,7 @@ export const isLoading = writable<boolean>(false);
 export const attachments = writable<any[]>([]);
 export const currentMessage = writable<string>('');
 export const isFirstMessage = writable<boolean>(true);
+export const agentModeEnabled = writable<boolean>(false);
 
 // Streaming-specific stores for smooth updates without array reactivity
 export const streamingMessage = writable<string>('');
@@ -140,6 +141,7 @@ export async function sendMessage() {
   const selectedModelValue = get(selectedModel);
   const selectedSystemPromptValue = get(selectedSystemPrompt);
   const isFirstMessageValue = get(isFirstMessage);
+  const agentModeEnabledValue = get(agentModeEnabled);
 
   if (!currentMessageValue.trim() && attachmentsValue.length === 0) return;
 
@@ -195,18 +197,42 @@ export async function sendMessage() {
     // Generate assistant message ID before streaming
     const assistantMessageId = generateMessageId();
 
-    const result = await chatService.handleSendMessage(
-      currentMessageValue,
-      selectedModelValue,
-      (chunk: string) => {
-        // Update only the streaming store - no array reactivity!
-        streamingMessage.update(content => content + chunk);
-      },
-      systemPromptContent,
-      attachmentsValue,
-      userMessage.id,  // Pass user message ID
-      assistantMessageId  // Pass assistant message ID
-    );
+    let result;
+    let agentActivity: any = null;
+
+    if (agentModeEnabledValue) {
+      // Use agent mode with tool execution
+      result = await chatService.handleSendMessageWithAgent(
+        currentMessageValue,
+        (chunk: string) => {
+          // Update only the streaming store - no array reactivity!
+          streamingMessage.update(content => content + chunk);
+        },
+        (activity) => {
+          // Store agent activity for display
+          agentActivity = activity;
+          console.log('[Agent]', activity.status, activity);
+        },
+        attachmentsValue,
+        userMessage.id,  // Pass user message ID
+        assistantMessageId,  // Pass assistant message ID
+        selectedModelValue  // Pass selected model
+      );
+    } else {
+      // Use normal chat mode
+      result = await chatService.handleSendMessage(
+        currentMessageValue,
+        selectedModelValue,
+        (chunk: string) => {
+          // Update only the streaming store - no array reactivity!
+          streamingMessage.update(content => content + chunk);
+        },
+        systemPromptContent,
+        attachmentsValue,
+        userMessage.id,  // Pass user message ID
+        assistantMessageId  // Pass assistant message ID
+      );
+    }
 
     // Streaming complete - add final message to array (single update)
     const finalContent = get(streamingMessage);
@@ -214,7 +240,8 @@ export async function sendMessage() {
       messages.update(msgs => [...msgs, {
         id: assistantMessageId,  // Use the same ID
         type: 'received',
-        content: finalContent
+        content: finalContent,
+        agentActivity: agentActivity || undefined
       }]);
     }
 

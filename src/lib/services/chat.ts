@@ -11,6 +11,9 @@ import { DeepSeekService } from './deepseek';
 import { calculateCost } from '$lib/utils/costCalculator';
 import { branchService } from './branchService';
 import { currentConversationUsage } from '$lib/stores/tokenUsage';
+import { LLMService } from './base/LLMService';
+import type { LLMMessage } from '$lib/types/llm';
+import { v4 as uuidv4 } from 'uuid';
 
 // Register tools on module load
 import { toolRegistry } from './toolRegistry';
@@ -23,6 +26,22 @@ import type { AgentResult } from '$lib/types/agent';
 toolRegistry.register(respondTool);
 toolRegistry.register(apiCallTool);
 toolRegistry.register(dbSearchTool);
+
+/**
+ * Create LLM service instance based on provider
+ */
+function createLLMService(provider: string, apiKey: string): LLMService {
+  switch (provider.toLowerCase()) {
+    case 'openai':
+      return new OpenAIService(apiKey);
+    case 'anthropic':
+      return new AnthropicService(apiKey);
+    case 'deepseek':
+      return new DeepSeekService(apiKey);
+    default:
+      throw new Error(`Unsupported provider: ${provider}`);
+  }
+}
 
 export class ChatService {
   private streamResponse = true;
@@ -120,7 +139,7 @@ export class ChatService {
       await this.createChatCompletion(
         model,
         [], // No history needed for title generation
-        { type: "sent" as "sent", content: 'Title generation' }, // Dummy message
+        { id: uuidv4(), type: "sent" as "sent", content: 'Title generation' }, // Dummy message
         'You are a helpful assistant.',
         false, // Don't stream for title generation
         collectResponse,
@@ -137,6 +156,7 @@ export class ChatService {
 
   createMessage(content: string, attachments?: Attachment[]): Message {
     return {
+      id: uuidv4(),
       type: "sent",
       content: content.trim(),
       attachments: attachments?.length ? attachments : undefined
@@ -333,20 +353,21 @@ export class ChatService {
 
   private async processAttachments(attachments: Attachment[], content: string): Promise<Attachment[]> {
     const processedAttachments = [...attachments];
-    
+
     for (const attachment of processedAttachments) {
       if (attachment.attachment_type.startsWith("audio") && !attachment.transcript) {
         try {
+          // Audio transcription currently only supported by OpenAI
           const apiKey = await this.getApiKeyForProvider('openai');
-          const openAIService = new OpenAIService(apiKey);
-          attachment.transcript = await openAIService.transcribeAudio(attachment.data, content);
+          const llmService = createLLMService('openai', apiKey);
+          attachment.transcript = await (llmService as any).transcribeAudio(attachment.data, content);
         } catch (error) {
           console.error('Failed to transcribe audio:', error);
           attachment.transcript = '[Transcription failed]';
         }
-      } 
+      }
     }
-    
+
     return processedAttachments;
   }
 
@@ -360,34 +381,11 @@ export class ChatService {
     signal: AbortSignal,
     customMessages?: any[]
   ): Promise<string | { content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
-    
+
     // Use custom messages if provided, otherwise format the history and message
     const formattedMessages = customMessages || await formatMessages(history, message, systemPrompt);
 
-    if (model.provider === 'openai') {
-      const apiKey = await this.getApiKeyForProvider(model.provider);
-      const openAIService = new OpenAIService(apiKey);
-      return openAIService.createChatCompletion(
-        model.model_name,
-        formattedMessages,
-        streamResponse,
-        onStreamResponse,
-        signal
-      );
-    } 
-    
-    if (model.provider === 'anthropic') {
-      const apiKey = await this.getApiKeyForProvider(model.provider);
-      const anthropicService = new AnthropicService(apiKey);
-      return anthropicService.createChatCompletion(
-        model.model_name,
-        formattedMessages,
-        streamResponse,
-        onStreamResponse,
-        signal
-      );
-    }
-    
+    // Handle custom provider separately (doesn't fit the factory pattern)
     if (model.provider === 'custom' && model.url) {
       return customProviderService.createChatCompletion(
         model.model_name,
@@ -398,20 +396,26 @@ export class ChatService {
         signal
       );
     }
-    
-    if (model.provider === 'deepseek') {
-      const apiKey = await this.getApiKeyForProvider(model.provider);
-      const deepSeekService = new DeepSeekService(apiKey);
-      return deepSeekService.createChatCompletion(
-        model.model_name,
-        formattedMessages,
-        streamResponse,
-        onStreamResponse,
-        signal
-      );
+
+    // Get API key for provider
+    const apiKey = await this.getApiKeyForProvider(model.provider);
+    if (!apiKey) {
+      throw new Error(`No API key found for provider: ${model.provider}`);
     }
-    
-    throw new Error(`Unsupported provider: ${model.provider}`);
+
+    // Create LLM service using factory pattern - works for any provider!
+    const llmService = createLLMService(model.provider, apiKey);
+
+    // Use the legacy createChatCompletion method which supports streaming
+    // Note: These methods are marked as deprecated but still needed for backward compatibility
+    // All provider services (OpenAI, Anthropic, DeepSeek) have this method
+    return (llmService as any).createChatCompletion(
+      model.model_name,
+      formattedMessages,
+      streamResponse,
+      onStreamResponse,
+      signal
+    );
   }
 
   /**
@@ -424,7 +428,8 @@ export class ChatService {
     onAgentActivity?: (activity: { status: string; toolsUsed?: any[]; iterations?: number }) => void,
     attachments: Attachment[] = [],
     userMessageId?: string,
-    assistantMessageId?: string
+    assistantMessageId?: string,
+    selectedModel?: string
   ) {
     try {
       this.currentController = new AbortController();
@@ -461,7 +466,9 @@ export class ChatService {
       for await (const event of orchestrator.handleUserMessage(
         processedContent,
         conversation.id,
-        history
+        history,
+        undefined,
+        selectedModel
       )) {
         if (event.type === 'agent_status') {
           onAgentActivity?.({ status: event.data.message });
@@ -541,7 +548,7 @@ export class ChatService {
               }),
               invoke('update_conversation_usage', {
                 conversationId: conversation.id
-              }).then((usage) => currentConversationUsage.set(usage))
+              }).then((usage) => currentConversationUsage.set(usage as ConversationUsageSummary))
             ]);
           } catch (usageError) {
             console.warn('Failed to save usage data:', usageError);
@@ -565,9 +572,10 @@ export class ChatService {
   }
 
   async transcribeAudio(base64Audio: string, prompt: string = ''): Promise<string> {
+    // Audio transcription currently only supported by OpenAI
     const apiKey = await this.getApiKeyForProvider('openai');
-    const openAIService = new OpenAIService(apiKey);
-    return openAIService.transcribeAudio(base64Audio, prompt);
+    const llmService = createLLMService('openai', apiKey);
+    return (llmService as any).transcribeAudio(base64Audio, prompt);
   }
 }
 

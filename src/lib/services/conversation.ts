@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { writable, get, derived } from 'svelte/store';
 import type { Message, APIMessage, Attachment, Conversation, ConversationState, DBMessage } from '$lib/types';
+import { v4 as uuidv4 } from 'uuid';
 
 export class ConversationService {
   private state = writable<ConversationState>({
@@ -47,7 +48,7 @@ export class ConversationService {
         let content = msg.content;
 
         return {
-          id: msg.id, // Preserve message ID for branching
+          id: msg.id || uuidv4(), // Preserve message ID for branching, generate if missing
           type: msg.role === 'user' ? 'sent' : 'received',
           content,
           attachments: msg.attachments

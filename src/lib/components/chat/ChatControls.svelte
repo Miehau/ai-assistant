@@ -6,6 +6,7 @@
     import type { SystemPrompt, Message } from "$lib/types";
     import { Eye, Headphones, Zap, Database, Brain } from "lucide-svelte";
     import TokenCounter from "./TokenCounter.svelte";
+    import { agentModeEnabled } from "./store";
 
     interface Props {
         availableModels?: Model[];
@@ -337,6 +338,27 @@
             {messages}
             {isLoading}
         />
+
+        <!-- Agent mode toggle -->
+        <Tooltip.Root>
+            <Tooltip.Trigger asChild>
+                {#snippet child({ props })}
+                    <Button
+                        {...props}
+                        variant="ghost"
+                        size="icon"
+                        onclick={() => agentModeEnabled.update(v => !v)}
+                        class="shrink-0 {$agentModeEnabled ? 'text-primary' : ''}"
+                    >
+                        <Zap class="h-4 w-4" />
+                        <span class="sr-only">Toggle Agent Mode</span>
+                    </Button>
+                {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content side="top">
+                {$agentModeEnabled ? 'Disable' : 'Enable'} Agent Mode
+            </Tooltip.Content>
+        </Tooltip.Root>
 
         <Tooltip.Root>
             <Tooltip.Trigger asChild>

@@ -1,5 +1,6 @@
 import type { Tool, ToolResult } from './types';
 import { fetch, ResponseType } from '@tauri-apps/api/http';
+import { AGENT_CONFIG } from '$lib/config/agent';
 
 export type Image = {
   alt: string;
@@ -46,9 +47,60 @@ export interface ExtractedContent {
   };
 }
 
+/**
+ * URL validator for SSRF protection
+ * Prevents fetching localhost, private IPs, and cloud metadata endpoints
+ */
+class URLValidator {
+  private static readonly BLOCKED_HOSTS = new Set([
+    'localhost',
+    '127.0.0.1',
+    '0.0.0.0',
+    '::1',
+  ]);
+
+  private static readonly BLOCKED_RANGES = [
+    /^10\./,                    // Private network
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./, // Private network
+    /^192\.168\./,              // Private network
+    /^169\.254\./,              // Link-local (AWS metadata)
+    /^127\./,                   // Loopback
+    /^fe80:/i,                  // IPv6 link-local
+  ];
+
+  static validate(urlString: string): { valid: boolean; error?: string } {
+    try {
+      const url = new URL(urlString);
+
+      // Only allow HTTP(S)
+      if (!['http:', 'https:'].includes(url.protocol)) {
+        return { valid: false, error: 'Only HTTP/HTTPS protocols allowed' };
+      }
+
+      // Check blocked hosts
+      if (this.BLOCKED_HOSTS.has(url.hostname.toLowerCase())) {
+        return { valid: false, error: 'Cannot access local resources' };
+      }
+
+      // Check IP ranges
+      for (const range of this.BLOCKED_RANGES) {
+        if (range.test(url.hostname)) {
+          return { valid: false, error: 'Cannot access private networks' };
+        }
+      }
+
+      return { valid: true };
+    } catch (error) {
+      return { valid: false, error: 'Invalid URL format' };
+    }
+  }
+}
+
 export class WebFetcherTool implements Tool {
   name = 'webFetcher';
   description = 'Retrieves parsed content from web pages with media extracted as links.';
+
+  /** @deprecated Use input_schema instead */
   parameters = {
     url: {
       type: 'string',
@@ -56,19 +108,44 @@ export class WebFetcherTool implements Tool {
     }
   };
 
+  // Proper JSON Schema format
+  input_schema = {
+    type: 'object' as const,
+    properties: {
+      url: {
+        type: 'string' as const,
+        description: 'The URL of the web page to fetch',
+        format: 'uri' as const
+      }
+    },
+    required: ['url'],
+    additionalProperties: false
+  };
+
   toSchema() {
-    return JSON.stringify({
-      "name": this.name,
-      "description": this.description,
-      "parameters": this.parameters
-    });
+    return {
+      name: this.name,
+      description: this.description,
+      input_schema: this.input_schema,
+      strict: true
+    };
   }
 
   async execute(params: Record<string, any>): Promise<ToolResult> {
     const url = params.url;
     console.log(`WebFetcherTool: Starting fetch for URL: ${url}`);
-    
+
     try {
+      // SSRF protection - validate URL before fetching
+      const validation = URLValidator.validate(url);
+      if (!validation.valid) {
+        console.warn('WebFetcherTool: URL validation failed:', validation.error);
+        return {
+          success: false,
+          result: validation.error || 'Invalid URL',
+        };
+      }
+
       if (!url.match(/^https?:\/\/.+/)) {
         console.warn('WebFetcherTool: Invalid URL format:', url);
         return {
@@ -293,7 +370,7 @@ export class WebFetcherTool implements Tool {
     };
   }
 
-  private getElementContext(el: Element, contextLength: number = 100): string {
+  private getElementContext(el: Element, contextLength: number = AGENT_CONFIG.WEB_FETCHER.CONTEXT_LENGTH): string {
     let context = '';
     let parent = el.parentElement;
     while (parent && !['article', 'section', 'div'].includes(parent.tagName.toLowerCase())) {

@@ -38,11 +38,11 @@
     }, 500);
 
     // Initial load of messages if there's a current conversation
-    const currentConversation = conversationService.getCurrentConversation();
-    if (currentConversation) {
+    const conversation = conversationService.getCurrentConversation();
+    if (conversation) {
       // Load all messages directly
       const loadedMessages = await conversationService.getDisplayHistory(
-        currentConversation.id
+        conversation.id
       );
       $messages = loadedMessages;
     }

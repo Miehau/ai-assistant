@@ -1,7 +1,37 @@
 import type { Message } from '$lib/types';
 import { formatMessages } from './messageFormatting';
+import {
+  LLMService,
+  type LLMStructuredResponse,
+  LLMServiceError,
+  SchemaValidationError,
+  RefusalError
+} from './base/LLMService';
+import type {
+  LLMMessage,
+  LLMResponse,
+  LLMCompletionOptions,
+  StructuredOutputSchema,
+  OpenAIStructuredOutput
+} from '$lib/types/llm';
 
-export class CustomProviderService {
+export class CustomProviderService extends LLMService {
+  private baseUrl: string;
+
+  constructor(apiKey: string, baseUrl: string) {
+    super(apiKey);
+    this.baseUrl = baseUrl;
+  }
+
+  get providerName(): string {
+    return 'custom';
+  }
+
+  get supportsStructuredOutputs(): boolean {
+    // Custom providers may or may not support structured outputs
+    // Default to false, can be enabled if endpoint supports it
+    return false;
+  }
   async createChatCompletion(
     modelName: string,
     url: string,
@@ -107,6 +137,100 @@ export class CustomProviderService {
       reader.releaseLock();
     }
   }
+
+  /**
+   * Standard completion method using new unified interface
+   */
+  async completion(
+    model: string,
+    messages: LLMMessage[],
+    options?: LLMCompletionOptions
+  ): Promise<LLMResponse> {
+    try {
+      const formattedMessages = messages.map((message) => ({
+        role: message.role,
+        content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
+      }));
+
+      console.log('Custom provider completion with messages:', formattedMessages);
+
+      const timeoutController = new AbortController();
+      const timeoutId = setTimeout(() => timeoutController.abort(), 180000); // 3 minutes
+
+      try {
+        const apiResponse = await fetch(this.baseUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(this.apiKey && { Authorization: `Bearer ${this.apiKey}` }),
+          },
+          body: JSON.stringify({
+            model,
+            messages: formattedMessages,
+            temperature: options?.temperature,
+            max_tokens: options?.max_tokens,
+            top_p: options?.top_p,
+            stream: false,
+          }),
+          signal: options?.signal ? AbortSignal.any([options.signal, timeoutController.signal]) : timeoutController.signal,
+        });
+
+        if (!apiResponse.ok) {
+          const errorData = await apiResponse.json().catch(() => ({}));
+          throw new Error(`Custom Provider API error: ${apiResponse.statusText} - ${JSON.stringify(errorData)}`);
+        }
+
+        const data = await apiResponse.json();
+
+        // Try different response formats (OpenAI-compatible or custom)
+        const content = data.message?.content || data.choices?.[0]?.message?.content || '';
+        const usage = data.usage ? {
+          totalTokens: data.usage.total_tokens || 0,
+          promptTokens: data.usage.prompt_tokens || 0,
+          completionTokens: data.usage.completion_tokens || 0
+        } : undefined;
+
+        return {
+          message: content,
+          role: 'assistant',
+          usage,
+          finishReason: data.choices?.[0]?.finish_reason || 'stop'
+        };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (error) {
+      throw new LLMServiceError(
+        'Custom provider completion failed',
+        this.providerName,
+        error
+      );
+    }
+  }
+
+  /**
+   * Structured completion - not supported by default for custom providers
+   */
+  async structuredCompletion<T = any>(
+    model: string,
+    messages: LLMMessage[],
+    schema: StructuredOutputSchema,
+    options?: Omit<LLMCompletionOptions, 'structuredOutput'>
+  ): Promise<LLMStructuredResponse<T>> {
+    // If endpoint supports OpenAI-compatible structured outputs, try to use them
+    // Otherwise, throw an error
+    throw new LLMServiceError(
+      'Structured outputs not supported for custom provider. Configure your endpoint to support OpenAI-compatible structured outputs.',
+      this.providerName
+    );
+  }
+
+  async transcribeAudio(base64Audio: string, context: string): Promise<string> {
+    throw new LLMServiceError(
+      'Audio transcription not supported for custom provider',
+      this.providerName
+    );
+  }
 }
 
-export const customProviderService = new CustomProviderService(); 
+export const customProviderService = new CustomProviderService('', ''); 

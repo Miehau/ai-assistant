@@ -22,14 +22,21 @@
       'https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/components/';
   }
   import type { Attachment } from "$lib/types";
+  import type { AgentActivity } from "$lib/types/message";
   import { fileService } from "$lib/services/fileService";
   import { onDestroy } from "svelte";
   import { getCachedParse, setCachedParse } from "$lib/utils/markdownCache";
+  import { Zap } from "lucide-svelte";
 
   export let type: "sent" | "received";
   export let content: string;
   export let attachments: Attachment[] | undefined = undefined;
   export let model: string | undefined = undefined;
+  export let messageId: string | undefined = undefined;
+  export let conversationId: string | undefined = undefined;
+  export let agentActivity: AgentActivity | undefined = undefined;
+
+  let showAgentDetails = false;
 
   // Track loading states for attachments
   let loadingStates: Record<string, boolean> = {};
@@ -319,8 +326,8 @@
     <div class="prose prose-sm dark:prose-invert max-w-none">
       <div
         class="markdown-content"
-        on:click={handleInteraction}
-        on:keydown={handleInteraction}
+        onclick={handleInteraction}
+        onkeydown={handleInteraction}
         role="textbox"
         tabindex="0"
       >
@@ -335,13 +342,55 @@
           {#each attachments as attachment}
             <!-- Import FileAttachment component for each attachment -->
             {#await import('./files/FileAttachment.svelte') then FileAttachment}
-              <svelte:component 
-                this={FileAttachment.default} 
-                {attachment} 
-                showVersioning={true} 
+              <svelte:component
+                this={FileAttachment.default}
+                {attachment}
+                showVersioning={true}
               />
             {/await}
           {/each}
+        </div>
+      {/if}
+
+      {#if agentActivity && type === 'received'}
+        <div class="mt-3 pt-2 border-t border-primary/10 text-xs">
+          {#if agentActivity.status === 'working'}
+            <div class="flex items-center gap-2 text-primary/70">
+              <Zap class="h-3 w-3 animate-pulse" />
+              <span>Agent working...</span>
+            </div>
+          {:else if agentActivity.status === 'complete'}
+            <button
+              type="button"
+              class="flex items-center gap-2 text-primary/70 hover:text-primary transition-colors w-full text-left"
+              onclick={() => showAgentDetails = !showAgentDetails}
+            >
+              <Zap class="h-3 w-3" />
+              <span>
+                {showAgentDetails ? '▼' : '▶'} Agent used {agentActivity.toolsUsed?.length || 0} tool(s)
+                in {agentActivity.iterations} iteration(s)
+              </span>
+            </button>
+
+            {#if showAgentDetails && agentActivity.toolsUsed && agentActivity.toolsUsed.length > 0}
+              <div class="mt-2 ml-5 space-y-1">
+                {#each agentActivity.toolsUsed as tool}
+                  <div class="flex items-center justify-between gap-4 font-mono text-[10px] text-primary/60">
+                    <div class="flex items-center gap-2">
+                      <span class="font-semibold">{tool.tool}</span>
+                      <span>{tool.success ? '✅' : '❌'}</span>
+                    </div>
+                    <span>{tool.duration}ms</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          {:else if agentActivity.status === 'error'}
+            <div class="flex items-center gap-2 text-destructive/70">
+              <Zap class="h-3 w-3" />
+              <span>Agent encountered an error</span>
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -357,17 +406,17 @@
     tabindex="-1"
   >
     <!-- Add a transparent button that covers the entire modal for keyboard accessibility -->
-    <button 
-      class="absolute inset-0 w-full h-full opacity-0" 
-      on:click={closeImageModal} 
-      on:keydown={(e) => e.key === 'Escape' && closeImageModal()}
+    <button
+      class="absolute inset-0 w-full h-full opacity-0"
+      onclick={closeImageModal}
+      onkeydown={(e) => e.key === 'Escape' && closeImageModal()}
       aria-label="Close modal background"
     ></button>
     <div class="relative max-w-[90vw] max-h-[90vh] overflow-auto">
-      <button 
-        type="button" 
+      <button
+        type="button"
         class="absolute top-2 right-2 bg-black/50 text-white rounded-full p-1 hover:bg-black/70 transition-colors"
-        on:click|stopPropagation={closeImageModal}
+        onclick={(e) => { e.stopPropagation(); closeImageModal(); }}
         aria-label="Close image preview"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

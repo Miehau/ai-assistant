@@ -1,10 +1,34 @@
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { ChatOpenAI } from '@langchain/openai';
 import type { Attachment } from '$lib/types';
+import {
+  LLMService,
+  type LLMStructuredResponse,
+  LLMServiceError,
+  SchemaValidationError,
+  RefusalError
+} from './base/LLMService';
+import type {
+  LLMMessage,
+  LLMResponse,
+  LLMCompletionOptions,
+  StructuredOutputSchema,
+  OpenAIStructuredOutput
+} from '$lib/types/llm';
 
-export class OpenAIService {
-  constructor(private apiKey: string) {}
+export class OpenAIService extends LLMService {
+  get providerName(): string {
+    return 'openai';
+  }
 
+  get supportsStructuredOutputs(): boolean {
+    return true;
+  }
+
+  /**
+   * Legacy method - kept for backward compatibility
+   * @deprecated Use completion() instead
+   */
   async createChatCompletion(
     model: string,
     messages: ChatCompletionMessageParam[],
@@ -20,6 +44,7 @@ export class OpenAIService {
     const combinedController = new AbortController();
     signal.addEventListener('abort', () => combinedController.abort());
     timeoutController.signal.addEventListener('abort', () => combinedController.abort());
+
     try {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
@@ -62,23 +87,151 @@ export class OpenAIService {
     }
   }
 
-  async completion(model: string, messages: {role: string, content: string, attachments?: Attachment[]}[], signal: AbortSignal): Promise<ChatCompletionResponse> {
-     let openai = new ChatOpenAI({
-      model,
-      apiKey: this.apiKey,
-    });
-    let formattedMessages = messages.map((message) => ({role: message.role, content: message.content}));
-    console.log('Formatted messages:', formattedMessages);
-    return openai.invoke(formattedMessages, {signal: signal}).then((response: any) => {
-        return {
-            message: {message: response.content?.toString(), role: 'assistant'},
-            usage: {
-                totalTokens: response.usage_metadata?.total_tokens,
-                promptTokens: response.usage_metadata?.input_tokens,
-                completionTokens: response.usage_metadata?.output_tokens
-            }
-        };
-    });
+  /**
+   * Standard completion with LangChain
+   */
+  async completion(
+    model: string,
+    messages: LLMMessage[],
+    options?: LLMCompletionOptions
+  ): Promise<LLMResponse> {
+    try {
+      const openai = new ChatOpenAI({
+        model,
+        apiKey: this.apiKey,
+        temperature: options?.temperature,
+        maxTokens: options?.max_tokens,
+        topP: options?.top_p,
+      });
+
+      const formattedMessages = messages.map((message) => ({
+        role: message.role,
+        content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
+      }));
+
+      console.log('OpenAI completion with messages:', formattedMessages);
+
+      const response = await openai.invoke(formattedMessages, {
+        signal: options?.signal
+      });
+
+      return {
+        message: response.content?.toString() || '',
+        role: 'assistant',
+        usage: {
+          totalTokens: response.usage_metadata?.total_tokens || 0,
+          promptTokens: response.usage_metadata?.input_tokens || 0,
+          completionTokens: response.usage_metadata?.output_tokens || 0
+        },
+        finishReason: 'stop'
+      };
+    } catch (error) {
+      throw new LLMServiceError(
+        'OpenAI completion failed',
+        this.providerName,
+        error
+      );
+    }
+  }
+
+  /**
+   * Structured completion using OpenAI's JSON Schema mode
+   */
+  async structuredCompletion<T = any>(
+    model: string,
+    messages: LLMMessage[],
+    schema: StructuredOutputSchema,
+    options?: Omit<LLMCompletionOptions, 'structuredOutput'>
+  ): Promise<LLMStructuredResponse<T>> {
+    // Validate schema
+    this.validateSchema(schema);
+
+    try {
+      // Convert to OpenAI format
+      const response_format: OpenAIStructuredOutput = {
+        type: 'json_schema',
+        json_schema: {
+          name: schema.name || 'response',
+          schema: schema.schema,
+          strict: schema.strict ?? true
+        }
+      };
+
+      const formattedMessages = messages.map((message) => ({
+        role: message.role,
+        content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
+      }));
+
+      console.log('OpenAI structured completion with schema:', schema.name);
+
+      const apiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: formattedMessages,
+          response_format,
+          temperature: options?.temperature,
+          max_tokens: options?.max_tokens,
+          top_p: options?.top_p,
+        }),
+        signal: options?.signal,
+      });
+
+      if (!apiResponse.ok) {
+        const errorData = await apiResponse.json().catch(() => ({}));
+        throw new Error(`OpenAI API error: ${apiResponse.statusText} - ${JSON.stringify(errorData)}`);
+      }
+
+      const data = await apiResponse.json();
+      const choice = data.choices[0];
+
+      // Check for refusal
+      if (choice?.finish_reason === 'refusal' || choice?.message?.refusal) {
+        throw new RefusalError(
+          'OpenAI refused to generate response',
+          this.providerName,
+          choice.message?.refusal || 'Unknown refusal reason'
+        );
+      }
+
+      const rawResponse = choice?.message?.content || '';
+
+      // Parse and validate JSON
+      let parsedData: T;
+      try {
+        parsedData = JSON.parse(rawResponse);
+      } catch (error) {
+        throw new SchemaValidationError(
+          'Failed to parse JSON response from OpenAI',
+          this.providerName,
+          schema,
+          error
+        );
+      }
+
+      return {
+        data: parsedData,
+        rawResponse,
+        usage: data.usage ? {
+          promptTokens: data.usage.prompt_tokens,
+          completionTokens: data.usage.completion_tokens,
+          totalTokens: data.usage.total_tokens
+        } : undefined
+      };
+    } catch (error) {
+      if (error instanceof LLMServiceError) {
+        throw error;
+      }
+      throw new LLMServiceError(
+        'OpenAI structured completion failed',
+        this.providerName,
+        error
+      );
+    }
   }
 
   private async handleStreamingResponse(
@@ -149,6 +302,7 @@ export class OpenAIService {
     formData.append('model', 'whisper-1');
     formData.append('response_format', 'text');
     formData.append('prompt', context);
+
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: {
@@ -168,12 +322,12 @@ export class OpenAIService {
 
 export type ChatCompletionResponse = {
   message: {
-      message: string;
-      role: string;
+    message: string;
+    role: string;
   };
   usage: {
-      totalTokens?: number;
-      promptTokens?: number;
-      completionTokens?: number;
+    totalTokens?: number;
+    promptTokens?: number;
+    completionTokens?: number;
   };
 };

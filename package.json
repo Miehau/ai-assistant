@@ -13,6 +13,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.69.0",
     "@humanspeak/svelte-virtual-list": "^0.3.5",
     "@langchain/openai": "^0.3.5",
     "@qdrant/js-client-rest": "^1.7.0",
