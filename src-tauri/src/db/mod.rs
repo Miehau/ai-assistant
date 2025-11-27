@@ -228,6 +228,33 @@ impl Db {
                     SELECT 1 FROM message_tree mt WHERE mt.message_id = m.id
                 );
             "),
+            // Agent tool executions table
+            M::up("CREATE TABLE IF NOT EXISTS message_tool_executions (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                parameters TEXT NOT NULL,
+                result TEXT NOT NULL,
+                success INTEGER NOT NULL,
+                duration INTEGER NOT NULL,
+                timestamp INTEGER NOT NULL,
+                error TEXT,
+                iteration_number INTEGER NOT NULL,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+            );"),
+            M::up("CREATE INDEX IF NOT EXISTS idx_tool_executions_message ON message_tool_executions(message_id);"),
+            // Agent thinking table
+            M::up("CREATE TABLE IF NOT EXISTS message_agent_thinking (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                iteration_number INTEGER NOT NULL,
+                metadata TEXT,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+            );"),
+            M::up("CREATE INDEX IF NOT EXISTS idx_agent_thinking_message ON message_agent_thinking(message_id);"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();

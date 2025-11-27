@@ -22,11 +22,9 @@
       'https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/components/';
   }
   import type { Attachment } from "$lib/types";
-  import type { AgentActivity } from "$lib/types/message";
   import { fileService } from "$lib/services/fileService";
   import { onDestroy } from "svelte";
   import { getCachedParse, setCachedParse } from "$lib/utils/markdownCache";
-  import { Zap } from "lucide-svelte";
 
   export let type: "sent" | "received";
   export let content: string;
@@ -34,9 +32,6 @@
   export let model: string | undefined = undefined;
   export let messageId: string | undefined = undefined;
   export let conversationId: string | undefined = undefined;
-  export let agentActivity: AgentActivity | undefined = undefined;
-
-  let showAgentDetails = false;
 
   // Track loading states for attachments
   let loadingStates: Record<string, boolean> = {};
@@ -351,57 +346,15 @@
           {/each}
         </div>
       {/if}
-
-      {#if agentActivity && type === 'received'}
-        <div class="mt-3 pt-2 border-t border-primary/10 text-xs">
-          {#if agentActivity.status === 'working'}
-            <div class="flex items-center gap-2 text-primary/70">
-              <Zap class="h-3 w-3 animate-pulse" />
-              <span>Agent working...</span>
-            </div>
-          {:else if agentActivity.status === 'complete'}
-            <button
-              type="button"
-              class="flex items-center gap-2 text-primary/70 hover:text-primary transition-colors w-full text-left"
-              onclick={() => showAgentDetails = !showAgentDetails}
-            >
-              <Zap class="h-3 w-3" />
-              <span>
-                {showAgentDetails ? '▼' : '▶'} Agent used {agentActivity.toolsUsed?.length || 0} tool(s)
-                in {agentActivity.iterations} iteration(s)
-              </span>
-            </button>
-
-            {#if showAgentDetails && agentActivity.toolsUsed && agentActivity.toolsUsed.length > 0}
-              <div class="mt-2 ml-5 space-y-1">
-                {#each agentActivity.toolsUsed as tool}
-                  <div class="flex items-center justify-between gap-4 font-mono text-[10px] text-primary/60">
-                    <div class="flex items-center gap-2">
-                      <span class="font-semibold">{tool.tool}</span>
-                      <span>{tool.success ? '✅' : '❌'}</span>
-                    </div>
-                    <span>{tool.duration}ms</span>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          {:else if agentActivity.status === 'error'}
-            <div class="flex items-center gap-2 text-destructive/70">
-              <Zap class="h-3 w-3" />
-              <span>Agent encountered an error</span>
-            </div>
-          {/if}
-        </div>
-      {/if}
     </div>
   </div>
 </div>
 
 <!-- Image Modal -->
 {#if imageModalOpen}
-  <div 
-    class="fixed inset-0 bg-black/80 flex items-center justify-center z-50" 
-    role="dialog" 
+  <div
+    class="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
+    role="dialog"
     aria-modal="true"
     tabindex="-1"
   >
@@ -424,9 +377,9 @@
           <path d="m6 6 12 12" />
         </svg>
       </button>
-      <img 
-        src={currentImageSrc} 
-        alt={currentImageAlt} 
+      <img
+        src={currentImageSrc}
+        alt={currentImageAlt}
         class="max-w-full max-h-[90vh] object-contain"
       />
       <div class="absolute bottom-2 left-0 right-0 text-center text-white bg-black/50 py-1 px-2">

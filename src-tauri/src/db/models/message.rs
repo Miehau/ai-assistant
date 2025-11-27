@@ -38,4 +38,4 @@ pub struct Message {
     pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub attachments: Vec<MessageAttachment>,
-} 
+}

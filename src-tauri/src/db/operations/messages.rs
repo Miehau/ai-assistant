@@ -81,7 +81,7 @@ pub trait MessageOperations: DbOperations {
 
     fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {
         let start_time = Instant::now();
-        
+
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let app_dir = path::app_data_dir(&tauri::Config::default())
@@ -92,9 +92,9 @@ pub trait MessageOperations: DbOperations {
         let messages_query_start = Instant::now();
 
         let mut messages_stmt = conn.prepare(
-            "SELECT id, conversation_id, role, content, created_at 
-             FROM messages 
-             WHERE conversation_id = ?1 
+            "SELECT id, conversation_id, role, content, created_at
+             FROM messages
+             WHERE conversation_id = ?1
              ORDER BY created_at ASC"
         )?;
 
@@ -114,9 +114,9 @@ pub trait MessageOperations: DbOperations {
         let attachments_start = Instant::now();
 
         let mut attachments_stmt = conn.prepare(
-            "SELECT message_id, id, name, data, attachment_type, created_at, description, transcript, 
-             file_path, size_bytes, mime_type, thumbnail_path, updated_at 
-             FROM message_attachments 
+            "SELECT message_id, id, name, data, attachment_type, created_at, description, transcript,
+             file_path, size_bytes, mime_type, thumbnail_path, updated_at
+             FROM message_attachments
              WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)"
         )?;
 
@@ -125,7 +125,7 @@ pub trait MessageOperations: DbOperations {
             let timestamp: i64 = row.get(5)?;
             let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
             let attachment_type: String = row.get(4)?;
-            
+
             let data = if attachment_type.starts_with("text/") {
                 // For text attachments, use the stored content directly
                 row.get::<_, String>(3)?
@@ -138,12 +138,12 @@ pub trait MessageOperations: DbOperations {
                 let base64_data = base64::engine::general_purpose::STANDARD.encode(file_content);
                 format!("data:{};base64,{}", attachment_type, base64_data)
             };
-            
+
             // Get updated_at timestamp if available, otherwise use created_at
             let updated_at_timestamp: Option<i64> = row.get(12).ok();
             let updated_at = updated_at_timestamp
                 .map(|ts| Utc.timestamp_opt(ts, 0).single().unwrap());
-                
+
             Ok(MessageAttachment {
                 id: Some(row.get(1)?),
                 message_id: Some(message_id),
@@ -181,28 +181,28 @@ pub trait MessageOperations: DbOperations {
     fn save_attachment_to_fs(&self, data: &str, file_name: &str) -> RusqliteResult<String> {
         let app_dir = path::app_data_dir(&tauri::Config::default())
             .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
-        
+
         let attachments_dir = app_dir.join("dev.michalmlak.ai_agent").join("attachments");
         fs::create_dir_all(&attachments_dir)
             .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
 
         let unique_filename = format!("{}-{}", Uuid::new_v4(), file_name);
         let file_path = attachments_dir.join(&unique_filename);
-        
+
         let base64_data = if data.starts_with("data:") {
             data.split(",").nth(1)
                 .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid data URL format".into()))?
         } else {
             data
         };
-        
+
         let decoded_data = base64::engine::general_purpose::STANDARD
             .decode(base64_data)
             .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
-        
+
         fs::write(&file_path, &decoded_data)
             .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
 
         Ok(unique_filename)
     }
-} 
+}

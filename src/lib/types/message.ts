@@ -14,21 +14,6 @@
  */
 
 import type { Attachment } from './attachments';
-import type { ToolExecution } from './tools';
-
-/**
- * Agent activity information for tracking tool usage
- */
-export interface AgentActivity {
-  /** Current status of agent execution */
-  status: 'working' | 'complete' | 'error';
-  /** Tools used by the agent */
-  toolsUsed?: ToolExecution[];
-  /** Number of iterations the agent took */
-  iterations?: number;
-  /** Whether to show details in UI */
-  showDetails?: boolean;
-}
 
 /**
  * Base message interface with core properties
@@ -56,8 +41,6 @@ export interface DisplayMessage extends BaseMessage {
   attachments?: Attachment[];
   /** Optional model name for display (e.g., "gpt-4 • openai") */
   model?: string;
-  /** Optional agent activity for tool usage tracking */
-  agentActivity?: AgentActivity;
 }
 
 /**

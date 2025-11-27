@@ -58,7 +58,7 @@ export class ConversationService {
 
   async getAPIHistory(conversationId: string): Promise<APIMessage[]> {
     const history = await invoke<DBMessage[]>('get_conversation_history', { conversationId });
-    
+
     return history
       .sort((a, b) => {
         return (a.timestamp ?? 0) - (b.timestamp ?? 0);
@@ -83,13 +83,15 @@ export class ConversationService {
       throw new Error('No conversation selected');
     }
 
-    const savedMessageId = await invoke<string>('save_message', {
+    const invokePayload = {
       conversationId: targetConversationId,
       role,
       content,
       attachments,
       messageId
-    });
+    };
+
+    const savedMessageId = await invoke<string>('save_message', invokePayload);
 
     return savedMessageId;
   }
@@ -97,13 +99,13 @@ export class ConversationService {
   async getAllConversations(): Promise<Conversation[]> {
     return await invoke('get_conversations');
   }
-  
+
   async updateConversationName(conversationId: string, name: string): Promise<void> {
     console.log('Calling update_conversation_name with:', { conversationId, name });
     try {
       await invoke('update_conversation_name', { conversationId, name });
       console.log('Backend update_conversation_name completed successfully');
-      
+
       // If this is the current conversation, update the local state
       const currentState = get(this.state);
       if (currentState.currentConversationId === conversationId && currentState.currentConversation) {
@@ -130,7 +132,7 @@ export class ConversationService {
     try {
       await invoke('delete_conversation', { conversationId });
       console.log('Backend delete_conversation completed successfully');
-      
+
       // If this is the current conversation, clear the current conversation
       const currentState = get(this.state);
       if (currentState.currentConversationId === conversationId) {

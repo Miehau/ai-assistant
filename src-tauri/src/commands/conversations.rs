@@ -9,7 +9,7 @@ pub fn get_or_create_conversation(state: State<'_, Db>, conversation_id: Option<
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn save_message(
     state: State<'_, Db>,
     conversation_id: String,
