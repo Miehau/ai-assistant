@@ -3,6 +3,7 @@
     import { Button } from "$lib/components/ui/button";
     import * as Select from "$lib/components/ui/select";
     import type { Model } from "$lib/types/models";
+    import type { ModelWithBackend } from "./store";
     import type { SystemPrompt, Message } from "$lib/types";
     import { Eye, Headphones, Database, Brain } from "lucide-svelte";
     import TokenCounter from "./TokenCounter.svelte";
@@ -56,20 +57,31 @@
     // Track if model dropdown is open for lazy-loading tooltips
     let modelDropdownOpen = $state(false);
 
+    // Get the display provider name for a model
+    // Custom models use their backend name, others use their provider
+    function getProviderLabel(model: Model): string {
+        const modelWithBackend = model as ModelWithBackend;
+        if (model.provider === 'custom' && modelWithBackend.backendName) {
+            return modelWithBackend.backendName;
+        }
+        return model.provider;
+    }
+
     // Memoized provider groups - only recalculates when availableModels changes
     const providerGroups = $derived.by(() => {
         const groups: { provider: string; models: Model[] }[] = [];
 
-        // Group models by provider
+        // Group models by provider (using backend name for custom models)
         availableModels.forEach((model) => {
+            const providerLabel = getProviderLabel(model);
             const existingGroup = groups.find(
-                (g) => g.provider === model.provider,
+                (g) => g.provider === providerLabel,
             );
             if (existingGroup) {
                 existingGroup.models.push(model);
             } else {
                 groups.push({
-                    provider: model.provider,
+                    provider: providerLabel,
                     models: [model],
                 });
             }
@@ -153,7 +165,7 @@
         <Select.Trigger class="min-w-[150px] max-w-[220px] w-fit justify-between">
             {#if selectedModel}
                 {@const model = availableModels.find(m => m.model_name === selectedModel)}
-                <span class="truncate">{model ? `${model.model_name} • ${model.provider}` : selectedModel}</span>
+                <span class="truncate">{model ? `${model.model_name} • ${getProviderLabel(model)}` : selectedModel}</span>
             {:else}
                 <span class="text-muted-foreground">Select a model</span>
             {/if}
@@ -336,6 +348,7 @@
             {currentMessage}
             {messages}
             {isLoading}
+            systemPrompt={selectedSystemPrompt?.content ?? ''}
         />
 
         <Tooltip.Root>

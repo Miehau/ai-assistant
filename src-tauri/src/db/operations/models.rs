@@ -7,13 +7,14 @@ pub trait ModelOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         conn.execute(
-            "INSERT INTO models (provider, model_name, url, deployment_name, enabled) 
-             VALUES (?1, ?2, ?3, ?4, 1)",
+            "INSERT INTO models (provider, model_name, url, deployment_name, enabled, custom_backend_id)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5)",
             params![
                 model.provider,
                 model.model_name,
                 model.url,
                 model.deployment_name,
+                model.custom_backend_id,
             ],
         )?;
         Ok(())
@@ -23,7 +24,7 @@ pub trait ModelOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT provider, model_name, url, deployment_name, enabled FROM models"
+            "SELECT provider, model_name, url, deployment_name, enabled, custom_backend_id FROM models"
         )?;
         let model_iter = stmt.query_map([], |row| {
             Ok(Model {
@@ -32,6 +33,7 @@ pub trait ModelOperations: DbOperations {
                 url: row.get(2)?,
                 deployment_name: row.get(3)?,
                 enabled: row.get(4)?,
+                custom_backend_id: row.get(5)?,
             })
         })?;
         model_iter.collect()

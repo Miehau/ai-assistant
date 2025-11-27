@@ -33,7 +33,9 @@
       {
         "title": "ai_agent",
         "width": 800,
-        "height": 800
+        "height": 800,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {

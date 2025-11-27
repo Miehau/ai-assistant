@@ -52,7 +52,7 @@
     sendMessage();
   }
 
-  function handleToggleStreaming() {
+  function handleToggleStreaming(enabled: boolean) {
     toggleStreaming();
   }
 
@@ -94,9 +94,9 @@
     modelId={$selectedModel}
     messages={$messages}
     systemPrompt={$selectedSystemPrompt?.content || ''}
-    on:sendMessage={handleSendMessage}
+    onSendMessage={handleSendMessage}
   >
-    <div slot="controls">
+    {#snippet controls()}
       <ChatControls
         availableModels={$availableModels}
         systemPrompts={$systemPrompts}
@@ -107,10 +107,10 @@
         currentMessage={$currentMessage}
         messages={$messages}
         isLoading={$isLoading}
-        on:toggleStreaming={handleToggleStreaming}
-        on:removeMessages={handleClearConversation}
+        onToggleStreaming={handleToggleStreaming}
+        onRemoveMessages={handleClearConversation}
       />
-    </div>
+    {/snippet}
   </ChatInput>
 </div>
 

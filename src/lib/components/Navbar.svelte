@@ -37,7 +37,7 @@
 </script>
 
 <Tooltip.Provider>
-  <aside class="inset-y fixed left-0 z-20 flex h-full flex-col glass-panel border-r-0">
+  <aside class="fixed left-0 top-0 bottom-0 z-20 flex flex-col glass-panel border-r-0 pt-8">
     <div class="border-b border-white/10 p-2">
       <Button variant="outline" size="icon" aria-label="Home" class="hover-glow-green">
         <Triangle class="size-5 fill-foreground" />

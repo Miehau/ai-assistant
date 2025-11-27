@@ -10,6 +10,9 @@ pub struct Model {
     pub deployment_name: Option<String>,
     #[serde(default)]
     pub enabled: bool,
+    /// For custom backends, the ID of the custom backend configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_backend_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

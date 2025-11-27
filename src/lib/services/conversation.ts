@@ -84,11 +84,11 @@ export class ConversationService {
     }
 
     const invokePayload = {
-      conversationId: targetConversationId,
+      conversation_id: targetConversationId,
       role,
       content,
       attachments,
-      messageId
+      message_id: messageId
     };
 
     const savedMessageId = await invoke<string>('save_message', invokePayload);

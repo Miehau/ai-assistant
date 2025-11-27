@@ -14,17 +14,37 @@ import type {
   StructuredOutputSchema,
   OpenAIStructuredOutput
 } from '$lib/types/llm';
+import type { CustomBackend } from '$lib/types/customBackend';
+
+export interface CustomProviderConfig {
+  url: string;
+  apiKey?: string;
+  name?: string;
+}
 
 export class CustomProviderService extends LLMService {
   private baseUrl: string;
+  private backendName: string;
 
-  constructor(apiKey: string, baseUrl: string) {
-    super(apiKey);
-    this.baseUrl = baseUrl;
+  constructor(config: CustomProviderConfig) {
+    super(config.apiKey || '');
+    this.baseUrl = config.url;
+    this.backendName = config.name || 'custom';
+  }
+
+  /**
+   * Create a CustomProviderService from a CustomBackend
+   */
+  static fromBackend(backend: CustomBackend): CustomProviderService {
+    return new CustomProviderService({
+      url: backend.url,
+      apiKey: backend.api_key,
+      name: backend.name
+    });
   }
 
   get providerName(): string {
-    return 'custom';
+    return this.backendName;
   }
 
   get supportsStructuredOutputs(): boolean {
@@ -233,4 +253,8 @@ export class CustomProviderService extends LLMService {
   }
 }
 
-export const customProviderService = new CustomProviderService('', ''); 
+/**
+ * @deprecated Use CustomProviderService.fromBackend() instead
+ * This singleton is kept for backwards compatibility
+ */
+export const customProviderService = new CustomProviderService({ url: '', apiKey: '' }); 

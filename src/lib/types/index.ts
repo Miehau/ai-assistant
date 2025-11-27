@@ -6,6 +6,7 @@
 // Re-export from the new unified type system
 export type { DisplayMessage, APIMessage, DBMessage } from './message';
 export type { Attachment } from './attachments';
+export type { CustomBackend, CreateCustomBackendInput, UpdateCustomBackendInput } from './customBackend';
 
 // Temporary alias for backward compatibility
 export type { DisplayMessage as Message } from './message'; 

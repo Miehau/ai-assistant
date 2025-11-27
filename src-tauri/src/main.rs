@@ -91,6 +91,12 @@ fn main() {
             commands::create_branch_from_message,
             commands::check_message_tree_consistency,
             commands::repair_message_tree,
+            // Custom backends commands
+            commands::get_custom_backends,
+            commands::get_custom_backend,
+            commands::create_custom_backend,
+            commands::update_custom_backend,
+            commands::delete_custom_backend,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

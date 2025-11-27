@@ -9,4 +9,6 @@ export interface Model {
     deployment_name?: string;
     capabilities?: ModelCapabilities;
     specs?: ModelSpecs;
+    /** For custom backends, the ID of the custom backend configuration */
+    custom_backend_id?: string;
 }

@@ -1,6 +1,7 @@
 mod api_keys;
 mod branches;
 mod conversations;
+mod custom_backends;
 mod files;
 pub mod file_versioning;
 mod models;
@@ -10,6 +11,7 @@ mod usage;
 pub use api_keys::*;
 pub use branches::*;
 pub use conversations::*;
+pub use custom_backends::*;
 pub use files::*;
 pub use file_versioning::*;
 pub use models::*;

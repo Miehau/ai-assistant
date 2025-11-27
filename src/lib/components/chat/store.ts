@@ -7,8 +7,14 @@ import { chatService } from '$lib/services/chat';
 import { conversationService } from '$lib/services/conversation';
 import { titleGeneratorService } from '$lib/services/titleGenerator';
 import { modelService, apiKeyService } from '$lib/models';
+import { customBackendService } from '$lib/services/customBackendService.svelte';
 import { v4 as uuidv4 } from 'uuid';
 import { branchStore } from '$lib/stores/branches';
+
+// Extended model type with backend name for UI display
+export interface ModelWithBackend extends Model {
+  backendName?: string;
+}
 
 // State stores
 export const messages = writable<Message[]>([]);
@@ -42,6 +48,11 @@ export async function loadModels() {
     await apiKeyService.loadAllApiKeys();
     console.log('[ChatStore] API keys loaded');
 
+    // Load custom backends for custom model support
+    console.log('[ChatStore] Loading custom backends...');
+    await customBackendService.loadBackends();
+    console.log('[ChatStore] Custom backends count:', customBackendService.backends.length);
+
     // Get models from both sources
     console.log('[ChatStore] Loading stored models...');
     const storedModels = await modelService.loadModels();
@@ -52,7 +63,7 @@ export async function loadModels() {
     console.log('[ChatStore] Registry models count:', registryModels.length);
 
     // Combine models, prioritizing registry models for their capabilities
-    const combinedModels = [...storedModels];
+    const combinedModels: ModelWithBackend[] = [...storedModels];
 
     // Add registry models that aren't already in stored models
     for (const regModel of registryModels) {
@@ -73,10 +84,26 @@ export async function loadModels() {
       }
     }
 
+    // Convert custom backends directly into model entries
+    // Each backend becomes a selectable "model" in the chat
+    const customBackendModels: ModelWithBackend[] = customBackendService.backends.map(backend => ({
+      provider: 'custom',
+      model_name: backend.name,  // Use backend name as model identifier
+      name: backend.name,
+      enabled: true,
+      custom_backend_id: backend.id,
+      backendName: backend.name,
+    }));
+
+    // Add custom backend models to the list
+    combinedModels.push(...customBackendModels);
+
     console.log('[ChatStore] Combined models count:', combinedModels.length);
+    console.log('[ChatStore] Custom backend models:', customBackendModels.map(m => m.name));
 
     // Filter to only enabled models
     const enabledModels = combinedModels.filter(model => model.enabled);
+
     console.log('[ChatStore] Enabled models count:', enabledModels.length);
     console.log('[ChatStore] Enabled models:', enabledModels.map(m => `${m.model_name} (${m.provider})`));
 

@@ -27,6 +27,7 @@ impl ModelOperations for Db {}
 impl SystemPromptOperations for Db {}
 impl UsageOperations for Db {}
 impl BranchOperations for Db {}
+impl CustomBackendOperations for Db {}
 
 impl Db {
     pub fn new(db_path: &str) -> Result<Self, DatabaseError> {
@@ -255,6 +256,16 @@ impl Db {
                 FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
             );"),
             M::up("CREATE INDEX IF NOT EXISTS idx_agent_thinking_message ON message_agent_thinking(message_id);"),
+            // Custom backends table for user-defined API endpoints
+            M::up("CREATE TABLE IF NOT EXISTS custom_backends (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                url TEXT NOT NULL,
+                api_key TEXT,
+                created_at INTEGER NOT NULL
+            );"),
+            // Add custom_backend_id column to models table
+            M::up("ALTER TABLE models ADD COLUMN custom_backend_id TEXT;"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();

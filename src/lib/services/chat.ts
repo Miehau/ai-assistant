@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { OpenAIService } from './openai';
-import { customProviderService } from './customProvider';
-import type { Message, Attachment, ConversationUsageSummary } from '$lib/types';
+import { CustomProviderService } from './customProvider';
+import type { Message, Attachment, ConversationUsageSummary, CustomBackend } from '$lib/types';
 import { conversationService } from './conversation';
 import { modelService } from '$lib/models/modelService';
 import type { Model } from '$lib/types/models';
@@ -50,17 +50,38 @@ export class ChatService {
     const models = await invoke<Model[]>('get_models');
     let selectedModel = models.find((m: Model) => m.model_name === modelName);
 
-    // If not found in the database, try to get it from the registry and add it
+    // If not found in the database, try to get it from the registry
     if (!selectedModel) {
       console.log(`Model ${modelName} not found in database, checking registry`);
       const registryModels = modelService.getAvailableModelsWithCapabilities();
       const registryModel = registryModels.find((m: Model) => m.model_name === modelName);
 
       if (registryModel) {
-        console.log(`Found model ${modelName} in registry, adding to database`);
+        console.log(`Found model ${modelName} in registry`);
         return registryModel;
       }
+    }
 
+    // If still not found, check custom backends (model_name = backend name)
+    if (!selectedModel) {
+      console.log(`Model ${modelName} not found in registry, checking custom backends`);
+      const backends = await invoke<CustomBackend[]>('get_custom_backends');
+      const backend = backends.find(b => b.name === modelName);
+
+      if (backend) {
+        console.log(`Found custom backend ${modelName}`);
+        // Create a virtual model from the backend
+        return {
+          provider: 'custom',
+          model_name: backend.name,
+          name: backend.name,
+          enabled: true,
+          custom_backend_id: backend.id,
+        };
+      }
+    }
+
+    if (!selectedModel) {
       throw new Error(`Model ${modelName} not found in database or registry`);
     }
 
@@ -349,6 +370,18 @@ export class ChatService {
     return processedAttachments;
   }
 
+  /**
+   * Get custom backend configuration by ID
+   */
+  private async getCustomBackend(backendId: string): Promise<CustomBackend | null> {
+    try {
+      return await invoke<CustomBackend | null>('get_custom_backend', { id: backendId });
+    } catch (error) {
+      console.error(`Failed to get custom backend ${backendId}:`, error);
+      return null;
+    }
+  }
+
   private async createChatCompletion(
     model: Model,
     history: any[],
@@ -363,11 +396,21 @@ export class ChatService {
     // Use custom messages if provided, otherwise format the history and message
     const formattedMessages = customMessages || await formatMessages(history, message, systemPrompt);
 
-    // Handle custom provider separately (doesn't fit the factory pattern)
-    if (model.provider === 'custom' && model.url) {
-      return customProviderService.createChatCompletion(
+    // Handle custom provider - look up backend configuration
+    if (model.provider === 'custom') {
+      if (!model.custom_backend_id) {
+        throw new Error('Custom model is missing backend configuration');
+      }
+
+      const backend = await this.getCustomBackend(model.custom_backend_id);
+      if (!backend) {
+        throw new Error(`Custom backend not found: ${model.custom_backend_id}`);
+      }
+
+      const customService = CustomProviderService.fromBackend(backend);
+      return customService.createChatCompletion(
         model.model_name,
-        model.url,
+        backend.url,
         formattedMessages,
         streamResponse,
         onStreamResponse,

@@ -9,9 +9,10 @@
     currentMessage?: string;
     messages?: Message[];
     isLoading?: boolean;
+    systemPrompt?: string;
   }
 
-  let { conversationId, modelId = '', currentMessage = '', messages = [], isLoading = false }: Props = $props();
+  let { conversationId, modelId = '', currentMessage = '', messages = [], isLoading = false, systemPrompt = '' }: Props = $props();
 
   // Load usage data when conversation changes
   $effect(() => {
@@ -69,8 +70,11 @@
     // Estimate tokens from streaming AI response (debounced)
     const streamingEstimate = debouncedStreamingContent ? estimateTokens(debouncedStreamingContent) : 0;
 
-    const total = baseTokens + typingEstimate + streamingEstimate;
-    const isEstimating = typingEstimate > 0 || streamingEstimate > 0;
+    // When no conversation exists, include system prompt in the estimate
+    const systemPromptEstimate = !usage && systemPrompt ? estimateTokens(systemPrompt) : 0;
+
+    const total = baseTokens + typingEstimate + streamingEstimate + systemPromptEstimate;
+    const isEstimating = !usage || typingEstimate > 0 || streamingEstimate > 0;
 
     return { total, isEstimating };
   });
@@ -80,14 +84,10 @@
 </script>
 
 <div class="flex items-center gap-1.5 text-[10px] text-muted-foreground/50 hover:text-muted-foreground/70 transition-colors duration-200">
-  {#if usage}
-    <div class="flex items-center gap-1">
-      <span>Tokens:</span>
-      <span class="font-mono text-foreground/60">
-        {displayTokens().isEstimating ? '~' : ''}{displayTokens().total.toLocaleString()}<span class="text-muted-foreground/40 mx-0.5">/</span>{maxTokens.toLocaleString()}
-      </span>
-    </div>
-  {:else}
-    <span>No usage data</span>
-  {/if}
+  <div class="flex items-center gap-1">
+    <span>Tokens:</span>
+    <span class="font-mono text-foreground/60">
+      {displayTokens().isEstimating ? '~' : ''}{displayTokens().total.toLocaleString()}<span class="text-muted-foreground/40 mx-0.5">/</span>{maxTokens.toLocaleString()}
+    </span>
+  </div>
 </div>

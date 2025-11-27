@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
   import { Label } from "$lib/components/ui/label";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Button } from "$lib/components/ui/button";
@@ -12,13 +11,29 @@
   import { currentConversation } from "$lib/services/conversation";
   import { open } from '@tauri-apps/api/dialog';
   import CostEstimator from "./CostEstimator.svelte";
+  import type { Snippet } from "svelte";
 
-  export let currentMessage: string = "";
-  export let attachments: Attachment[] = [];
-  export let isLoading: boolean = false;
-  export let modelId: string = "";
-  export let messages: Message[] = [];
-  export let systemPrompt: string = "";
+  interface Props {
+    currentMessage?: string;
+    attachments?: Attachment[];
+    isLoading?: boolean;
+    modelId?: string;
+    messages?: Message[];
+    systemPrompt?: string;
+    onSendMessage?: (data: { message: string; attachments: Attachment[] }) => void;
+    controls?: Snippet;
+  }
+
+  let {
+    currentMessage = $bindable(""),
+    attachments = $bindable([]),
+    isLoading = false,
+    modelId = "",
+    messages = [],
+    systemPrompt = "",
+    onSendMessage,
+    controls
+  }: Props = $props();
   
   // Generate a temporary message ID for file uploads
   // This will be replaced with the actual message ID when the message is saved
@@ -32,11 +47,10 @@
   let dragActive = false;
 
   let fileInput: HTMLInputElement;
-  const dispatch = createEventDispatcher();
 
   function handleSendMessage() {
     if (!currentMessage.trim() && attachments.length === 0) return;
-    dispatch('sendMessage', { message: currentMessage, attachments });
+    onSendMessage?.({ message: currentMessage, attachments });
   }
 
   async function fileToBase64(file: File): Promise<string> {
@@ -310,27 +324,27 @@
 <form
   class="relative overflow-hidden rounded-2xl glass-panel-enhanced border-white/10 focus-within:ring-1 focus-within:ring-ring focus-within:ring-primary focus-within:glow-green transition-all duration-300 mx-6 mb-4"
   class:drag-active={dragActive}
-  on:dragenter={(e) => {
+  ondragenter={(e) => {
     e.preventDefault();
     e.stopPropagation();
     dragActive = true;
   }}
-  on:dragover={(e) => {
+  ondragover={(e) => {
     e.preventDefault();
     e.stopPropagation();
     dragActive = true;
   }}
-  on:dragleave={(e) => {
+  ondragleave={(e) => {
     e.preventDefault();
     e.stopPropagation();
     // Simple implementation to avoid TypeScript errors
     dragActive = false;
   }}
-  on:drop={(e) => {
+  ondrop={(e) => {
     e.preventDefault();
     e.stopPropagation();
     dragActive = false;
-    
+
     if (e.dataTransfer?.files.length) {
       const files = Array.from(e.dataTransfer.files);
       handleFiles(files);
@@ -343,7 +357,7 @@
     accept=".txt,.md,.json,.js,.ts,.py,.rs,.svelte,image/*,audio/*,text/*"
     bind:this={fileInput}
     style="display: none;"
-    on:change={handleFileChange}
+    onchange={handleFileChange}
   />
   {#if uploading}
     <div class="px-3 pb-2">
@@ -424,7 +438,7 @@
               </div>
               <button
                 class="square-attachment-remove"
-                on:click={() => {
+                onclick={() => {
                   attachments = attachments.filter((_, i) => i !== index);
                 }}
                 type="button"
@@ -459,7 +473,7 @@
   <Textarea
     id="message"
     bind:value={currentMessage}
-    on:keydown={handleKeydown}
+    onkeydown={handleKeydown}
     placeholder="Type your message here..."
     class="min-h-12 resize-none border-0 p-3 shadow-none focus-visible:ring-0"
   />
@@ -490,7 +504,7 @@
         type="button"
         size="icon"
         variant={isLoading ? "destructive" : "ghost"}
-        on:click={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
+        onclick={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
       >
         {#if isLoading}
           <Square class="size-4" />
@@ -502,7 +516,9 @@
 
     <!-- Bottom row: Model controls and token info -->
     <div class="px-3 pb-3">
-      <slot name="controls"></slot>
+      {#if controls}
+        {@render controls()}
+      {/if}
     </div>
   </div>
 </form>
