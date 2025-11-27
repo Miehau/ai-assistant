@@ -91,11 +91,11 @@
             <h1 class="text-base font-medium">System Prompts</h1>
             {#if selectedPromptId}
                 <div class="space-x-2">
-                    <Button variant="outline" size="sm" class="h-7 text-xs glass-badge hover:glass-light transition-all duration-200" on:click={cancelEdit}>Cancel</Button>
-                    <Button size="sm" class="h-7 text-xs glass-badge hover:glass-light transition-all duration-200" on:click={savePrompt}>Update Prompt</Button>
+                    <Button variant="outline" size="sm" class="h-7 text-xs glass-badge hover:glass-light transition-all duration-200" onclick={cancelEdit}>Cancel</Button>
+                    <Button size="sm" class="h-7 text-xs glass-badge hover:glass-light transition-all duration-200" onclick={savePrompt}>Update Prompt</Button>
                 </div>
             {:else}
-                <Button size="sm" class="h-7 text-xs glass-badge hover:glass-light transition-all duration-200" on:click={savePrompt}>Save New Prompt</Button>
+                <Button size="sm" class="h-7 text-xs glass-badge hover:glass-light transition-all duration-200" onclick={savePrompt}>Save New Prompt</Button>
             {/if}
         </div>
 
@@ -128,12 +128,12 @@
                                         {prompt.content.split('.')[1] ? '.' + prompt.content.split('.')[1] + '...' : '...'}
                                     </p>
                                 </div>
-                                <div class="flex gap-1.5 h-3">
+                                <div class="flex gap-1.5">
                                     <Button
                                         variant="ghost"
                                         size="sm"
                                         class="text-xs glass-badge-sm hover:glass-light transition-all duration-200"
-                                        on:click={() => editPrompt(prompt)}
+                                        onclick={() => editPrompt(prompt)}
                                     >
                                         Edit
                                     </Button>
@@ -141,7 +141,7 @@
                                         variant="ghost"
                                         size="sm"
                                         class="text-destructive hover:bg-destructive/10 hover:text-destructive glass-badge-sm hover:glass-light transition-all duration-200"
-                                        on:click={() => deletePrompt(prompt.id)}
+                                        onclick={() => deletePrompt(prompt.id)}
                                     >
                                         <Trash2 class="size-4" />
                                     </Button>
