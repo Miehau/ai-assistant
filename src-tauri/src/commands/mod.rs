@@ -5,6 +5,7 @@ mod custom_backends;
 mod files;
 pub mod file_versioning;
 mod models;
+mod preferences;
 mod system_prompts;
 mod usage;
 
@@ -15,5 +16,6 @@ pub use custom_backends::*;
 pub use files::*;
 pub use file_versioning::*;
 pub use models::*;
+pub use preferences::*;
 pub use system_prompts::*;
 pub use usage::*;

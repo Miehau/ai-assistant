@@ -6,6 +6,7 @@ mod conversations;
 mod custom_backends;
 mod messages;
 mod models;
+mod preferences;
 mod system_prompts;
 mod usage;
 
@@ -14,6 +15,7 @@ pub use conversations::*;
 pub use custom_backends::*;
 pub use messages::*;
 pub use models::*;
+pub use preferences::*;
 pub use system_prompts::*;
 pub use usage::*;
 

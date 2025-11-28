@@ -38,6 +38,9 @@ export const hasAttachments = derived(
   $attachments => $attachments.length > 0
 );
 
+// Preference keys
+const PREF_LAST_USED_MODEL = 'last_used_model';
+
 // Actions
 export async function loadModels() {
   try {
@@ -110,13 +113,40 @@ export async function loadModels() {
     availableModels.set(enabledModels);
 
     if (enabledModels.length > 0) {
-      selectedModel.set(enabledModels[0].model_name);
-      console.log('[ChatStore] Selected default model:', enabledModels[0].model_name);
+      // Try to restore last used model
+      const lastUsedModel = await getLastUsedModel();
+      const modelToSelect = lastUsedModel && enabledModels.some(m => m.model_name === lastUsedModel)
+        ? lastUsedModel
+        : enabledModels[0].model_name;
+
+      selectedModel.set(modelToSelect);
+      console.log('[ChatStore] Selected model:', modelToSelect, lastUsedModel ? '(restored from preferences)' : '(default)');
     } else {
       console.warn('[ChatStore] No enabled models available!');
     }
   } catch (error) {
     console.error('[ChatStore] Failed to load models:', error);
+  }
+}
+
+// Get the last used model from preferences
+async function getLastUsedModel(): Promise<string | null> {
+  try {
+    const result = await invoke<string | null>('get_preference', { key: PREF_LAST_USED_MODEL });
+    return result;
+  } catch (error) {
+    console.error('[ChatStore] Failed to get last used model:', error);
+    return null;
+  }
+}
+
+// Save the last used model to preferences
+export async function saveLastUsedModel(modelName: string): Promise<void> {
+  try {
+    await invoke('set_preference', { key: PREF_LAST_USED_MODEL, value: modelName });
+    console.log('[ChatStore] Saved last used model:', modelName);
+  } catch (error) {
+    console.error('[ChatStore] Failed to save last used model:', error);
   }
 }
 

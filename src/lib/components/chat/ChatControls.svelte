@@ -3,7 +3,7 @@
     import { Button } from "$lib/components/ui/button";
     import * as Select from "$lib/components/ui/select";
     import type { Model } from "$lib/types/models";
-    import type { ModelWithBackend } from "./store";
+    import { type ModelWithBackend, saveLastUsedModel } from "./store";
     import type { SystemPrompt, Message } from "$lib/types";
     import { Eye, Headphones, Database, Brain } from "lucide-svelte";
     import TokenCounter from "./TokenCounter.svelte";
@@ -155,6 +155,7 @@
         bind:value={selectedModel}
         onValueChange={(v) => {
             if (v) {
+                saveLastUsedModel(v);
                 onModelSelect?.(v);
             }
         }}

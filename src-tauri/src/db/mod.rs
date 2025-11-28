@@ -28,6 +28,7 @@ impl SystemPromptOperations for Db {}
 impl UsageOperations for Db {}
 impl BranchOperations for Db {}
 impl CustomBackendOperations for Db {}
+impl PreferenceOperations for Db {}
 
 impl Db {
     pub fn new(db_path: &str) -> Result<Self, DatabaseError> {
@@ -266,6 +267,12 @@ impl Db {
             );"),
             // Add custom_backend_id column to models table
             M::up("ALTER TABLE models ADD COLUMN custom_backend_id TEXT;"),
+            // User preferences table for storing app settings
+            M::up("CREATE TABLE IF NOT EXISTS user_preferences (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+            );"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();

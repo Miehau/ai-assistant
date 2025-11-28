@@ -97,6 +97,9 @@ fn main() {
             commands::create_custom_backend,
             commands::update_custom_backend,
             commands::delete_custom_backend,
+            // User preferences commands
+            commands::get_preference,
+            commands::set_preference,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
