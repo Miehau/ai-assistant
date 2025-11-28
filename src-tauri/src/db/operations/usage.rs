@@ -1,6 +1,6 @@
 use rusqlite::{params, Result as RusqliteResult};
 use chrono::{TimeZone, Utc, DateTime};
-use crate::db::models::{MessageUsage, ConversationUsageSummary, SaveMessageUsageInput, UsageStatistics, ModelUsage, DailyUsage};
+use crate::db::models::{MessageUsage, ConversationUsageSummary, SaveMessageUsageInput, UsageStatistics, ModelUsage, DailyUsage, DailyModelUsage};
 use super::DbOperations;
 use uuid::Uuid;
 
@@ -199,12 +199,31 @@ pub trait UsageOperations: DbOperations {
             })
         })?.collect::<Result<_, _>>()?;
 
+        // Get usage by model and date (for stacked bar chart)
+        let mut stmt = conn.prepare(
+            "SELECT DATE(created_at, 'unixepoch') as date, model_name, COUNT(*), SUM(total_tokens), SUM(estimated_cost)
+             FROM message_usage
+             WHERE created_at >= ?1 AND created_at <= ?2
+             GROUP BY date, model_name
+             ORDER BY date DESC, model_name"
+        )?;
+        let by_model_date = stmt.query_map(params![start_timestamp, end_timestamp], |row| {
+            Ok(DailyModelUsage {
+                date: row.get(0)?,
+                model_name: row.get(1)?,
+                message_count: row.get(2)?,
+                total_tokens: row.get(3)?,
+                total_cost: row.get(4)?,
+            })
+        })?.collect::<Result<_, _>>()?;
+
         Ok(UsageStatistics {
             total_messages,
             total_tokens,
             total_cost,
             by_model,
             by_date,
+            by_model_date,
         })
     }
 

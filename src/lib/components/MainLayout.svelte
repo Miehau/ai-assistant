@@ -7,6 +7,6 @@
 
 <Navbar />
 
-<div class="pl-[26px] h-screen overflow-hidden">
+<div class="pl-[26px] h-screen overflow-y-auto">
   <slot />
 </div>

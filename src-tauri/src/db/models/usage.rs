@@ -44,6 +44,7 @@ pub struct UsageStatistics {
     pub total_cost: f64,
     pub by_model: Vec<ModelUsage>,
     pub by_date: Vec<DailyUsage>,
+    pub by_model_date: Vec<DailyModelUsage>,
 }
 
 /// Usage breakdown by model
@@ -59,6 +60,16 @@ pub struct ModelUsage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DailyUsage {
     pub date: String,
+    pub message_count: i32,
+    pub total_tokens: i32,
+    pub total_cost: f64,
+}
+
+/// Usage breakdown by model and date (for stacked bar charts)
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DailyModelUsage {
+    pub date: String,
+    pub model_name: String,
     pub message_count: i32,
     pub total_tokens: i32,
     pub total_cost: f64,

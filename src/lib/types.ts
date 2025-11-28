@@ -81,6 +81,7 @@ export interface UsageStatistics {
     total_cost: number;
     by_model: ModelUsage[];
     by_date: DailyUsage[];
+    by_model_date: DailyModelUsage[];
 }
 
 export interface ModelUsage {
@@ -92,6 +93,14 @@ export interface ModelUsage {
 
 export interface DailyUsage {
     date: string;
+    message_count: number;
+    total_tokens: number;
+    total_cost: number;
+}
+
+export interface DailyModelUsage {
+    date: string;
+    model_name: string;
     message_count: number;
     total_tokens: number;
     total_cost: number;

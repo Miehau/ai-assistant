@@ -124,6 +124,17 @@
 
 /* Glassmorphism Effects */
 @layer utilities {
+  /* Layerchart SVG text and line styling for dark mode */
+  svg text {
+    fill: hsl(var(--foreground));
+  }
+  svg .grid line {
+    stroke: hsl(var(--muted) / 0.3);
+  }
+  svg .rule line {
+    stroke: hsl(var(--muted));
+  }
+
   /* Base glass panels */
   .glass-panel {
     background: rgba(255, 255, 255, 0.05);

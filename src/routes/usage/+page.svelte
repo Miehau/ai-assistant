@@ -5,6 +5,9 @@
   import { Button } from '$lib/components/ui/button';
   import { Download, TrendingUp, DollarSign, Zap } from 'lucide-svelte';
   import MainLayout from '$lib/components/MainLayout.svelte';
+  import UsageAreaChart from '$lib/components/charts/UsageAreaChart.svelte';
+  import UsageLineChart from '$lib/components/charts/UsageLineChart.svelte';
+  import ModelStackedBarChart from '$lib/components/charts/ModelStackedBarChart.svelte';
 
   let statistics = $state<UsageStatistics | null>(null);
   let loading = $state(true);
@@ -79,6 +82,25 @@
     if (!statistics?.by_model.length) return 1;
     return Math.max(...statistics.by_model.map(m => m.total_tokens));
   }
+
+  // Transform data for charts
+  const costChartData = $derived(
+    statistics?.by_date
+      .map(d => ({
+        date: new Date(d.date),
+        cost: d.total_cost,
+      }))
+      .sort((a, b) => a.date.getTime() - b.date.getTime()) ?? []
+  );
+
+  const tokenChartData = $derived(
+    statistics?.by_date
+      .map(d => ({
+        date: new Date(d.date),
+        tokens: d.total_tokens,
+      }))
+      .sort((a, b) => a.date.getTime() - b.date.getTime()) ?? []
+  );
 
   onMount(() => {
     loadStatistics();
@@ -231,11 +253,37 @@
         {/if}
       </div>
 
-      <!-- Cost Over Time -->
+      <!-- Cost Over Time Chart -->
+      {#if costChartData.length > 0}
+        <div class="glass-panel p-6 mb-8">
+          <h2 class="text-xl font-semibold mb-4">Cost Over Time</h2>
+          <UsageAreaChart data={costChartData} height={250} />
+        </div>
+      {/if}
+
+      <!-- Token Usage Over Time Chart -->
+      {#if tokenChartData.length > 0}
+        <div class="glass-panel p-6 mb-8">
+          <h2 class="text-xl font-semibold mb-4">Token Usage Over Time</h2>
+          <UsageLineChart data={tokenChartData} height={250} />
+        </div>
+      {/if}
+
+      <!-- Cost by Model Over Time (Stacked Bar Chart) -->
+      {#if statistics.by_model_date && statistics.by_model_date.length > 0}
+        <div class="glass-panel p-6 mb-8">
+          <h2 class="text-xl font-semibold mb-4">Cost by Model Over Time</h2>
+          <ModelStackedBarChart data={statistics.by_model_date} height={350} />
+        </div>
+      {/if}
+
+      <!-- Daily Usage Table (collapsed by default) -->
       {#if statistics.by_date.length > 0}
-        <div class="glass-panel p-6">
-          <h2 class="text-xl font-semibold mb-4">Daily Usage</h2>
-          <div class="space-y-3">
+        <details class="glass-panel p-6">
+          <summary class="text-xl font-semibold mb-4 cursor-pointer hover:text-primary transition-colors">
+            Daily Usage Details
+          </summary>
+          <div class="space-y-3 mt-4">
             {#each statistics.by_date.slice(0, 14) as daily}
               {@const maxDailyCost = Math.max(...statistics.by_date.map(d => d.total_cost))}
               {@const costPercentage = (daily.total_cost / maxDailyCost) * 100}
@@ -259,7 +307,7 @@
               </div>
             {/each}
           </div>
-        </div>
+        </details>
       {/if}
     {:else}
       <div class="glass-panel p-12 text-center">
