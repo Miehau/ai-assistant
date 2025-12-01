@@ -47,37 +47,20 @@ pub trait UsageOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
-        // Get message IDs for this conversation
-        let mut stmt = conn.prepare(
-            "SELECT id FROM messages WHERE conversation_id = ?1"
-        )?;
-        let message_ids: Vec<String> = stmt.query_map(params![conversation_id], |row| {
-            row.get(0)
-        })?.collect::<Result<_, _>>()?;
-
-        // Calculate totals from message_usage
-        let mut total_prompt_tokens = 0;
-        let mut total_completion_tokens = 0;
-        let mut total_cost = 0.0;
-        let message_count = message_ids.len() as i32;
-
-        for message_id in message_ids {
-            if let Ok(usage) = conn.query_row(
-                "SELECT prompt_tokens, completion_tokens, estimated_cost FROM message_usage WHERE message_id = ?1",
-                params![message_id],
-                |row| {
-                    Ok((
-                        row.get::<_, i32>(0)?,
-                        row.get::<_, i32>(1)?,
-                        row.get::<_, f64>(2)?
-                    ))
-                }
-            ) {
-                total_prompt_tokens += usage.0;
-                total_completion_tokens += usage.1;
-                total_cost += usage.2;
-            }
-        }
+        // Calculate totals with a single JOIN query instead of N+1 queries
+        let (total_prompt_tokens, total_completion_tokens, total_cost, message_count): (i32, i32, f64, i32) =
+            conn.query_row(
+                "SELECT
+                    COALESCE(SUM(mu.prompt_tokens), 0),
+                    COALESCE(SUM(mu.completion_tokens), 0),
+                    COALESCE(SUM(mu.estimated_cost), 0.0),
+                    COUNT(DISTINCT m.id)
+                 FROM messages m
+                 LEFT JOIN message_usage mu ON m.id = mu.message_id
+                 WHERE m.conversation_id = ?1",
+                params![conversation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            )?;
 
         let total_tokens = total_prompt_tokens + total_completion_tokens;
         let last_updated = Utc::now();

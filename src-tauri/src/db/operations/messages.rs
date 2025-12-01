@@ -2,6 +2,7 @@ use rusqlite::{params, Result as RusqliteResult};
 use chrono::{TimeZone, Utc};
 use uuid::Uuid;
 use std::fs;
+use std::collections::HashMap;
 use base64::Engine;
 use tauri::api::path;
 use crate::db::models::{Message, MessageAttachment, IncomingAttachment};
@@ -162,10 +163,16 @@ pub trait MessageOperations: DbOperations {
             })
         })?;
 
+        // Use HashMap for O(1) lookup instead of O(n) iteration
+        let mut message_map: HashMap<String, &mut Message> = messages
+            .iter_mut()
+            .map(|m| (m.id.clone(), m))
+            .collect();
+
         for attachment in attachments {
             if let Ok(att) = attachment {
                 if let Some(message_id) = &att.message_id {
-                    if let Some(message) = messages.iter_mut().find(|m| m.id == *message_id) {
+                    if let Some(message) = message_map.get_mut(message_id) {
                         message.attachments.push(att);
                     }
                 }
