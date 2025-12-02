@@ -4,7 +4,7 @@
   import { fade, fly, scale } from "svelte/transition";
   import { backOut } from "svelte/easing";
   import type { Message } from "$lib/types";
-  import { streamingMessage, isStreaming } from "./store";
+  import { streamingMessage, isStreaming } from "$lib/stores/chat";
   import { pageVisible } from "$lib/stores/visibility";
 
   export let messages: Message[] = [];

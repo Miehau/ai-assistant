@@ -5,7 +5,7 @@
     import { onMount } from "svelte";
     import { Trash2 } from "lucide-svelte";
     import { apiKeyService } from "$lib/models";
-    import { loadModels } from "$lib/components/chat/store";
+    import { loadModels } from "$lib/stores/chat";
 
     let { provider }: { provider: { value: string; label: string } } = $props();
 

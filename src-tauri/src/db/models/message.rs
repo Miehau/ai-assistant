@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct IncomingAttachment {
     pub name: String,
     pub data: String,
@@ -10,7 +11,7 @@ pub struct IncomingAttachment {
     pub transcript: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct MessageAttachment {
     pub id: Option<String>,
     pub message_id: Option<String>,
@@ -29,7 +30,7 @@ pub struct MessageAttachment {
     pub thumbnail_path: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct Message {
     pub id: String,
     pub content: String,

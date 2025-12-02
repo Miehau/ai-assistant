@@ -1,6 +1,6 @@
 // Debug utility for logging store values
 import { get } from 'svelte/store';
-import { availableModels } from './chat/store';
+import { availableModels } from '$lib/stores/chat';
 import { modelRegistry } from '$lib/models';
 
 export function debugModels() {

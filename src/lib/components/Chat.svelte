@@ -15,7 +15,7 @@
     toggleStreaming,
     sendMessage,
     clearConversation
-  } from "./chat/store";
+  } from "$lib/stores/chat";
   import ChatMessages from "./chat/ChatMessages.svelte";
   import ChatInput from "./chat/ChatInput.svelte";
   import ChatControls from "./chat/ChatControls.svelte";

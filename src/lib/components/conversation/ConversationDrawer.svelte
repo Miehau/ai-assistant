@@ -3,7 +3,7 @@
   import { conversationService } from "$lib/services/conversation";
   import type { Conversation } from "$lib/types";
   import { formatDistanceToNow } from "date-fns";
-  import { messages, isFirstMessage } from "$lib/components/chat/store";
+  import { messages, isFirstMessage } from "$lib/stores/chat";
   import { fly } from "svelte/transition";
   import { X, Trash2 } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";

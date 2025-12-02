@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
 use super::message::Message;
 
 /// Represents a branch in a conversation
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct Branch {
     pub id: String,
     pub conversation_id: String,
@@ -13,7 +14,7 @@ pub struct Branch {
 }
 
 /// Represents a node in the message tree structure
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct MessageTreeNode {
     pub message_id: String,
     pub parent_message_id: Option<String>,
@@ -23,7 +24,7 @@ pub struct MessageTreeNode {
 }
 
 /// Complete tree structure for a conversation with messages
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct ConversationTree {
     pub conversation_id: String,
     pub branches: Vec<Branch>,
@@ -32,14 +33,14 @@ pub struct ConversationTree {
 }
 
 /// Represents a single branch path with its messages
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct BranchPath {
     pub branch: Branch,
     pub messages: Vec<Message>,
 }
 
 /// Statistics about branches in a conversation
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct BranchStats {
     pub conversation_id: String,
     pub total_branches: usize,
@@ -48,7 +49,7 @@ pub struct BranchStats {
 }
 
 /// Results of a database consistency check for message tree
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct MessageTreeConsistencyCheck {
     /// Messages that exist in messages table but not in message_tree
     pub orphaned_messages: Vec<String>,

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct Model {
     pub provider: String,
     pub model_name: String,
@@ -15,7 +16,7 @@ pub struct Model {
     pub custom_backend_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Type)]
 pub struct ApiKey {
     pub provider: String,
     pub key: String,
