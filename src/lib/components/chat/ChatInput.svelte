@@ -40,11 +40,11 @@
   const tempMessageId = crypto.randomUUID();
   
   // Track upload progress
-  let uploading = false;
-  let uploadProgress: Record<string, number> = {};
+  let uploading = $state(false);
+  let uploadProgress = $state<Record<string, number>>({});
   
   // Drag and drop state
-  let dragActive = false;
+  let dragActive = $state(false);
 
   let fileInput: HTMLInputElement;
 

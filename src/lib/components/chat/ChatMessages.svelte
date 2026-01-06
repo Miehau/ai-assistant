@@ -210,6 +210,7 @@
         type="received"
         content={$streamingMessage}
         conversationId={conversationId}
+        isStreaming={true}
       />
     </div>
   {/if}

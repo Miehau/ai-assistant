@@ -30,7 +30,9 @@
 		<!-- Header -->
 		<div class="drawer-header">
 			<div class="header-left">
-				<Network size={20} class="header-icon" />
+				<span class="header-icon">
+					<Network size={20} />
+				</span>
 				<h2 class="drawer-title">Branch Tree</h2>
 			</div>
 			<button onclick={onClose} class="close-button" title="Close">
@@ -111,6 +113,9 @@
 	}
 
 	.header-icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 		color: #52b788;
 	}
 

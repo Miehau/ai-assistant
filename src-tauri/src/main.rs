@@ -4,8 +4,11 @@ mod db;
 mod commands;
 mod setup_default_values;
 mod files;
+mod events;
+mod llm;
 
 use db::Db;
+use events::EventBus;
 use files::FileManager;
 use std::fs;
 use tauri::Manager;
@@ -23,12 +26,25 @@ fn main() {
             
             // Initialize the file manager
             let file_manager = FileManager::new().expect("Failed to create file manager");
+
+            // Initialize event bus and forward events to the UI
+            let event_bus = EventBus::new();
+            let app_handle = app.handle();
+            let event_rx = event_bus.subscribe();
+            std::thread::spawn(move || {
+                for event in event_rx {
+                    let _ = app_handle.emit_all("agent_event", event);
+                }
+            });
             
             app.manage(db);
             app.manage(file_manager);
+            app.manage(event_bus);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::agent_send_message,
+            commands::agent_generate_title,
             commands::get_models,
             commands::add_model,
             commands::toggle_model,

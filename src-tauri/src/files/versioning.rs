@@ -155,18 +155,6 @@ impl VersionManager {
         Ok(Path::new(&version.original_path).to_path_buf())
     }
     
-    /// Get a specific version of a file
-    pub fn get_version(&self, file_id: &str, version_id: &str) -> Result<PathBuf, io::Error> {
-        let history = self.get_version_history(file_id)?;
-        
-        // Find the requested version
-        let version = history.versions.iter()
-            .find(|v| v.version_id == version_id)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Version not found"))?;
-            
-        Ok(Path::new(&version.version_path).to_path_buf())
-    }
-    
     /// Delete a specific version of a file
     pub fn delete_version(&self, file_id: &str, version_id: &str) -> Result<(), io::Error> {
         let history = self.get_version_history(file_id)?;

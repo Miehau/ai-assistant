@@ -1,8 +1,5 @@
 use crate::files::{FileManager, VersionMetadata, VersionHistory};
-use std::path::PathBuf;
-use std::io;
 use serde::{Serialize, Deserialize};
-use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VersionResult {

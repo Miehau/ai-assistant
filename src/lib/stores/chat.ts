@@ -10,6 +10,10 @@ import { modelService, apiKeyService } from '$lib/models';
 import { customBackendService } from '$lib/services/customBackendService.svelte';
 import { v4 as uuidv4 } from 'uuid';
 import { branchStore } from '$lib/stores/branches';
+import { startAgentEventBridge } from '$lib/services/eventBridge';
+import { AGENT_EVENT_TYPES } from '$lib/types/events';
+import type { AgentEvent, Attachment } from '$lib/types';
+import { currentConversationUsage } from '$lib/stores/tokenUsage';
 
 // Extended model type with backend name for UI display
 export interface ModelWithBackend extends Model {
@@ -40,6 +44,164 @@ export const hasAttachments = derived(
 
 // Preference keys
 const PREF_LAST_USED_MODEL = 'last_used_model';
+let stopAgentEventBridge: (() => void) | null = null;
+let streamingAssistantMessageId: string | null = null;
+let streamingChunkBuffer = '';
+let streamingFlushPending = false;
+
+function flushStreamingChunks() {
+  if (!streamingChunkBuffer) {
+    streamingFlushPending = false;
+    return;
+  }
+
+  const chunk = streamingChunkBuffer;
+  streamingChunkBuffer = '';
+  streamingMessage.update((content) => content + chunk);
+  streamingFlushPending = false;
+}
+
+export async function startAgentEvents() {
+  if (stopAgentEventBridge) return;
+  stopAgentEventBridge = await startAgentEventBridge((event: AgentEvent) => {
+    if (event.event_type === AGENT_EVENT_TYPES.MESSAGE_SAVED) {
+      const currentConversation = conversationService.getCurrentConversation();
+      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+        return;
+      }
+
+      messages.update((msgs) => {
+        if (msgs.some((msg) => msg.id === event.payload.message_id)) {
+          return msgs;
+        }
+
+        const attachments: Attachment[] = event.payload.attachments.map((attachment) => ({
+          name: attachment.name,
+          data: attachment.data,
+          attachment_type: attachment.attachment_type as Attachment['attachment_type'],
+          description: attachment.description,
+          transcript: attachment.transcript,
+        }));
+
+        const newMessage: Message = {
+          id: event.payload.message_id,
+          type: event.payload.role === 'user' ? 'sent' : 'received',
+          content: event.payload.content,
+          attachments: attachments.length ? attachments : undefined,
+          timestamp: event.payload.timestamp_ms,
+        };
+
+        return [...msgs, newMessage];
+      });
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.USAGE_UPDATED) {
+      const currentConversation = conversationService.getCurrentConversation();
+      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+        return;
+      }
+
+      currentConversationUsage.set({
+        conversation_id: event.payload.conversation_id,
+        total_prompt_tokens: event.payload.total_prompt_tokens,
+        total_completion_tokens: event.payload.total_completion_tokens,
+        total_tokens: event.payload.total_tokens,
+        total_cost: event.payload.total_cost,
+        message_count: event.payload.message_count,
+        last_updated: new Date(event.payload.timestamp_ms).toISOString(),
+      });
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.CONVERSATION_UPDATED) {
+      conversationService.applyConversationUpdate(
+        event.payload.conversation_id,
+        event.payload.name
+      );
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.CONVERSATION_DELETED) {
+      const currentConversation = conversationService.getCurrentConversation();
+      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+        return;
+      }
+
+      conversationService.applyConversationDeleted(event.payload.conversation_id);
+      messages.set([]);
+      isFirstMessage.set(true);
+      isStreaming.set(false);
+      streamingMessage.set('');
+      streamingAssistantMessageId = null;
+      isLoading.set(false);
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_STARTED) {
+      const currentConversation = conversationService.getCurrentConversation();
+      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+        return;
+      }
+
+      streamingAssistantMessageId = event.payload.message_id;
+      isStreaming.set(true);
+      streamingMessage.set('');
+      isLoading.set(true);
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_CHUNK) {
+      const currentConversation = conversationService.getCurrentConversation();
+      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+        return;
+      }
+
+      if (streamingAssistantMessageId !== event.payload.message_id) {
+        return;
+      }
+
+      streamingChunkBuffer += event.payload.chunk;
+
+      if (!streamingFlushPending) {
+        streamingFlushPending = true;
+        if (typeof window !== 'undefined' && 'requestAnimationFrame' in window) {
+          window.requestAnimationFrame(() => flushStreamingChunks());
+        } else {
+          flushStreamingChunks();
+        }
+      }
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_COMPLETED) {
+      const currentConversation = conversationService.getCurrentConversation();
+      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+        return;
+      }
+
+      if (streamingAssistantMessageId !== event.payload.message_id) {
+        return;
+      }
+
+      messages.update((msgs) => {
+        if (msgs.some((msg) => msg.id === event.payload.message_id)) {
+          return msgs;
+        }
+
+        const newMessage: Message = {
+          id: event.payload.message_id,
+          type: 'received',
+          content: event.payload.content,
+          timestamp: event.payload.timestamp_ms,
+        };
+
+        return [...msgs, newMessage];
+      });
+
+      streamingAssistantMessageId = null;
+      isStreaming.set(false);
+      streamingMessage.set('');
+      streamingChunkBuffer = '';
+      streamingFlushPending = false;
+      isLoading.set(false);
+    }
+  });
+}
 
 // Actions
 export async function loadModels() {
@@ -197,26 +359,15 @@ export async function sendMessage() {
   const selectedModelValue = get(selectedModel);
   const selectedSystemPromptValue = get(selectedSystemPrompt);
   const isFirstMessageValue = get(isFirstMessage);
+  const streamingEnabledValue = get(streamingEnabled);
 
   if (!currentMessageValue.trim() && attachmentsValue.length === 0) return;
 
   isLoading.set(true);
 
   try {
-    // Find the model object to get its display name
     const models = get(availableModels);
     const selectedModelObject = models.find(m => m.model_name === selectedModelValue);
-
-    // Create and display user message immediately with unique ID
-    const userMessage: Message = {
-      id: generateMessageId(),
-      type: 'sent',
-      content: currentMessageValue,
-      attachments: attachmentsValue.length > 0 ? attachmentsValue : undefined,
-      model: selectedModelObject ? `${selectedModelObject.model_name} • ${selectedModelObject.provider}` : selectedModelValue,
-    };
-
-    messages.update(msgs => [...msgs, userMessage]);
 
     // Clear input fields
     currentMessage.set('');
@@ -233,8 +384,9 @@ export async function sendMessage() {
       systemPromptContent = prompt.content || defaultSystemPrompt;
     }
 
-    // Get the current conversation
-    const currentConversation = conversationService.getCurrentConversation();
+    // Get or create the current conversation
+    const currentConversation = conversationService.getCurrentConversation()
+      ?? await conversationService.setCurrentConversation(null);
 
     // Check if this is the first message in a new conversation
     const shouldGenerateTitle = isFirstMessageValue;
@@ -245,49 +397,33 @@ export async function sendMessage() {
       isFirstMessage.set(false);
     }
 
-    // Initialize streaming state - no array updates during streaming!
-    isStreaming.set(true);
-    streamingMessage.set('');
-
     // Generate assistant message ID before streaming
     const assistantMessageId = generateMessageId();
+    const userMessageId = generateMessageId();
 
-    // Use direct chat mode
-    const result = await chatService.handleSendMessage(
-      currentMessageValue,
-      selectedModelValue,
-      (chunk: string) => {
-        // Update only the streaming store - no array reactivity!
-        streamingMessage.update(content => content + chunk);
-      },
-      systemPromptContent,
-      attachmentsValue,
-      userMessage.id,  // Pass user message ID
-      assistantMessageId  // Pass assistant message ID
-    );
-
-    // Streaming complete - add final message to array (single update)
-    const finalContent = get(streamingMessage);
-    if (finalContent) {
-      messages.update(msgs => [...msgs, {
-        id: assistantMessageId,  // Use the same ID
-        type: 'received',
-        content: finalContent
-      }]);
-    }
-
-    // Clean up streaming state
-    isStreaming.set(false);
-    streamingMessage.set('');
+    await invoke('agent_send_message', {
+      payload: {
+        conversation_id: currentConversation?.id,
+        model: selectedModelValue,
+        provider: selectedModelObject?.provider || 'openai',
+        system_prompt: systemPromptContent,
+        content: currentMessageValue,
+        attachments: attachmentsValue,
+        user_message_id: userMessageId,
+        assistant_message_id: assistantMessageId,
+        custom_backend_id: selectedModelObject?.custom_backend_id || null,
+        stream: streamingEnabledValue,
+      }
+    });
 
     // Generate a title for the conversation if this is the first message
     console.log('Generating title for conversation:', currentConversation?.id);
     if (shouldGenerateTitle) {
-      console.log('Initiating title generation for conversation:', result?.conversationId);
+      console.log('Initiating title generation for conversation:', currentConversation?.id);
       // Use setTimeout to avoid blocking the UI
       setTimeout(async () => {
         try {
-          await titleGeneratorService.generateAndUpdateTitle(result?.conversationId || '');
+          await titleGeneratorService.generateAndUpdateTitle(currentConversation?.id || '');
         } catch (error) {
           console.error('Error generating conversation title:', error);
         }
@@ -295,8 +431,9 @@ export async function sendMessage() {
     }
   } catch (error) {
     console.error('Error sending message:', error);
-  } finally {
     isLoading.set(false);
+  } finally {
+    // Loading state cleared on stream completion.
   }
 }
 

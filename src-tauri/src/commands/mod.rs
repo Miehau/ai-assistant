@@ -1,4 +1,5 @@
 mod api_keys;
+mod agent;
 mod branches;
 mod conversations;
 mod custom_backends;
@@ -10,6 +11,7 @@ mod system_prompts;
 mod usage;
 
 pub use api_keys::*;
+pub use agent::*;
 pub use branches::*;
 pub use conversations::*;
 pub use custom_backends::*;

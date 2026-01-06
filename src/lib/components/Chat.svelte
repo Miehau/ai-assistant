@@ -14,7 +14,8 @@
     loadSystemPrompts,
     toggleStreaming,
     sendMessage,
-    clearConversation
+    clearConversation,
+    startAgentEvents
   } from "$lib/stores/chat";
   import ChatMessages from "./chat/ChatMessages.svelte";
   import ChatInput from "./chat/ChatInput.svelte";
@@ -29,6 +30,7 @@
   let isClearing = false;
 
   onMount(async () => {
+    startAgentEvents();
     await loadModels();
     loadSystemPrompts();
 

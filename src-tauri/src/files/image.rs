@@ -1,20 +1,10 @@
 // src-tauri/src/files/image.rs
 use image::{DynamicImage, GenericImageView, ImageFormat, ImageError};
-use std::io::{self, Cursor};
-use std::path::Path;
+use std::io::Cursor;
 
 pub struct ImageProcessor;
 
 impl ImageProcessor {
-    // Validate an image and return its dimensions and format
-    pub fn validate_image(data: &[u8]) -> Result<(u32, u32, ImageFormat), ImageError> {
-        let img = image::load_from_memory(data)?;
-        let format = image::guess_format(data)?;
-        let (width, height) = img.dimensions();
-        
-        Ok((width, height, format))
-    }
-    
     // Generate a thumbnail for an image
     pub fn generate_thumbnail(
         data: &[u8], 

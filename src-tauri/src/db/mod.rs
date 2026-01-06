@@ -11,6 +11,7 @@ pub use error::DatabaseError;
 pub use models::*;
 pub use operations::*;
 
+#[derive(Clone)]
 pub struct Db {
     conn: Arc<Mutex<Connection>>,
 }

@@ -9,7 +9,6 @@ pub enum DatabaseError {
     MessageNotFound(String),
     MessageNotInTree(String),
     ConversationNotFound(String),
-    BranchNotFound(String),
     ValidationError(String),
 }
 
@@ -23,7 +22,6 @@ impl fmt::Display for DatabaseError {
                 write!(f, "Message exists but is not in the message tree: {}. This conversation may need repair.", id)
             }
             DatabaseError::ConversationNotFound(id) => write!(f, "Conversation not found: {}", id),
-            DatabaseError::BranchNotFound(id) => write!(f, "Branch not found: {}", id),
             DatabaseError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
         }
     }

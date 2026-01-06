@@ -17,6 +17,7 @@ import type {
     BaseMessage
 } from './types/message';
 import type { Attachment, FileMetadata } from './types/attachments';
+import type { AgentEvent, AgentEventType } from './types/events';
 
 // Re-export everything
 export type {
@@ -25,7 +26,9 @@ export type {
     DisplayMessage,
     APIMessage,
     DBMessage,
-    BaseMessage
+    BaseMessage,
+    AgentEvent,
+    AgentEventType
 };
 
 // Re-export with original names

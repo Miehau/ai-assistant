@@ -32,6 +32,7 @@
   export let model: string | undefined = undefined;
   export let messageId: string | undefined = undefined;
   export let conversationId: string | undefined = undefined;
+  export let isStreaming: boolean = false;
 
   // Track loading states for attachments
   let loadingStates: Record<string, boolean> = {};
@@ -150,9 +151,9 @@
     }
   }
 
-  // Progressive rendering during rapid updates (streaming)
+  // Progressive rendering during rapid updates
   $: {
-    if (content !== lastContent) {
+    if (!isStreaming && content !== lastContent) {
       lastContent = content;
 
       // Clear existing timeout
@@ -165,6 +166,9 @@
         htmlContent = parseMarkdown(content);
         parseTimeout = null;
       }, 16) as unknown as number;
+    } else if (isStreaming) {
+      lastContent = content;
+      htmlContent = '';
     }
   }
 
@@ -222,17 +226,19 @@
       renderer: renderer,
     });
 
-    // Defer initial parse to idle time to avoid blocking the main thread
-    // This allows the component to mount quickly and parse during idle time
-    const parseWhenIdle = () => {
-      htmlContent = parseMarkdown(content);
-    };
+    if (!isStreaming) {
+      // Defer initial parse to idle time to avoid blocking the main thread
+      // This allows the component to mount quickly and parse during idle time
+      const parseWhenIdle = () => {
+        htmlContent = parseMarkdown(content);
+      };
 
-    if ('requestIdleCallback' in window) {
-      requestIdleCallback(parseWhenIdle);
-    } else {
-      // Fallback for browsers without requestIdleCallback support
-      setTimeout(parseWhenIdle, 0);
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(parseWhenIdle);
+      } else {
+        // Fallback for browsers without requestIdleCallback support
+        setTimeout(parseWhenIdle, 0);
+      }
     }
   });
 
@@ -308,7 +314,11 @@
   }
 </script>
 
-<div class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}">
+<div
+  class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}"
+  data-message-id={messageId}
+  data-conversation-id={conversationId}
+>
   <div
     class="rounded-3xl px-4 py-2 w-full max-w-5xl {type === 'received'
       ? 'message-glass-ai'

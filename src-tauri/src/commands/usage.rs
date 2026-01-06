@@ -1,23 +1,69 @@
-use crate::db::{Db, UsageOperations, SaveMessageUsageInput, MessageUsage, ConversationUsageSummary, UsageStatistics};
+use crate::db::{
+    ConversationUsageSummary,
+    Db,
+    MessageUsage,
+    SaveMessageUsageInput,
+    UsageOperations,
+    UsageStatistics,
+};
+use crate::events::{AgentEvent, EventBus, EVENT_MESSAGE_USAGE_SAVED, EVENT_USAGE_UPDATED};
+use serde_json::json;
 use tauri::State;
 use chrono::{TimeZone, Utc};
 
 #[tauri::command]
 pub fn save_message_usage(
     state: State<'_, Db>,
+    event_bus: State<'_, EventBus>,
     input: SaveMessageUsageInput
 ) -> Result<MessageUsage, String> {
-    UsageOperations::save_message_usage(&*state, input)
-        .map_err(|e| e.to_string())
+    let usage = UsageOperations::save_message_usage(&*state, input)
+        .map_err(|e| e.to_string())?;
+
+    let timestamp_ms = usage.created_at.timestamp_millis();
+    event_bus.publish(AgentEvent::new_with_timestamp(
+        EVENT_MESSAGE_USAGE_SAVED,
+        json!({
+            "id": usage.id,
+            "message_id": usage.message_id,
+            "model_name": usage.model_name,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
+            "estimated_cost": usage.estimated_cost,
+            "timestamp_ms": timestamp_ms
+        }),
+        timestamp_ms,
+    ));
+
+    Ok(usage)
 }
 
 #[tauri::command]
 pub fn update_conversation_usage(
     state: State<'_, Db>,
+    event_bus: State<'_, EventBus>,
     conversation_id: String
 ) -> Result<ConversationUsageSummary, String> {
-    UsageOperations::update_conversation_usage(&*state, &conversation_id)
-        .map_err(|e| e.to_string())
+    let summary = UsageOperations::update_conversation_usage(&*state, &conversation_id)
+        .map_err(|e| e.to_string())?;
+
+    let timestamp_ms = summary.last_updated.timestamp_millis();
+    event_bus.publish(AgentEvent::new_with_timestamp(
+        EVENT_USAGE_UPDATED,
+        json!({
+            "conversation_id": summary.conversation_id,
+            "total_prompt_tokens": summary.total_prompt_tokens,
+            "total_completion_tokens": summary.total_completion_tokens,
+            "total_tokens": summary.total_tokens,
+            "total_cost": summary.total_cost,
+            "message_count": summary.message_count,
+            "timestamp_ms": timestamp_ms
+        }),
+        timestamp_ms,
+    ));
+
+    Ok(summary)
 }
 
 #[tauri::command]

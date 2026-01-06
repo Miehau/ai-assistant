@@ -1,0 +1,59 @@
+use chrono::Utc;
+use serde::Serialize;
+use serde_json::Value;
+use std::sync::{mpsc, Arc, Mutex};
+
+pub const EVENT_MESSAGE_SAVED: &str = "message.saved";
+pub const EVENT_CONVERSATION_UPDATED: &str = "conversation.updated";
+pub const EVENT_CONVERSATION_DELETED: &str = "conversation.deleted";
+pub const EVENT_MESSAGE_USAGE_SAVED: &str = "message.usage.saved";
+pub const EVENT_USAGE_UPDATED: &str = "usage.updated";
+pub const EVENT_ASSISTANT_STREAM_STARTED: &str = "assistant.stream.started";
+pub const EVENT_ASSISTANT_STREAM_CHUNK: &str = "assistant.stream.chunk";
+pub const EVENT_ASSISTANT_STREAM_COMPLETED: &str = "assistant.stream.completed";
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentEvent {
+    pub event_type: String,
+    pub payload: Value,
+    pub timestamp_ms: i64,
+}
+
+impl AgentEvent {
+    pub fn new_with_timestamp(
+        event_type: impl Into<String>,
+        payload: Value,
+        timestamp_ms: i64,
+    ) -> Self {
+        Self {
+            event_type: event_type.into(),
+            payload,
+            timestamp_ms,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct EventBus {
+    subscribers: Arc<Mutex<Vec<mpsc::Sender<AgentEvent>>>>,
+}
+
+impl EventBus {
+    pub fn new() -> Self {
+        Self {
+            subscribers: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn subscribe(&self) -> mpsc::Receiver<AgentEvent> {
+        let (tx, rx) = mpsc::channel();
+        let mut subscribers = self.subscribers.lock().unwrap();
+        subscribers.push(tx);
+        rx
+    }
+
+    pub fn publish(&self, event: AgentEvent) {
+        let mut subscribers = self.subscribers.lock().unwrap();
+        subscribers.retain(|sender| sender.send(event.clone()).is_ok());
+    }
+}

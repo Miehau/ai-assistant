@@ -16,6 +16,13 @@
 		onClick?.(node.messageId);
 	}
 
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter' || event.key === ' ') {
+			event.preventDefault();
+			handleClick();
+		}
+	}
+
 	// Get branch color based on branch ID (simple hash)
 	function getBranchColor(branchId: string): string {
 		const colors = ['#52b788', '#22d3ee', '#a855f7', '#fbbf24'];
@@ -32,6 +39,10 @@
 	class:branch-point={node.isBranchPoint}
 	transform="translate({node.x}, {node.y})"
 	onclick={handleClick}
+	onkeydown={handleKeydown}
+	role="button"
+	tabindex="0"
+	aria-label="Select message {node.messageId.substring(0, 8)}"
 	style="cursor: pointer;"
 >
 	<!-- Node rectangle -->

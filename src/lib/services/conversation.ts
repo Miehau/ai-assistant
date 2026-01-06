@@ -148,6 +148,34 @@ export class ConversationService {
       throw error;
     }
   }
+
+  applyConversationUpdate(conversationId: string, name: string) {
+    const currentState = get(this.state);
+    if (currentState.currentConversationId !== conversationId || !currentState.currentConversation) {
+      return;
+    }
+
+    this.state.update(state => ({
+      ...state,
+      currentConversation: {
+        ...state.currentConversation!,
+        name
+      }
+    }));
+  }
+
+  applyConversationDeleted(conversationId: string) {
+    const currentState = get(this.state);
+    if (currentState.currentConversationId !== conversationId) {
+      return;
+    }
+
+    this.state.update(state => ({
+      ...state,
+      currentConversationId: null,
+      currentConversation: null
+    }));
+  }
 }
 
 export const conversationService = new ConversationService();
