@@ -25,6 +25,33 @@
   const usage = $derived($currentConversationUsage);
   const cost = $derived($formattedCost);
 
+  // Refresh usage when messages change or streaming ends
+  let usageRefreshTimeout: number | null = null;
+  let lastMessageCount = $state(0);
+  let lastIsLoading = $state(false);
+
+  $effect(() => {
+    if (!conversationId) return;
+
+    const messagesChanged = messages.length !== lastMessageCount;
+    const loadingEnded = lastIsLoading && !isLoading;
+    lastIsLoading = isLoading;
+
+    if (!messagesChanged && !loadingEnded) return;
+
+    lastMessageCount = messages.length;
+
+    if (usageRefreshTimeout !== null) {
+      clearTimeout(usageRefreshTimeout);
+    }
+
+    const delay = isLoading ? 600 : 200;
+    usageRefreshTimeout = window.setTimeout(() => {
+      loadConversationUsage(conversationId);
+      usageRefreshTimeout = null;
+    }, delay) as unknown as number;
+  });
+
   // Debounced values for token estimation
   let debouncedCurrentMessage = $state('');
   let debouncedStreamingContent = $state('');
@@ -83,11 +110,17 @@
   const maxTokens = $derived(modelId ? getModelContextWindow(modelId) : 128000);
 </script>
 
-<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground/50 hover:text-muted-foreground/70 transition-colors duration-200">
-  <div class="flex items-center gap-1">
-    <span>Tokens:</span>
-    <span class="font-mono text-foreground/60">
-      {displayTokens().isEstimating ? '~' : ''}{displayTokens().total.toLocaleString()}<span class="text-muted-foreground/40 mx-0.5">/</span>{maxTokens.toLocaleString()}
+<div class="glass-badge-subtle px-2.5 py-1.5 rounded-lg flex items-center gap-2 text-[11px] text-muted-foreground/70 border-white/10">
+  <div class="flex flex-col leading-tight">
+    <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Tokens</span>
+    <span class="font-mono text-foreground/80">
+      {displayTokens().isEstimating ? '~' : ''}{displayTokens().total.toLocaleString()}
+      <span class="text-muted-foreground/40 mx-0.5">/</span>{maxTokens.toLocaleString()}
     </span>
+  </div>
+  <span class="h-6 w-px bg-white/10"></span>
+  <div class="flex flex-col leading-tight">
+    <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Cost</span>
+    <span class="font-mono text-foreground/80">{cost}</span>
   </div>
 </div>
