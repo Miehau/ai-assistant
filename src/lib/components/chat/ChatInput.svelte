@@ -322,7 +322,7 @@
 </style>
 
 <form
-  class="relative overflow-hidden rounded-2xl glass-panel-enhanced border-white/10 focus-within:ring-1 focus-within:ring-ring focus-within:ring-primary focus-within:glow-green transition-all duration-300 mx-6 mb-4"
+  class="relative overflow-hidden rounded-2xl chat-input-panel focus-within:ring-1 focus-within:ring-white/20 transition-all duration-200 mx-6 mb-6"
   class:drag-active={dragActive}
   ondragenter={(e) => {
     e.preventDefault();
@@ -475,12 +475,12 @@
     bind:value={currentMessage}
     onkeydown={handleKeydown}
     placeholder="Type your message here..."
-    class="min-h-12 resize-none border-0 p-3 shadow-none focus-visible:ring-0"
+    class="min-h-11 resize-none border-0 px-3 py-2 text-sm leading-6 shadow-none focus-visible:ring-0 bg-transparent"
   />
   <div class="flex flex-col">
     <!-- Top row: Action buttons and send -->
-    <div class="flex items-center justify-between px-3 pt-0 pb-2">
-      <div class="flex items-center gap-1">
+    <div class="flex items-center justify-between px-3 pt-1 pb-2">
+      <div class="flex items-center gap-1.5">
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
             {#snippet child({ props })}

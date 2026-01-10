@@ -73,7 +73,7 @@
   }
 </script>
 
-<div class="relative flex flex-col h-full min-h-[50vh] max-h-screen rounded-xl bg-muted/50 px-6 pt-4 pb-6 md:px-12 lg:px-16 lg:col-span-2 w-full">
+<div class="relative flex flex-col h-full min-h-[50vh] max-h-screen rounded-3xl chat-panel px-6 pt-5 pb-6 md:px-10 lg:px-12 lg:col-span-2 w-full">
   <div class="flex-1 overflow-auto mb-4 relative">
     {#if isClearing}
       <div

@@ -33,11 +33,99 @@ use crate::llm::{
     Usage,
 };
 use chrono::Utc;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::State;
 use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct PricingEntry {
+    input: f64,
+    output: f64,
+    per: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PricingData {
+    pricing: HashMap<String, PricingEntry>,
+}
+
+static PRICING: OnceLock<HashMap<String, PricingEntry>> = OnceLock::new();
+
+fn get_pricing() -> &'static HashMap<String, PricingEntry> {
+    PRICING.get_or_init(|| {
+        let raw = include_str!("../../../src/lib/models/registry/pricing.json");
+        let parsed: PricingData = serde_json::from_str(raw).unwrap_or(PricingData {
+            pricing: HashMap::new(),
+        });
+        parsed.pricing
+    })
+}
+
+fn calculate_estimated_cost(model: &str, prompt_tokens: i32, completion_tokens: i32) -> f64 {
+    let pricing = get_pricing();
+    let entry = pricing
+        .get(model)
+        .or_else(|| {
+            let cleaned = model
+                .split(|c| c == ' ' || c == '•' || c == '/' || c == ':')
+                .last()
+                .unwrap_or(model);
+            pricing.get(cleaned)
+        })
+        .or_else(|| pricing.iter().find(|(key, _)| model.contains(*key)).map(|(_, v)| v));
+
+    let entry = match entry {
+        Some(entry) => entry,
+        None => return 0.0,
+    };
+
+    let prompt = prompt_tokens.max(0) as f64;
+    let completion = completion_tokens.max(0) as f64;
+    if entry.per <= 0.0 {
+        return 0.0;
+    }
+
+    let input_cost = (prompt / entry.per) * entry.input;
+    let output_cost = (completion / entry.per) * entry.output;
+    let total = input_cost + output_cost;
+
+    (total * 1_000_000.0).round() / 1_000_000.0
+}
+
+fn value_to_string(value: &serde_json::Value) -> String {
+    if let Some(text) = value.as_str() {
+        return text.to_string();
+    }
+
+    if let Some(array) = value.as_array() {
+        let mut combined = String::new();
+        for entry in array {
+            if let Some(text) = entry.get("text").and_then(|v| v.as_str()) {
+                combined.push_str(text);
+            }
+        }
+        return combined;
+    }
+
+    value.to_string()
+}
+
+fn estimate_tokens(text: &str) -> i32 {
+    let chars = text.chars().count() as f64;
+    let estimate = (chars * 0.25).ceil() as i32;
+    estimate.max(0)
+}
+
+fn estimate_prompt_tokens(messages: &[LlmMessage]) -> i32 {
+    messages
+        .iter()
+        .map(|message| estimate_tokens(&value_to_string(&message.content)))
+        .sum()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct AgentSendMessagePayload {
@@ -472,13 +560,31 @@ pub fn agent_send_message(
             ));
         }
 
+        let usage = usage
+            .filter(|u| u.prompt_tokens > 0 || u.completion_tokens > 0)
+            .or_else(|| {
+                if accumulated.is_empty() {
+                    None
+                } else {
+                    Some(Usage {
+                        prompt_tokens: estimate_prompt_tokens(&messages),
+                        completion_tokens: estimate_tokens(&accumulated),
+                    })
+                }
+            });
+
         if let Some(usage) = usage {
+            let estimated_cost = calculate_estimated_cost(
+                &model_for_thread,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+            );
             let save_usage = SaveMessageUsageInput {
                 message_id: assistant_message_id_for_thread.clone(),
                 model_name: model_for_thread.clone(),
                 prompt_tokens: usage.prompt_tokens,
                 completion_tokens: usage.completion_tokens,
-                estimated_cost: 0.0,
+                estimated_cost,
             };
 
             if let Ok(saved_usage) = UsageOperations::save_message_usage(&db, save_usage) {

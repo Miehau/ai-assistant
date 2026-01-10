@@ -347,18 +347,32 @@ pub fn stream_anthropic(
                 }
             }
 
-            if event_type == "message_delta" {
-                if let Some(delta_usage) = value.get("usage") {
-                    let prompt_tokens = delta_usage
+            if event_type == "message_start" {
+                if let Some(start_usage) = value.get("message").and_then(|msg| msg.get("usage")) {
+                    let prompt_tokens = start_usage
                         .get("input_tokens")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0) as i32;
-                    let completion_tokens = delta_usage
+                    let completion_tokens = start_usage
                         .get("output_tokens")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0) as i32;
                     usage = Some(Usage {
                         prompt_tokens,
+                        completion_tokens,
+                    });
+                }
+            }
+
+            if event_type == "message_delta" {
+                if let Some(delta_usage) = value.get("usage") {
+                    let completion_tokens = delta_usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as i32;
+
+                    usage = Some(Usage {
+                        prompt_tokens: usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
                         completion_tokens,
                     });
                 }

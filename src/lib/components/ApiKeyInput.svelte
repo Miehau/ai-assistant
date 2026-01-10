@@ -70,8 +70,8 @@
 </script>
 
 <div class="space-y-1.5 mb-4">
-    <div class="flex items-center space-x-2">
-        <label for={`apiKey-${provider.value}`} class="font-medium w-24">{provider.label} API Key:</label>
+    <div class="flex items-center space-x-3">
+        <label for={`apiKey-${provider.value}`} class="text-xs font-medium text-muted-foreground/80 w-24">{provider.label} API Key</label>
         <div class="relative flex-grow">
             <div class="relative"
                  role="button"
@@ -80,7 +80,7 @@
                  onmouseleave={() => isApiKeyHovered = false}>
                 <Input id={`apiKey-${provider.value}`}
                        class={cn(
-                           "pr-[164px] transition-all duration-200 glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50 glow-green",
+                           "pr-[152px] transition-all duration-200 glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15",
                            !showApiKey && "filter blur-sm"
                        )}
                        bind:value={apiKey}
@@ -94,16 +94,16 @@
                 <div class="flex">
                     <Button
                         type="submit"
-                        class="rounded-r-none glass-badge hover:glass-light transition-all duration-200"
+                        class="h-8 rounded-r-none bg-white/10 border border-white/15 text-xs hover:bg-white/15"
                         onclick={submitApiKey}
                         aria-label={`Submit ${provider.label} API Key`}
                     >
-                        Submit
+                        Save
                     </Button>
                     <Button
                         type="button"
-                        variant="destructive"
-                        class="rounded-l-none border-l-0 glass-badge hover:glass-light transition-all duration-200"
+                        variant="ghost"
+                        class="h-8 rounded-l-none border border-l-0 border-white/10 text-destructive hover:bg-white/5"
                         onclick={deleteApiKey}
                         aria-label={`Delete ${provider.label} API Key`}
                     >

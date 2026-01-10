@@ -26,7 +26,7 @@
 	></div>
 
 	<!-- Drawer -->
-	<div class="branch-drawer glass-panel" transition:fly={{ x: 400, duration: 300 }}>
+	<div class="branch-drawer" transition:fly={{ x: 400, duration: 300 }}>
 		<!-- Header -->
 		<div class="drawer-header">
 			<div class="header-left">
@@ -77,8 +77,8 @@
 	.drawer-overlay {
 		position: fixed;
 		inset: 0;
-		background: rgba(0, 0, 0, 0.5);
-		backdrop-filter: blur(4px);
+		background: rgba(0, 0, 0, 0.45);
+		backdrop-filter: blur(6px);
 		z-index: 40;
 	}
 
@@ -89,10 +89,10 @@
 		bottom: 0;
 		width: 100%;
 		max-width: 50rem;
-		background: rgba(0, 0, 0, 0.9);
-		backdrop-filter: blur(40px);
-		border-left: 1px solid rgba(255, 255, 255, 0.1);
-		box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
+		background: rgba(14, 14, 16, 0.92);
+		backdrop-filter: blur(18px) saturate(140%);
+		border-left: 1px solid rgba(255, 255, 255, 0.08);
+		box-shadow: -12px 0 40px rgba(0, 0, 0, 0.55);
 		z-index: 50;
 		display: flex;
 		flex-direction: column;
@@ -102,8 +102,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 1.5rem;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+		padding: 1.25rem 1.5rem;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 	}
 
 	.header-left {
@@ -116,13 +116,13 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		color: #52b788;
+		color: rgba(255, 255, 255, 0.7);
 	}
 
 	.drawer-title {
 		font-size: 1.25rem;
 		font-weight: 600;
-		color: rgba(255, 255, 255, 0.9);
+		color: rgba(255, 255, 255, 0.95);
 		margin: 0;
 	}
 
@@ -133,9 +133,9 @@
 		width: 2rem;
 		height: 2rem;
 		border-radius: 0.375rem;
-		background: rgba(255, 255, 255, 0.05);
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		color: rgba(255, 255, 255, 0.7);
+		background: rgba(255, 255, 255, 0.04);
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		color: rgba(255, 255, 255, 0.8);
 		cursor: pointer;
 		transition: all 0.2s ease;
 	}
@@ -147,7 +147,7 @@
 
 	.current-branch-info {
 		padding: 1rem 1.5rem;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 	}
 
 	.info-label {
@@ -164,7 +164,7 @@
 		grid-template-columns: repeat(3, 1fr);
 		gap: 1rem;
 		padding: 1rem 1.5rem;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 	}
 
 	.stat-item {
@@ -173,8 +173,8 @@
 		gap: 0.25rem;
 		padding: 0.75rem;
 		border-radius: 0.375rem;
-		background: rgba(255, 255, 255, 0.03);
-		border: 1px solid rgba(255, 255, 255, 0.05);
+		background: rgba(255, 255, 255, 0.025);
+		border: 1px solid rgba(255, 255, 255, 0.06);
 	}
 
 	.stat-label {
@@ -185,10 +185,7 @@
 	.stat-value {
 		font-size: 1.5rem;
 		font-weight: 700;
-		background: linear-gradient(135deg, #52b788, #06ffa5);
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		background-clip: text;
+		color: rgba(255, 255, 255, 0.9);
 	}
 
 	.tree-container {

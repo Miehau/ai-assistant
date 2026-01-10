@@ -37,13 +37,13 @@
 </script>
 
 <Tooltip.Provider>
-  <aside class="fixed left-0 top-0 bottom-0 z-20 flex flex-col glass-panel border-r-0 pt-8">
-    <div class="border-b border-white/10 p-2">
-      <Button variant="outline" size="icon" aria-label="Home" class="hover-glow-green">
+  <aside class="fixed left-0 top-0 bottom-0 z-20 flex w-14 flex-col nav-rail pt-9">
+    <div class="border-b border-white/5 px-2 pb-3">
+      <Button variant="outline" size="icon" aria-label="Home" class="h-9 w-9 hover:bg-white/10">
         <Triangle class="size-5 fill-foreground" />
       </Button>
     </div>
-    <nav class="grid gap-1 p-2">
+    <nav class="grid gap-1 px-2 py-3">
       <Tooltip.Root>
       <Tooltip.Trigger asChild>
         {#snippet child({ props })}
@@ -51,7 +51,7 @@
             <Button
               variant="ghost"
               size="icon"
-              class="rounded-lg transition-all {currentPath === '/' ? 'glass-light glow-green' : 'hover:glass-badge'}"
+              class="h-9 w-9 rounded-lg transition-all {currentPath === '/' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
               aria-label="Playground"
             >
               <SquareTerminal class="size-5" />
@@ -68,7 +68,7 @@
             <Button
               variant="ghost"
               size="icon"
-              class="rounded-lg transition-all {currentPath === '/models' ? 'glass-light glow-green' : 'hover:glass-badge'}"
+              class="h-9 w-9 rounded-lg transition-all {currentPath === '/models' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
               aria-label="Models"
             >
               <CodeXML class="size-5" />
@@ -85,7 +85,7 @@
             <Button
               variant="ghost"
               size="icon"
-              class="rounded-lg transition-all {currentPath === '/assistants' ? 'glass-light glow-green' : 'hover:glass-badge'}"
+              class="h-9 w-9 rounded-lg transition-all {currentPath === '/assistants' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
               aria-label="Assistants"
             >
               <Users class="size-5" />
@@ -102,7 +102,7 @@
             {...props}
             variant="ghost"
             size="icon"
-            class="rounded-lg transition-all {isConversationDrawerOpen ? 'glass-light glow-green' : 'hover:glass-badge'}"
+            class="h-9 w-9 rounded-lg transition-all {isConversationDrawerOpen ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
             aria-label="Conversation History"
             onclick={toggleConversationDrawer}
           >
@@ -119,7 +119,7 @@
             <Button
               variant="ghost"
               size="icon"
-              class="rounded-lg transition-all {currentPath === '/usage' ? 'glass-light glow-cyan' : 'hover:glass-badge'}"
+              class="h-9 w-9 rounded-lg transition-all {currentPath === '/usage' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
               aria-label="Usage Statistics"
             >
               <TrendingUp class="size-5" />
@@ -136,7 +136,7 @@
             {...props}
             variant="ghost"
             size="icon"
-            class="rounded-lg transition-all {isBranchDrawerOpen ? 'glass-light glow-purple' : 'hover:glass-badge'}"
+            class="h-9 w-9 rounded-lg transition-all {isBranchDrawerOpen ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
             aria-label="Branch Tree"
             onclick={toggleBranchDrawer}
           >
@@ -147,7 +147,7 @@
       <Tooltip.Content side="right" sideOffset={5}>Branch Tree</Tooltip.Content>
     </Tooltip.Root>
   </nav>
-  <nav class="mt-auto grid gap-1 p-2">
+  <nav class="mt-auto grid gap-1 px-2 pb-3">
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         {#snippet child({ props })}
@@ -155,7 +155,7 @@
             {...props}
             variant="ghost"
             size="icon"
-            class="mt-auto rounded-lg transition-all hover:glass-badge"
+            class="h-9 w-9 rounded-lg transition-all hover:bg-white/5"
             aria-label="Help"
           >
             <LifeBuoy class="size-5" />

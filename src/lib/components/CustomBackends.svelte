@@ -98,15 +98,21 @@
     }
 </script>
 
-<div class="container max-w-2xl mx-auto py-6">
-    <h1 class="text-sm font-medium tracking-wide uppercase text-muted-foreground mb-4">Custom Backends</h1>
+<div class="container max-w-3xl mx-auto py-8">
+    <div class="mb-6">
+        <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Models</p>
+        <h2 class="text-2xl font-semibold">Custom Backends</h2>
+        <p class="text-sm text-muted-foreground/70 mt-1">
+            Connect OpenAI-compatible endpoints and manage credentials.
+        </p>
+    </div>
 
-    <Card.Root class="glass-panel border-0 overflow-hidden rounded-xl">
-        <Card.Content class="p-5">
-            <div class="space-y-5">
+    <Card.Root class="surface-card border-0 overflow-hidden">
+        <Card.Content class="p-6">
+            <div class="space-y-6">
                 <!-- Existing backends list -->
                 {#each customBackendService.backends as backend (backend.id)}
-                    <div class="pb-5 border-b border-white/10 last:border-0 last:pb-0">
+                    <div class="pb-6 border-b surface-divider last:border-0 last:pb-0">
                         {#if editingId === backend.id}
                             <!-- Edit mode -->
                             <div class="space-y-3">
@@ -115,7 +121,7 @@
                                     <Input
                                         bind:value={editName}
                                         placeholder="Backend name"
-                                        class="glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50"
+                                        class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                                     />
                                 </div>
                                 <div>
@@ -123,7 +129,7 @@
                                     <Input
                                         bind:value={editUrl}
                                         placeholder="https://api.example.com/v1/chat/completions"
-                                        class="glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50"
+                                        class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                                     />
                                 </div>
                                 <div>
@@ -133,7 +139,7 @@
                                             type={showEditApiKey ? "text" : "password"}
                                             bind:value={editApiKey}
                                             placeholder="API key (optional)"
-                                            class="pr-10 glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50"
+                                            class="pr-10 glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                                         />
                                         <button
                                             type="button"
@@ -182,7 +188,7 @@
                                     <Button
                                         size="icon"
                                         variant="ghost"
-                                        class="h-8 w-8"
+                                        class="h-8 w-8 hover:bg-white/5"
                                         onclick={() => startEdit(backend)}
                                     >
                                         <Edit2 class="h-4 w-4" />
@@ -190,7 +196,7 @@
                                     <Button
                                         size="icon"
                                         variant="ghost"
-                                        class="h-8 w-8 text-destructive hover:text-destructive"
+                                        class="h-8 w-8 text-destructive hover:text-destructive hover:bg-white/5"
                                         onclick={() => deleteBackend(backend.id)}
                                     >
                                         <Trash2 class="h-4 w-4" />
@@ -203,14 +209,14 @@
 
                 <!-- Add new backend form -->
                 {#if isAdding}
-                    <div class="pt-5 border-t border-white/10 space-y-3">
+                    <div class="pt-6 border-t surface-divider space-y-3">
                         <h3 class="text-xs font-medium text-muted-foreground">Add New Backend</h3>
                         <div>
                             <label class="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
                             <Input
                                 bind:value={newName}
                                 placeholder="My Custom Backend"
-                                class="glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50"
+                                class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                             />
                         </div>
                         <div>
@@ -218,7 +224,7 @@
                             <Input
                                 bind:value={newUrl}
                                 placeholder="https://api.example.com/v1/chat/completions"
-                                class="glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50"
+                                class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                             />
                         </div>
                         <div>
@@ -228,7 +234,7 @@
                                     type={showNewApiKey ? "text" : "password"}
                                     bind:value={newApiKey}
                                     placeholder="API key (optional)"
-                                    class="pr-10 glass-panel border-white/10 focus-within:ring-1 focus-within:ring-green-500/50"
+                                    class="pr-10 glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                                 />
                                 <button
                                     type="button"
@@ -271,7 +277,7 @@
                 {:else}
                     <Button
                         variant="outline"
-                        class="w-full glass-panel border-white/10 hover:glass-light"
+                        class="w-full glass-panel-minimal border-white/10 hover:glass-light"
                         onclick={() => isAdding = true}
                     >
                         <Plus class="h-4 w-4 mr-2" />

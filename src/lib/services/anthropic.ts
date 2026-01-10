@@ -445,8 +445,22 @@ export class AnthropicService extends LLMService {
                 onStreamResponse(text);
               }
 
-              // Handle message_delta events with usage
+              // Capture usage from message_start or message_delta (Anthropic streams usage separately)
+              if (parsed.type === "message_start" && parsed.message?.usage) {
+                usage = {
+                  prompt_tokens: parsed.message.usage.input_tokens || 0,
+                  completion_tokens: parsed.message.usage.output_tokens || 0
+                };
+              }
+
               if (parsed.type === "message_delta" && parsed.usage) {
+                usage = {
+                  prompt_tokens: usage?.prompt_tokens ?? 0,
+                  completion_tokens: parsed.usage.output_tokens || usage?.completion_tokens || 0
+                };
+              }
+
+              if (parsed.usage && !usage) {
                 usage = {
                   prompt_tokens: parsed.usage.input_tokens || 0,
                   completion_tokens: parsed.usage.output_tokens || 0
