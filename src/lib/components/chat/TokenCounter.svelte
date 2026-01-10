@@ -110,17 +110,13 @@
   const maxTokens = $derived(modelId ? getModelContextWindow(modelId) : 128000);
 </script>
 
-<div class="glass-badge-subtle px-2.5 py-1.5 rounded-lg flex items-center gap-2 text-[11px] text-muted-foreground/70 border-white/10">
-  <div class="flex flex-col leading-tight">
-    <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Tokens</span>
-    <span class="font-mono text-foreground/80">
-      {displayTokens().isEstimating ? '~' : ''}{displayTokens().total.toLocaleString()}
-      <span class="text-muted-foreground/40 mx-0.5">/</span>{maxTokens.toLocaleString()}
-    </span>
-  </div>
-  <span class="h-6 w-px bg-white/10"></span>
-  <div class="flex flex-col leading-tight">
-    <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Cost</span>
-    <span class="font-mono text-foreground/80">{cost}</span>
-  </div>
+<div class="flex items-center gap-2 text-[10px] text-muted-foreground/70 leading-none opacity-70 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
+  <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Tokens</span>
+  <span class="font-mono text-foreground/80">
+    {displayTokens().isEstimating ? '~' : ''}{displayTokens().total.toLocaleString()}
+    <span class="text-muted-foreground/40 mx-0.5">/</span>{maxTokens.toLocaleString()}
+  </span>
+  <span class="h-3 w-px bg-white/10"></span>
+  <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Cost</span>
+  <span class="font-mono text-foreground/80">{cost}</span>
 </div>

@@ -320,7 +320,7 @@
   data-conversation-id={conversationId}
 >
   <div
-    class="rounded-3xl px-4 py-2 w-full max-w-5xl {type === 'received'
+    class="rounded-2xl px-4 py-1.5 w-full max-w-5xl {type === 'received'
       ? 'message-glass-ai'
       : 'text-primary-foreground message-glass-user'}"
   >

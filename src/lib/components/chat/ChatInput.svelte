@@ -475,51 +475,47 @@
     bind:value={currentMessage}
     onkeydown={handleKeydown}
     placeholder="Type your message here..."
-    class="min-h-11 resize-none border-0 px-3 py-2 text-sm leading-6 shadow-none focus-visible:ring-0 bg-transparent"
+    class="h-11 max-h-11 overflow-y-auto resize-none border-0 px-3 py-2 text-sm leading-6 shadow-none focus-visible:ring-0 bg-transparent text-foreground/90 placeholder:text-foreground/50 [box-shadow:inset_0_1px_0_rgba(255,255,255,0.06)]"
   />
-  <div class="flex flex-col">
-    <!-- Top row: Action buttons and send -->
-    <div class="flex items-center justify-between px-3 pt-1 pb-2">
-      <div class="flex items-center gap-1.5">
-        <Tooltip.Root>
-          <Tooltip.Trigger asChild>
-            {#snippet child({ props })}
-            <Button
-              {...props}
-              variant="ghost"
-              size="icon"
-              type="button"
-              onclick={handleFileUpload}
-            >
-              <Paperclip class="size-4" />
-              <span class="sr-only">Upload File</span>
-            </Button>
-            {/snippet}
-          </Tooltip.Trigger>
-          <Tooltip.Content side="top">Upload File (Text or Image)</Tooltip.Content>
-        </Tooltip.Root>
-      </div>
-
-      <Button
-        type="button"
-        size="icon"
-        variant={isLoading ? "destructive" : "ghost"}
-        onclick={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
-      >
-        {#if isLoading}
-          <Square class="size-4" />
-        {:else}
-          <Send class="size-4" />
-        {/if}
-      </Button>
+  <div class="flex items-center justify-between px-3 pt-1 pb-3">
+    <div class="flex items-center gap-1.5">
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          {#snippet child({ props })}
+          <Button
+            {...props}
+            variant="ghost"
+            size="icon"
+            type="button"
+            onclick={handleFileUpload}
+            class="bg-white/[0.04] border border-white/10 hover:bg-white/[0.08]"
+          >
+            <Paperclip class="size-4" />
+            <span class="sr-only">Upload File</span>
+          </Button>
+          {/snippet}
+        </Tooltip.Trigger>
+        <Tooltip.Content side="top">Upload File (Text or Image)</Tooltip.Content>
+      </Tooltip.Root>
     </div>
 
-    <!-- Bottom row: Model controls and token info -->
-    <div class="px-3 pb-3">
-      {#if controls}
-        {@render controls()}
+    <Button
+      type="button"
+      size="icon"
+      variant={isLoading ? "destructive" : "ghost"}
+      onclick={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
+    >
+      {#if isLoading}
+        <Square class="size-4" />
+      {:else}
+        <Send class="size-4" />
       {/if}
-    </div>
+    </Button>
   </div>
 </form>
+{#if controls}
+  <div class="px-6 pb-3">
+    {@render controls()}
+  </div>
+{/if}
 </Tooltip.Provider>

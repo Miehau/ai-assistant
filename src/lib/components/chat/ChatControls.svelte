@@ -4,9 +4,8 @@
     import * as Select from "$lib/components/ui/select";
     import type { Model } from "$lib/types/models";
     import { type ModelWithBackend, saveLastUsedModel } from "$lib/stores/chat";
-    import type { SystemPrompt, Message } from "$lib/types";
+    import type { SystemPrompt } from "$lib/types";
     import { Eye, Headphones, Database, Brain } from "lucide-svelte";
-    import TokenCounter from "./TokenCounter.svelte";
 
     interface Props {
         availableModels?: Model[];
@@ -14,10 +13,6 @@
         selectedModel: string;
         selectedSystemPrompt?: SystemPrompt | null;
         streamingEnabled?: boolean;
-        conversationId?: string;
-        currentMessage?: string;
-        messages?: Message[];
-        isLoading?: boolean;
         onSystemPromptSelect?: (prompt: SystemPrompt) => void;
         onToggleStreaming?: (enabled: boolean) => void;
         onRemoveMessages?: () => void;
@@ -30,10 +25,6 @@
         selectedModel = $bindable(),
         selectedSystemPrompt = $bindable(null),
         streamingEnabled = $bindable(true),
-        conversationId = undefined,
-        currentMessage = '',
-        messages = [],
-        isLoading = false,
         onSystemPromptSelect,
         onToggleStreaming,
         onRemoveMessages,
@@ -101,257 +92,255 @@
     });
 </script>
 
-<div class="flex items-center justify-between w-full gap-2">
+<div class="group flex items-center justify-between w-full gap-3">
     <!-- Left section: Selectors -->
-    <div class="flex items-center gap-2 flex-1">
-        <Select.Root
-        selected={{
-            value: selectedSystemPrompt?.id ?? "",
-            label: selectedSystemPrompt?.name ?? "",
-        }}
-        onSelectedChange={(v) => {
-            if (v) {
-                const prompt = systemPrompts.find((p) => p.id === v.value);
-                if (prompt) selectSystemPrompt(prompt);
-            }
-        }}
-    >
-        <Select.Trigger class="min-w-[150px] w-fit">
-            {#if selectedSystemPrompt}
-                <div class="flex items-center gap-2">
-                    <span class="truncate max-w-[120px]"
-                        >{selectedSystemPrompt.name}</span
-                    >
-                </div>
-            {:else}
-                <span class="text-muted-foreground">Select system prompt</span>
-            {/if}
-        </Select.Trigger>
-        <Select.Portal>
-            <Select.Content>
-                <Select.ScrollUpButton />
-                <Select.Viewport class="max-h-[400px]">
-                    {#if systemPrompts.length === 0}
-                        <Select.Item value="" disabled
-                            >No system prompts available</Select.Item
+    <div class="flex items-center gap-3 min-w-0">
+        <div class="flex items-center gap-2 min-w-0">
+            <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Prompt</span>
+            <Select.Root
+            selected={{
+                value: selectedSystemPrompt?.id ?? "",
+                label: selectedSystemPrompt?.name ?? "",
+            }}
+            onSelectedChange={(v) => {
+                if (v) {
+                    const prompt = systemPrompts.find((p) => p.id === v.value);
+                    if (prompt) selectSystemPrompt(prompt);
+                }
+            }}
+        >
+            <Select.Trigger class="min-w-[140px] max-w-[200px] h-7 rounded-full border-white/10 bg-white/[0.02] shadow-none hover:bg-white/[0.04]">
+                {#if selectedSystemPrompt}
+                    <div class="flex items-center gap-2">
+                        <span class="truncate max-w-[140px]"
+                            >{selectedSystemPrompt.name}</span
                         >
-                    {:else}
-                        {#each systemPrompts as prompt}
-                            <Select.Item value={prompt.id}>
-                                <div class="flex items-center gap-2">
-                                    <span>{prompt.name}</span>
-                                </div>
-                            </Select.Item>
-                        {/each}
-                    {/if}
-                </Select.Viewport>
-                <Select.ScrollDownButton />
-            </Select.Content>
-        </Select.Portal>
-    </Select.Root>
-
-    <Select.Root
-        type="single"
-        bind:value={selectedModel}
-        onValueChange={(v) => {
-            if (v) {
-                saveLastUsedModel(v);
-                onModelSelect?.(v);
-            }
-        }}
-        onOpenChange={(open) => {
-            modelDropdownOpen = open;
-        }}
-    >
-        <Select.Trigger class="min-w-[150px] max-w-[220px] w-fit justify-between">
-            {#if selectedModel}
-                {@const model = availableModels.find(m => m.model_name === selectedModel)}
-                <span class="truncate">{model ? `${model.model_name} • ${getProviderLabel(model)}` : selectedModel}</span>
-            {:else}
-                <span class="text-muted-foreground">Select a model</span>
-            {/if}
-        </Select.Trigger>
-        <Select.Portal>
-            <Select.Content class="w-[350px] text-xs">
-                <Select.ScrollUpButton />
-                <Select.Viewport class="max-h-[400px]">
-                    {#if availableModels.length === 0}
-                        <Select.Item value="" disabled
-                            >No models available</Select.Item
-                        >
-                    {:else}
-                        <!-- Group models by provider -->
-                        {#each providerGroups as group}
-                            <div
-                                class="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50"
+                    </div>
+                {:else}
+                    <span class="text-muted-foreground">Select system prompt</span>
+                {/if}
+            </Select.Trigger>
+            <Select.Portal>
+                <Select.Content>
+                    <Select.ScrollUpButton />
+                    <Select.Viewport class="max-h-[400px]">
+                        {#if systemPrompts.length === 0}
+                            <Select.Item value="" disabled
+                                >No system prompts available</Select.Item
                             >
-                                {group.provider}
-                            </div>
-
-                            {#each group.models as model}
-                                <Select.Item
-                                    value={model.model_name}
-                                    class="py-2"
-                                >
-                                    <div class="flex flex-col gap-1 w-full">
-                                        <div
-                                            class="grid grid-cols-[1fr_auto] items-center w-full"
-                                        >
-                                            <span class="font-medium text-xs"
-                                                >{model.name ||
-                                                    model.model_name}</span
-                                            >
-
-                                            {#if model.capabilities}
-                                                <div
-                                                    class="flex gap-1 justify-self-end"
-                                                >
-                                                    {#if modelDropdownOpen}
-                                                        {#if model.capabilities.reasoning}
-                                                            <Tooltip.Root>
-                                                                <Tooltip.Trigger
-                                                                    asChild
-                                                                >
-                                                                    {#snippet child({ props })}
-                                                                        <span
-                                                                            {...props}
-                                                                            class="cursor-help inline-block"
-                                                                        >
-                                                                            <Brain
-                                                                                class="h-3 w-3 text-accent-amber drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]"
-                                                                            />
-                                                                        </span>
-                                                                    {/snippet}
-                                                                </Tooltip.Trigger>
-                                                                <Tooltip.Content
-                                                                    side="top"
-                                                                >
-                                                                    Advanced
-                                                                    reasoning
-                                                                </Tooltip.Content>
-                                                            </Tooltip.Root>
-                                                        {/if}
-                                                        {#if model.capabilities.vision}
-                                                            <Tooltip.Root>
-                                                                <Tooltip.Trigger
-                                                                    asChild
-                                                                >
-                                                                    {#snippet child({ props })}
-                                                                        <span
-                                                                            {...props}
-                                                                            class="cursor-help inline-block"
-                                                                        >
-                                                                            <Eye
-                                                                                class="h-3 w-3 text-accent-cyan drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]"
-                                                                            />
-                                                                        </span>
-                                                                    {/snippet}
-                                                                </Tooltip.Trigger>
-                                                                <Tooltip.Content
-                                                                    side="top"
-                                                                >
-                                                                    Vision
-                                                                    capability
-                                                                </Tooltip.Content>
-                                                            </Tooltip.Root>
-                                                        {/if}
-                                                        {#if model.capabilities.audio}
-                                                            <Tooltip.Root>
-                                                                <Tooltip.Trigger
-                                                                    asChild
-                                                                >
-                                                                    {#snippet child({ props })}
-                                                                        <span
-                                                                            {...props}
-                                                                            class="cursor-help inline-block"
-                                                                        >
-                                                                            <Headphones
-                                                                                class="h-3 w-3 text-primary drop-shadow-[0_0_4px_rgba(82,183,136,0.5)]"
-                                                                            />
-                                                                        </span>
-                                                                    {/snippet}
-                                                                </Tooltip.Trigger>
-                                                                <Tooltip.Content
-                                                                    side="top"
-                                                                >
-                                                                    Audio capability
-                                                                </Tooltip.Content>
-                                                            </Tooltip.Root>
-                                                        {/if}
-                                                        {#if model.capabilities.embedding}
-                                                            <Tooltip.Root>
-                                                                <Tooltip.Trigger
-                                                                    asChild
-                                                                >
-                                                                    {#snippet child({ props })}
-                                                                        <span
-                                                                            {...props}
-                                                                            class="cursor-help inline-block"
-                                                                        >
-                                                                            <Database
-                                                                                class="h-3 w-3 text-accent-purple drop-shadow-[0_0_4px_rgba(168,85,247,0.5)]"
-                                                                            />
-                                                                        </span>
-                                                                    {/snippet}
-                                                                </Tooltip.Trigger>
-                                                                <Tooltip.Content
-                                                                    side="top"
-                                                                >
-                                                                    Embedding
-                                                                    capability
-                                                                </Tooltip.Content>
-                                                            </Tooltip.Root>
-                                                        {/if}
-                                                    {:else}
-                                                        <!-- Show icons without tooltips when dropdown is closed -->
-                                                        {#if model.capabilities.reasoning}
-                                                            <Brain
-                                                                class="h-3 w-3 text-accent-amber drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]"
-                                                            />
-                                                        {/if}
-                                                        {#if model.capabilities.vision}
-                                                            <Eye
-                                                                class="h-3 w-3 text-accent-cyan drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]"
-                                                            />
-                                                        {/if}
-                                                        {#if model.capabilities.audio}
-                                                            <Headphones
-                                                                class="h-3 w-3 text-primary drop-shadow-[0_0_4px_rgba(82,183,136,0.5)]"
-                                                            />
-                                                        {/if}
-                                                        {#if model.capabilities.embedding}
-                                                            <Database
-                                                                class="h-3 w-3 text-accent-purple drop-shadow-[0_0_4px_rgba(168,85,247,0.5)]"
-                                                            />
-                                                        {/if}
-                                                    {/if}
-                                                </div>
-                                            {/if}
-                                        </div>
+                        {:else}
+                            {#each systemPrompts as prompt}
+                                <Select.Item value={prompt.id}>
+                                    <div class="flex items-center gap-2">
+                                        <span>{prompt.name}</span>
                                     </div>
                                 </Select.Item>
                             {/each}
-                        {/each}
+                        {/if}
+                    </Select.Viewport>
+                    <Select.ScrollDownButton />
+                </Select.Content>
+            </Select.Portal>
+        </Select.Root>
+        </div>
+
+        <span class="h-4 w-px bg-white/10"></span>
+
+        <div class="flex items-center gap-2 min-w-0">
+            <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Model</span>
+            <Select.Root
+                type="single"
+                bind:value={selectedModel}
+                onValueChange={(v) => {
+                    if (v) {
+                        saveLastUsedModel(v);
+                        onModelSelect?.(v);
+                    }
+                }}
+                onOpenChange={(open) => {
+                    modelDropdownOpen = open;
+                }}
+            >
+                <Select.Trigger class="min-w-[160px] max-w-[240px] h-7 rounded-full border-white/10 bg-white/[0.02] shadow-none hover:bg-white/[0.04] justify-between">
+                    {#if selectedModel}
+                        {@const model = availableModels.find(m => m.model_name === selectedModel)}
+                        <span class="truncate">{model ? `${model.model_name} • ${getProviderLabel(model)}` : selectedModel}</span>
+                    {:else}
+                        <span class="text-muted-foreground">Select a model</span>
                     {/if}
-                </Select.Viewport>
-                <Select.ScrollDownButton />
-            </Select.Content>
-        </Select.Portal>
-    </Select.Root>
+                </Select.Trigger>
+                <Select.Portal>
+                    <Select.Content class="w-[350px] text-xs">
+                        <Select.ScrollUpButton />
+                        <Select.Viewport class="max-h-[400px]">
+                            {#if availableModels.length === 0}
+                                <Select.Item value="" disabled
+                                    >No models available</Select.Item
+                                >
+                            {:else}
+                                <!-- Group models by provider -->
+                                {#each providerGroups as group}
+                                    <div
+                                        class="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/50"
+                                    >
+                                        {group.provider}
+                                    </div>
+
+                                    {#each group.models as model}
+                                        <Select.Item
+                                            value={model.model_name}
+                                            class="py-2"
+                                        >
+                                            <div class="flex flex-col gap-1 w-full">
+                                                <div
+                                                    class="grid grid-cols-[1fr_auto] items-center w-full"
+                                                >
+                                                    <span class="font-medium text-xs"
+                                                        >{model.name ||
+                                                            model.model_name}</span
+                                                    >
+
+                                                    {#if model.capabilities}
+                                                        <div
+                                                            class="flex gap-1 justify-self-end"
+                                                        >
+                                                            {#if modelDropdownOpen}
+                                                                {#if model.capabilities.reasoning}
+                                                                    <Tooltip.Root>
+                                                                        <Tooltip.Trigger
+                                                                            asChild
+                                                                        >
+                                                                            {#snippet child({ props })}
+                                                                                <span
+                                                                                    {...props}
+                                                                                    class="cursor-help inline-block"
+                                                                                >
+                                                                                    <Brain
+                                                                                        class="h-3 w-3 text-accent-amber drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]"
+                                                                                    />
+                                                                                </span>
+                                                                            {/snippet}
+                                                                        </Tooltip.Trigger>
+                                                                        <Tooltip.Content
+                                                                            side="top"
+                                                                        >
+                                                                            Advanced
+                                                                            reasoning
+                                                                        </Tooltip.Content>
+                                                                    </Tooltip.Root>
+                                                                {/if}
+                                                                {#if model.capabilities.vision}
+                                                                    <Tooltip.Root>
+                                                                        <Tooltip.Trigger
+                                                                            asChild
+                                                                        >
+                                                                            {#snippet child({ props })}
+                                                                                <span
+                                                                                    {...props}
+                                                                                    class="cursor-help inline-block"
+                                                                                >
+                                                                                    <Eye
+                                                                                        class="h-3 w-3 text-accent-cyan drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]"
+                                                                                    />
+                                                                                </span>
+                                                                            {/snippet}
+                                                                        </Tooltip.Trigger>
+                                                                        <Tooltip.Content
+                                                                            side="top"
+                                                                        >
+                                                                            Vision
+                                                                            capability
+                                                                        </Tooltip.Content>
+                                                                    </Tooltip.Root>
+                                                                {/if}
+                                                                {#if model.capabilities.audio}
+                                                                    <Tooltip.Root>
+                                                                        <Tooltip.Trigger
+                                                                            asChild
+                                                                        >
+                                                                            {#snippet child({ props })}
+                                                                                <span
+                                                                                    {...props}
+                                                                                    class="cursor-help inline-block"
+                                                                                >
+                                                                                    <Headphones
+                                                                                        class="h-3 w-3 text-primary drop-shadow-[0_0_4px_rgba(82,183,136,0.5)]"
+                                                                                    />
+                                                                                </span>
+                                                                            {/snippet}
+                                                                        </Tooltip.Trigger>
+                                                                        <Tooltip.Content
+                                                                            side="top"
+                                                                        >
+                                                                            Audio capability
+                                                                        </Tooltip.Content>
+                                                                    </Tooltip.Root>
+                                                                {/if}
+                                                                {#if model.capabilities.embedding}
+                                                                    <Tooltip.Root>
+                                                                        <Tooltip.Trigger
+                                                                            asChild
+                                                                        >
+                                                                            {#snippet child({ props })}
+                                                                                <span
+                                                                                    {...props}
+                                                                                    class="cursor-help inline-block"
+                                                                                >
+                                                                                    <Database
+                                                                                        class="h-3 w-3 text-accent-purple drop-shadow-[0_0_4px_rgba(168,85,247,0.5)]"
+                                                                                    />
+                                                                                </span>
+                                                                            {/snippet}
+                                                                        </Tooltip.Trigger>
+                                                                        <Tooltip.Content
+                                                                            side="top"
+                                                                        >
+                                                                            Embedding
+                                                                            capability
+                                                                        </Tooltip.Content>
+                                                                    </Tooltip.Root>
+                                                                {/if}
+                                                            {:else}
+                                                                <!-- Show icons without tooltips when dropdown is closed -->
+                                                                {#if model.capabilities.reasoning}
+                                                                    <Brain
+                                                                        class="h-3 w-3 text-accent-amber drop-shadow-[0_0_4px_rgba(251,191,36,0.5)]"
+                                                                    />
+                                                                {/if}
+                                                                {#if model.capabilities.vision}
+                                                                    <Eye
+                                                                        class="h-3 w-3 text-accent-cyan drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]"
+                                                                    />
+                                                                {/if}
+                                                                {#if model.capabilities.audio}
+                                                                    <Headphones
+                                                                        class="h-3 w-3 text-primary drop-shadow-[0_0_4px_rgba(82,183,136,0.5)]"
+                                                                    />
+                                                                {/if}
+                                                                {#if model.capabilities.embedding}
+                                                                    <Database
+                                                                        class="h-3 w-3 text-accent-purple drop-shadow-[0_0_4px_rgba(168,85,247,0.5)]"
+                                                                    />
+                                                                {/if}
+                                                            {/if}
+                                                        </div>
+                                                    {/if}
+                                                </div>
+                                            </div>
+                                        </Select.Item>
+                                    {/each}
+                                {/each}
+                            {/if}
+                        </Select.Viewport>
+                        <Select.ScrollDownButton />
+                    </Select.Content>
+                </Select.Portal>
+            </Select.Root>
+        </div>
     </div>
 
     <!-- Right section: Token counter and utility buttons -->
-    <div class="flex items-center gap-1">
-        <!-- Token usage counter - always visible -->
-        <TokenCounter
-            {conversationId}
-            modelId={selectedModel}
-            {currentMessage}
-            {messages}
-            {isLoading}
-            systemPrompt={selectedSystemPrompt?.content ?? ''}
-        />
-
+    <div class="flex items-center gap-2 shrink-0">
         <Tooltip.Root>
             <Tooltip.Trigger asChild>
                 {#snippet child({ props })}

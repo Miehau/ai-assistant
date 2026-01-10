@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { page } from "$app/stores";
   import Navbar from "$lib/components/Navbar.svelte";
+
+  $: isChatRoute = $page.url.pathname === "/";
 </script>
 
 <div class="app-shell">
@@ -25,7 +28,7 @@
 
   <Navbar />
 
-  <div class="app-content pl-[72px] pt-12 h-screen overflow-y-auto">
+  <div class="app-content pl-[72px] pt-12 h-screen min-h-0 {isChatRoute ? 'overflow-hidden' : 'overflow-y-auto'}">
     <slot />
   </div>
 </div>

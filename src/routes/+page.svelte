@@ -2,7 +2,7 @@
   import Chat from "$lib/components/Chat.svelte";
 </script>
 
-<div class="grid h-screen w-full relative overflow-hidden">
+<div class="grid h-full min-h-0 w-full relative overflow-hidden">
   <!-- Animated gradient background -->
   <div class="absolute inset-0 -z-10">
     <div class="absolute top-0 -left-4 w-96 h-96 bg-primary/10 rounded-full blur-3xl animate-pulse"></div>
@@ -10,8 +10,8 @@
     <div class="absolute bottom-10 left-20 w-72 h-72 bg-accent-purple/10 rounded-full blur-3xl animate-pulse" style="animation-delay: 2s;"></div>
   </div>
 
-  <div class="flex flex-col">
-    <main class="grid flex-1 gap-4 overflow-auto p-4">
+  <div class="flex flex-col min-h-0">
+    <main class="grid flex-1 min-h-0 gap-4 p-4 overflow-hidden">
       <Chat />
     </main>
   </div>

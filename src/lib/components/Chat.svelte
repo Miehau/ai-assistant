@@ -73,8 +73,8 @@
   }
 </script>
 
-<div class="relative flex flex-col h-full min-h-[50vh] max-h-screen rounded-3xl chat-panel px-6 pt-5 pb-6 md:px-10 lg:px-12 lg:col-span-2 w-full">
-  <div class="flex-1 overflow-auto mb-4 relative">
+<div class="relative flex flex-col h-full min-h-0 rounded-3xl chat-panel px-6 pt-5 pb-4 md:px-10 lg:px-12 lg:col-span-2 w-full">
+  <div class="flex-1 min-h-0 overflow-auto mb-3 relative">
     {#if isClearing}
       <div
         class="absolute inset-0 flex items-center justify-center z-10 bg-background/30 backdrop-blur-sm"
@@ -105,10 +105,6 @@
         bind:selectedModel={$selectedModel}
         bind:selectedSystemPrompt={$selectedSystemPrompt}
         bind:streamingEnabled={$streamingEnabled}
-        conversationId={$currentConversation?.id}
-        currentMessage={$currentMessage}
-        messages={$messages}
-        isLoading={$isLoading}
         onToggleStreaming={handleToggleStreaming}
         onRemoveMessages={handleClearConversation}
       />
