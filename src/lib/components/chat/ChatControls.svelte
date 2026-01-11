@@ -92,11 +92,11 @@
     });
 </script>
 
-<div class="group flex items-center justify-between w-full gap-3">
+<div class="group flex items-center justify-between w-full gap-2">
     <!-- Left section: Selectors -->
-    <div class="flex items-center gap-3 min-w-0">
+    <div class="flex items-center gap-2 min-w-0">
         <div class="flex items-center gap-2 min-w-0">
-            <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Prompt</span>
+            <span class="text-[8px] uppercase tracking-wide text-muted-foreground/50">Prompt</span>
             <Select.Root
             selected={{
                 value: selectedSystemPrompt?.id ?? "",
@@ -109,7 +109,7 @@
                 }
             }}
         >
-            <Select.Trigger class="min-w-[140px] max-w-[200px] h-7 rounded-full border-white/10 bg-white/[0.02] shadow-none hover:bg-white/[0.04]">
+            <Select.Trigger class="min-w-[120px] max-w-[180px] h-6 rounded-full border-white/10 bg-white/[0.02] px-2 text-[11px] shadow-none hover:bg-white/[0.04]">
                 {#if selectedSystemPrompt}
                     <div class="flex items-center gap-2">
                         <span class="truncate max-w-[140px]"
@@ -144,10 +144,10 @@
         </Select.Root>
         </div>
 
-        <span class="h-4 w-px bg-white/10"></span>
+        <span class="h-3 w-px bg-white/10"></span>
 
         <div class="flex items-center gap-2 min-w-0">
-            <span class="text-[9px] uppercase tracking-wide text-muted-foreground/50">Model</span>
+            <span class="text-[8px] uppercase tracking-wide text-muted-foreground/50">Model</span>
             <Select.Root
                 type="single"
                 bind:value={selectedModel}
@@ -161,7 +161,7 @@
                     modelDropdownOpen = open;
                 }}
             >
-                <Select.Trigger class="min-w-[160px] max-w-[240px] h-7 rounded-full border-white/10 bg-white/[0.02] shadow-none hover:bg-white/[0.04] justify-between">
+                <Select.Trigger class="min-w-[140px] max-w-[210px] h-6 rounded-full border-white/10 bg-white/[0.02] px-2 text-[11px] shadow-none hover:bg-white/[0.04] justify-between">
                     {#if selectedModel}
                         {@const model = availableModels.find(m => m.model_name === selectedModel)}
                         <span class="truncate">{model ? `${model.model_name} • ${getProviderLabel(model)}` : selectedModel}</span>

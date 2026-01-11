@@ -34,15 +34,15 @@
     onSendMessage,
     controls
   }: Props = $props();
-  
+
   // Generate a temporary message ID for file uploads
   // This will be replaced with the actual message ID when the message is saved
   const tempMessageId = crypto.randomUUID();
-  
+
   // Track upload progress
   let uploading = $state(false);
   let uploadProgress = $state<Record<string, number>>({});
-  
+
   // Drag and drop state
   let dragActive = $state(false);
 
@@ -65,20 +65,20 @@
   // Common function to handle files from both input change and drag-drop
   async function handleFiles(files: File[]) {
     const conversationData = get(currentConversation);
-    
+
     // If no conversation is selected, create a fallback conversation ID
     const conversationId = conversationData?.id || "temp-conversation-" + Date.now();
 
     if (files.length > 0) {
       // Set uploading state to true
       uploading = true;
-      
+
       try {
         // Initialize progress for each file
         files.forEach(file => {
           uploadProgress[file.name] = 0;
         });
-        
+
         const newAttachments = await Promise.all(files.map(async (file, index) => {
           // Simulate progress updates (in a real implementation, you would get this from the upload API)
           const progressInterval = setInterval(() => {
@@ -87,7 +87,7 @@
               uploadProgress = {...uploadProgress};
             }
           }, 100);
-          
+
           try {
             // Determine the attachment type based on file MIME type
             let attachmentType = "";
@@ -100,17 +100,17 @@
             } else {
               attachmentType = file.type || "application/octet-stream";
             }
-            
+
             // Update progress
             uploadProgress[file.name] = 50;
             uploadProgress = {...uploadProgress};
-            
+
             // Get the file path using Tauri's native dialog API
             const filePath = await open({
               multiple: false,
               directory: false
             });
-            
+
             if (!filePath || typeof filePath !== 'string') {
               throw new Error('No file path selected');
             }
@@ -123,18 +123,18 @@
               conversationId,
               tempMessageId
             );
-            
+
             // Update progress
             uploadProgress[file.name] = 95;
             uploadProgress = {...uploadProgress};
-            
+
             // Complete progress
             uploadProgress[file.name] = 100;
             uploadProgress = {...uploadProgress};
-            
+
             // Clear interval
             clearInterval(progressInterval);
-            
+
             // Create an attachment with file metadata
             const attachment: Attachment = {
               name: file.name,
@@ -145,16 +145,16 @@
               mime_type: file.type || "application/octet-stream",
               file_metadata: result.metadata as FileMetadata
             };
-            
+
             return attachment;
           } catch (error) {
             console.error("Error uploading file:", error);
-            
+
             // Clear interval and mark as failed
             clearInterval(progressInterval);
             uploadProgress[file.name] = -1; // Use -1 to indicate failure
             uploadProgress = {...uploadProgress};
-            
+
             // Fallback to the old approach if upload fails
             console.log('Falling back to direct file reading approach');
             if (file.type.startsWith('text/') || file.name.match(/\.(txt|md|json|js|ts|py|rs|svelte)$/)) {
@@ -193,13 +193,13 @@
         uploadProgress = {};
       }
     }
-    
+
     // Reset the file input
     if (fileInput) {
       fileInput.value = "";
     }
   }
-  
+
   // Handler for file input change
   async function handleFileChange(event: Event) {
     const input = event.target as HTMLInputElement;
@@ -307,7 +307,7 @@
   .square-attachment-remove:hover {
     background-color: rgba(255, 0, 0, 0.7);
   }
-  
+
   /* Drag and drop styles */
   .drag-active::before {
     content: '';
@@ -322,7 +322,7 @@
 </style>
 
 <form
-  class="relative overflow-hidden rounded-2xl chat-input-panel focus-within:ring-1 focus-within:ring-white/20 transition-all duration-200 mx-6 mb-6"
+  class="relative overflow-hidden rounded-2xl chat-input-panel focus-within:ring-1 focus-within:ring-white/20 transition-all duration-200 mx-6 mb-2"
   class:drag-active={dragActive}
   ondragenter={(e) => {
     e.preventDefault();
@@ -383,7 +383,7 @@
       {/each}
     </div>
   {/if}
-  
+
   {#if attachments.length > 0}
     <div class="flex flex-wrap gap-2 px-3 pb-2">
       {#each attachments as attachment, index}
@@ -393,23 +393,23 @@
             <div class="square-attachment" {...props}>
               {#if attachment.attachment_type === "image"}
                 <div class="square-attachment-thumbnail">
-                  <img 
-                    src={attachment.data} 
-                    alt={attachment.name} 
-                    class="square-attachment-image" 
+                  <img
+                    src={attachment.data}
+                    alt={attachment.name}
+                    class="square-attachment-image"
                   />
                 </div>
               {:else}
                 <div class="square-attachment-icon-container">
                   {#if attachment.attachment_type === "audio"}
-                    <svg 
+                    <svg
                       class="square-attachment-icon"
-                      xmlns="http://www.w3.org/2000/svg" 
-                      viewBox="0 0 24 24" 
-                      fill="none" 
-                      stroke="currentColor" 
-                      stroke-width="2" 
-                      stroke-linecap="round" 
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
                       stroke-linejoin="round"
                     >
                       <path d="M18 8a6 6 0 0 0-12 0v12h12V8z"></path>
@@ -417,14 +417,14 @@
                       <path d="M14 20a2 2 0 0 0 4 0"></path>
                     </svg>
                   {:else if attachment.attachment_type === "text" || attachment.attachment_type === "text/plain"}
-                    <svg 
-                      class="square-attachment-icon" 
-                      xmlns="http://www.w3.org/2000/svg" 
-                      viewBox="0 0 24 24" 
-                      fill="none" 
-                      stroke="currentColor" 
-                      stroke-width="2" 
-                      stroke-linecap="round" 
+                    <svg
+                      class="square-attachment-icon"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
                       stroke-linejoin="round"
                     >
                       <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
@@ -477,7 +477,7 @@
     placeholder="Type your message here..."
     class="h-11 max-h-11 overflow-y-auto resize-none border-0 px-3 py-2 text-sm leading-6 shadow-none focus-visible:ring-0 bg-transparent text-foreground/90 placeholder:text-foreground/50 [box-shadow:inset_0_1px_0_rgba(255,255,255,0.06)]"
   />
-  <div class="flex items-center justify-between px-3 pt-1 pb-3">
+  <div class="flex items-center justify-between px-3 pt-1 pb-0">
     <div class="flex items-center gap-1.5">
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
@@ -488,7 +488,7 @@
             size="icon"
             type="button"
             onclick={handleFileUpload}
-            class="bg-white/[0.04] border border-white/10 hover:bg-white/[0.08]"
+            class="bg-white/[0.04] border border-white/10 hover:bg-white/[0.08] mb-1 rounded-xl"
           >
             <Paperclip class="size-4" />
             <span class="sr-only">Upload File</span>
@@ -514,7 +514,7 @@
   </div>
 </form>
 {#if controls}
-  <div class="px-6 pb-3">
+  <div class="px-6 pb-2">
     {@render controls()}
   </div>
 {/if}
