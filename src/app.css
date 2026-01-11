@@ -190,9 +190,9 @@
   }
 
   .glass-panel-minimal {
-    background: rgba(255, 255, 255, 0.04);
-    backdrop-filter: blur(20px) saturate(160%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(16, 16, 18, 0.78);
+    backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
     box-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.2);
   }
 

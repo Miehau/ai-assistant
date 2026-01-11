@@ -37,12 +37,7 @@
 </script>
 
 <Tooltip.Provider>
-  <aside class="fixed left-0 top-0 bottom-0 z-20 flex w-14 flex-col nav-rail pt-9">
-    <div class="border-b border-white/5 px-2 pb-3">
-      <Button variant="outline" size="icon" aria-label="Home" class="h-9 w-9 hover:bg-white/10">
-        <Triangle class="size-5 fill-foreground" />
-      </Button>
-    </div>
+  <aside class="fixed left-0 top-8 bottom-0 z-20 flex w-14 flex-col nav-rail">
     <nav class="grid gap-1 px-2 py-3">
       <Tooltip.Root>
       <Tooltip.Trigger asChild>
