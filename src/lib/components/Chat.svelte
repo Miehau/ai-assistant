@@ -73,7 +73,7 @@
   }
 </script>
 
-<div class="relative flex flex-col h-full min-h-0 rounded-3xl chat-panel px-6 pt-5 pb-4 md:px-10 lg:px-12 lg:col-span-2 w-full">
+<div class="relative flex flex-col h-full min-h-0 rounded-3xl chat-panel px-6 pt-5 pb-4  lg:px-12 lg:col-span-2 w-full pb-0">
   <div class="flex-1 min-h-0 overflow-auto mb-3 relative">
     {#if isClearing}
       <div
@@ -89,27 +89,29 @@
     <ChatMessages messages={$messages} bind:chatContainer bind:autoScroll conversationId={$currentConversation?.id} />
   </div>
 
-  <ChatInput
-    bind:currentMessage={$currentMessage}
-    bind:attachments={$attachments}
-    isLoading={$isLoading}
-    modelId={$selectedModel}
-    messages={$messages}
-    systemPrompt={$selectedSystemPrompt?.content || ''}
-    onSendMessage={handleSendMessage}
-  >
-    {#snippet controls()}
-      <ChatControls
-        availableModels={$availableModels}
-        systemPrompts={$systemPrompts}
-        bind:selectedModel={$selectedModel}
-        bind:selectedSystemPrompt={$selectedSystemPrompt}
-        bind:streamingEnabled={$streamingEnabled}
-        onToggleStreaming={handleToggleStreaming}
-        onRemoveMessages={handleClearConversation}
-      />
-    {/snippet}
-  </ChatInput>
+  <div class="mt-2">
+    <ChatInput
+      bind:currentMessage={$currentMessage}
+      bind:attachments={$attachments}
+      isLoading={$isLoading}
+      modelId={$selectedModel}
+      messages={$messages}
+      systemPrompt={$selectedSystemPrompt?.content || ''}
+      onSendMessage={handleSendMessage}
+    >
+      {#snippet controls()}
+        <ChatControls
+          availableModels={$availableModels}
+          systemPrompts={$systemPrompts}
+          bind:selectedModel={$selectedModel}
+          bind:selectedSystemPrompt={$selectedSystemPrompt}
+          bind:streamingEnabled={$streamingEnabled}
+          onToggleStreaming={handleToggleStreaming}
+          onRemoveMessages={handleClearConversation}
+        />
+      {/snippet}
+    </ChatInput>
+  </div>
 </div>
 
 <style>
@@ -188,7 +190,7 @@
   :global(.square-attachment-remove:hover) {
     opacity: 1;
   }
-  
+
   /* Loading spinner */
   .loading-spinner {
     display: inline-block;
