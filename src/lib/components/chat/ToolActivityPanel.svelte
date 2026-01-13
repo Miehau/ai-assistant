@@ -2,6 +2,7 @@
   import type { ToolActivityEntry } from "$lib/stores/chat";
 
   export let activities: ToolActivityEntry[] = [];
+  export let containerClass = "";
 
   function formatDuration(duration?: number): string {
     if (!duration || duration <= 0) return "";
@@ -23,7 +24,7 @@
 </script>
 
 {#if activities.length > 0}
-  <div class="mb-4 rounded-2xl border border-border/60 bg-background/60 backdrop-blur p-4 shadow-sm">
+  <div class={`mb-4 w-full rounded-2xl border border-border/60 bg-background/60 backdrop-blur p-4 shadow-sm ${containerClass}`}>
     <div class="flex items-center justify-between">
       <h3 class="text-sm font-semibold text-foreground">Tool activity</h3>
       <span class="text-xs text-muted-foreground">{activities.length} recent</span>

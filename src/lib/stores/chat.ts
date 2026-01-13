@@ -242,20 +242,26 @@ export async function startAgentEvents() {
         return;
       }
 
-      messages.update((msgs) => {
-        if (msgs.some((msg) => msg.id === event.payload.message_id)) {
-          return msgs;
-        }
+      const toolCalls = getToolCallsForMessage(event.payload.message_id);
+      const content = event.payload.content?.trim() ?? "";
+      const shouldCreateMessage = content.length > 0 || (toolCalls && toolCalls.length > 0);
 
-        const newMessage: Message = {
-          id: event.payload.message_id,
-          type: 'received',
-          content: event.payload.content,
-          timestamp: event.payload.timestamp_ms,
-        };
+      if (shouldCreateMessage) {
+        messages.update((msgs) => {
+          if (msgs.some((msg) => msg.id === event.payload.message_id)) {
+            return msgs;
+          }
 
-        return [...msgs, newMessage];
-      });
+          const newMessage: Message = {
+            id: event.payload.message_id,
+            type: 'received',
+            content: content.length > 0 ? event.payload.content : "Tool results available below.",
+            timestamp: event.payload.timestamp_ms,
+          };
+
+          return [...msgs, newMessage];
+        });
+      }
 
       streamingAssistantMessageId = null;
       isStreaming.set(false);

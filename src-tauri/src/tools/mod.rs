@@ -12,7 +12,7 @@ use chrono::Utc;
 use jsonschema::JSONSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 use uuid::Uuid;
@@ -152,6 +152,7 @@ pub struct ToolExecutionRecord {
 enum AgentAction {
     DirectResponse { content: String },
     ToolCalls { calls: Vec<ToolCall> },
+    Plan { steps: Vec<String> },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -247,8 +248,17 @@ impl ToolLoopRunner {
         let base_conversation_id = context.conversation_id.clone();
         let base_message_id = context.message_id.clone();
         let mut tool_executions: Vec<ToolExecutionRecord> = Vec::new();
+        let mut completed_calls: HashSet<String> = HashSet::new();
+        let mut call_attempts: HashMap<String, usize> = HashMap::new();
+        let mut call_errors: HashMap<String, String> = HashMap::new();
+        let mut force_direct_response: Option<String> = None;
+        let max_identical_attempts: usize = 2;
 
-        for iteration in 0..self.config.max_iterations {
+        let mut tool_iterations = 0usize;
+        let mut plan_seen = false;
+        let mut plan_reminders = 0u8;
+
+        while tool_iterations < self.config.max_iterations {
             let response = call_llm(&messages, Some(&system_prompt))?;
             let action = parse_agent_action(&response.content)?;
 
@@ -259,22 +269,114 @@ impl ToolLoopRunner {
                         tool_executions,
                     });
                 }
+                AgentAction::Plan { steps } => {
+                    if let Some(reason) = force_direct_response.as_ref() {
+                        messages.push(LlmMessage {
+                            role: "user".to_string(),
+                            content: json!(format!(
+                                "Respond only with a direct_response and ask for help. Reason: {}",
+                                reason
+                            )),
+                        });
+                        continue;
+                    }
+                    plan_seen = true;
+                    let plan_payload = json!({ "type": "plan", "steps": steps });
+                    let plan_text =
+                        serde_json::to_string(&plan_payload).unwrap_or_else(|_| plan_payload.to_string());
+                    messages.push(LlmMessage {
+                        role: "assistant".to_string(),
+                        content: json!(plan_text),
+                    });
+                    continue;
+                }
                 AgentAction::ToolCalls { calls } => {
+                    if let Some(reason) = force_direct_response.as_ref() {
+                        messages.push(LlmMessage {
+                            role: "user".to_string(),
+                            content: json!(format!(
+                                "Respond only with a direct_response and ask for help. Reason: {}",
+                                reason
+                            )),
+                        });
+                        continue;
+                    }
                     if calls.is_empty() {
                         return Err("No tool calls provided by model".to_string());
                     }
 
-                    for call in calls {
+                    if !plan_seen {
+                        if plan_reminders < 1 {
+                            plan_reminders += 1;
+                            messages.push(LlmMessage {
+                                role: "user".to_string(),
+                                content: json!(
+                                    "Please provide a plan first using {\"type\":\"plan\",\"steps\":[...]}. Then call one tool."
+                                ),
+                            });
+                            continue;
+                        }
+                    }
+
+                    if calls.len() > 1 {
+                        println!(
+                            "[tool] warning: received {} tool calls; executing only the first",
+                            calls.len()
+                        );
+                    }
+
+                    let call = calls.into_iter().next().unwrap();
+                    tool_iterations += 1;
+
+                    {
                         let tool = self
                             .registry
                             .get(&call.tool)
                             .ok_or_else(|| format!("Unknown tool: {}", call.tool))?;
                         let tool_name = tool.metadata.name.clone();
                         let call_args = call.args.clone();
+                        let call_key = serde_json::to_string(&json!({
+                            "tool": tool_name,
+                            "args": call_args
+                        }))
+                        .unwrap_or_default();
 
                         self.registry
                             .validate_args(&tool.metadata, &call_args)
                             .map_err(|err| err.message)?;
+
+                        if completed_calls.contains(&call_key) {
+                            messages.push(LlmMessage {
+                                role: "user".to_string(),
+                                content: json!(
+                                    "That tool call already succeeded with the same arguments. Do not repeat it. If more work is needed, choose a different tool or respond with a direct_response."
+                                ),
+                            });
+                            continue;
+                        }
+                        let attempts_so_far = *call_attempts.get(&call_key).unwrap_or(&0);
+                        if attempts_so_far >= max_identical_attempts {
+                            let last_error = call_errors
+                                .get(&call_key)
+                                .cloned()
+                                .unwrap_or_else(|| "Unknown error".to_string());
+                            let reason = format!(
+                                "Repeated tool call failed {} times with identical arguments. Last error: {}",
+                                attempts_so_far,
+                                last_error
+                            );
+                            force_direct_response = Some(reason.clone());
+                            messages.push(LlmMessage {
+                                role: "user".to_string(),
+                                content: json!(format!(
+                                    "The same tool call has failed multiple times. Ask the user for help and include the last error. Error: {}",
+                                    last_error
+                                )),
+                            });
+                            continue;
+                        }
+                        let attempt_count = attempts_so_far + 1;
+                        call_attempts.insert(call_key.clone(), attempt_count);
 
                         let execution_id = Uuid::new_v4().to_string();
                         let tool_context = ToolExecutionContext;
@@ -284,7 +386,7 @@ impl ToolLoopRunner {
                                 "execution_id": execution_id,
                                 "tool_name": tool_name,
                                 "args": call_args,
-                                "iteration": iteration + 1,
+                                    "iteration": tool_iterations,
                                 "conversation_id": base_conversation_id.clone(),
                                 "message_id": base_message_id.clone(),
                             }),
@@ -307,7 +409,7 @@ impl ToolLoopRunner {
                                     "tool_name": tool_name.clone(),
                                     "args": call_args.clone(),
                                     "preview": preview,
-                                    "iteration": iteration + 1,
+                                    "iteration": tool_iterations,
                                     "conversation_id": base_conversation_id.clone(),
                                     "message_id": base_message_id.clone(),
                                     "timestamp_ms": timestamp_ms,
@@ -328,7 +430,7 @@ impl ToolLoopRunner {
                                             "execution_id": execution_id,
                                             "tool_name": tool_name,
                                             "approved": true,
-                                            "iteration": iteration + 1,
+                                            "iteration": tool_iterations,
                                             "conversation_id": base_conversation_id.clone(),
                                             "message_id": base_message_id.clone(),
                                         }),
@@ -339,7 +441,7 @@ impl ToolLoopRunner {
                                             "execution_id": execution_id.clone(),
                                             "approval_id": approval_id.clone(),
                                             "tool_name": tool_name.clone(),
-                                            "iteration": iteration + 1,
+                                            "iteration": tool_iterations,
                                             "conversation_id": base_conversation_id.clone(),
                                             "message_id": base_message_id.clone(),
                                             "timestamp_ms": timestamp_ms,
@@ -354,7 +456,7 @@ impl ToolLoopRunner {
                                             "execution_id": execution_id,
                                             "tool_name": tool_name,
                                             "approved": false,
-                                            "iteration": iteration + 1,
+                                            "iteration": tool_iterations,
                                             "conversation_id": base_conversation_id.clone(),
                                             "message_id": base_message_id.clone(),
                                         }),
@@ -365,7 +467,7 @@ impl ToolLoopRunner {
                                             "execution_id": execution_id.clone(),
                                             "approval_id": approval_id.clone(),
                                             "tool_name": tool_name.clone(),
-                                            "iteration": iteration + 1,
+                                            "iteration": tool_iterations,
                                             "conversation_id": base_conversation_id.clone(),
                                             "message_id": base_message_id.clone(),
                                             "timestamp_ms": timestamp_ms,
@@ -388,7 +490,7 @@ impl ToolLoopRunner {
                                 "tool_name": tool_name.clone(),
                                 "args": call_args.clone(),
                                 "requires_approval": tool.metadata.requires_approval,
-                                "iteration": iteration + 1,
+                                "iteration": tool_iterations,
                                 "conversation_id": base_conversation_id.clone(),
                                 "message_id": base_message_id.clone(),
                                 "timestamp_ms": timestamp_ms,
@@ -413,7 +515,7 @@ impl ToolLoopRunner {
                                     success: true,
                                     error: None,
                                     duration_ms,
-                                    iteration: iteration + 1,
+                                    iteration: tool_iterations,
                                     timestamp_ms,
                                 });
                                 log_tool_event(
@@ -424,7 +526,7 @@ impl ToolLoopRunner {
                                         "success": true,
                                         "duration_ms": duration_ms,
                                         "result": result_for_message,
-                                        "iteration": iteration + 1,
+                                        "iteration": tool_iterations,
                                         "conversation_id": base_conversation_id.clone(),
                                         "message_id": base_message_id.clone(),
                                     }),
@@ -437,7 +539,7 @@ impl ToolLoopRunner {
                                         "result": result,
                                         "success": true,
                                         "duration_ms": duration_ms,
-                                        "iteration": iteration + 1,
+                                        "iteration": tool_iterations,
                                         "conversation_id": base_conversation_id.clone(),
                                         "message_id": base_message_id.clone(),
                                         "timestamp_ms": timestamp_ms,
@@ -449,6 +551,8 @@ impl ToolLoopRunner {
                                     "type": "tool_result",
                                     "tool": tool_name,
                                     "execution_id": execution_id,
+                                    "success": true,
+                                    "attempt": attempt_count,
                                     "result": result_for_message,
                                 });
                                 let tool_result_text =
@@ -458,6 +562,8 @@ impl ToolLoopRunner {
                                     role: "user".to_string(),
                                     content: json!(tool_result_text),
                                 });
+                                completed_calls.insert(call_key.clone());
+                                call_errors.remove(&call_key);
                             }
                             Err(err) => {
                                 let error_message = err.message;
@@ -470,7 +576,7 @@ impl ToolLoopRunner {
                                     success: false,
                                     error: Some(error_message.clone()),
                                     duration_ms,
-                                    iteration: iteration + 1,
+                                    iteration: tool_iterations,
                                     timestamp_ms,
                                 });
                                 log_tool_event(
@@ -481,7 +587,7 @@ impl ToolLoopRunner {
                                         "success": false,
                                         "duration_ms": duration_ms,
                                         "error": error_message,
-                                        "iteration": iteration + 1,
+                                        "iteration": tool_iterations,
                                         "conversation_id": base_conversation_id.clone(),
                                         "message_id": base_message_id.clone(),
                                     }),
@@ -489,19 +595,35 @@ impl ToolLoopRunner {
                                 self.event_bus.publish(AgentEvent::new_with_timestamp(
                                     EVENT_TOOL_EXECUTION_COMPLETED,
                                     json!({
-                                        "execution_id": execution_id,
-                                        "tool_name": tool_name,
+                                        "execution_id": execution_id.clone(),
+                                        "tool_name": tool_name.clone(),
                                         "success": false,
                                         "error": error_message.clone(),
                                         "duration_ms": duration_ms,
-                                        "iteration": iteration + 1,
+                                        "iteration": tool_iterations,
                                         "conversation_id": base_conversation_id.clone(),
                                         "message_id": base_message_id.clone(),
                                         "timestamp_ms": timestamp_ms,
                                     }),
                                     timestamp_ms,
                                 ));
-                                return Err(error_message);
+                                let tool_result_payload = json!({
+                                    "type": "tool_result",
+                                    "tool": tool_name,
+                                    "execution_id": execution_id,
+                                    "success": false,
+                                    "attempt": attempt_count,
+                                    "error": error_message,
+                                });
+                                let tool_result_text =
+                                    serde_json::to_string(&tool_result_payload)
+                                        .unwrap_or_else(|_| tool_result_payload.to_string());
+                                messages.push(LlmMessage {
+                                    role: "user".to_string(),
+                                    content: json!(tool_result_text),
+                                });
+                                call_errors.insert(call_key, error_message);
+                                continue;
                             }
                         }
                     }
@@ -521,6 +643,17 @@ impl ToolLoopRunner {
             }
         }
 
+        prompt.push_str(
+            "Tool usage guidance:\n\
+- If creating a new file with known content, use `files.create` with the `content` field.\n\
+- Avoid a separate `files.write` call unless you are modifying an existing file.\n\
+- When tools are needed, respond with a plan first, then execute only the next step.\n\
+- After a successful tool_result, check if the user request is satisfied and respond with a direct response.\n\
+- Never repeat an identical tool call (same tool + args) after it succeeds.\n\
+- If a tool_result reports success=false, you may retry once with corrected arguments. If it fails again, ask the user for help and mention the error.\n\
+- Only one tool call per response.\n\n",
+        );
+
         let tool_list = self.registry.prompt_json();
         let tool_list_str = serde_json::to_string(&tool_list).unwrap_or_else(|_| "[]".to_string());
 
@@ -529,8 +662,18 @@ impl ToolLoopRunner {
 Valid response formats:\n\
 1) Direct response:\n\
 {\"type\":\"direct_response\",\"content\":\"...\"}\n\
-2) Tool calls:\n\
+2) Plan:\n\
+{\"type\":\"plan\",\"steps\":[\"step 1\", \"step 2\", \"...\"]}\n\
+3) Tool call (single only):\n\
 {\"type\":\"tool_calls\",\"calls\":[{\"tool\":\"<name>\",\"args\":{...}}]}\n\n\
+STRICT JSON OUTPUT RULES:\n\
+- Output must be a single JSON object and nothing else.\n\
+- Do not include preambles, explanations, or trailing text.\n\
+- Do not wrap in code fences or markdown.\n\
+- Do not include comments.\n\
+- If you must choose, prefer {\"type\":\"direct_response\"}.\n\n\
+Example (valid):\n\
+{\"type\":\"tool_calls\",\"calls\":[{\"tool\":\"files.create\",\"args\":{\"path\":\"notes/todo.md\",\"content\":\"- Buy milk\\n\"}}]}\n\n\
 Available tools:\n",
         );
         prompt.push_str(&tool_list_str);
@@ -546,8 +689,13 @@ Do not wrap output in markdown or code fences.",
 
 fn parse_agent_action(raw: &str) -> Result<AgentAction, String> {
     let json_str = extract_json(raw);
-    serde_json::from_str(&json_str)
-        .map_err(|err| format!("Failed to parse agent action JSON: {err}"))
+    let mut deserializer = serde_json::Deserializer::from_str(&json_str);
+    let action = AgentAction::deserialize(&mut deserializer)
+        .map_err(|err| format!("Failed to parse agent action JSON: {err}"))?;
+    if deserializer.end().is_err() {
+        println!("[tool] warning: trailing characters after JSON action");
+    }
+    Ok(action)
 }
 
 fn extract_json(raw: &str) -> String {

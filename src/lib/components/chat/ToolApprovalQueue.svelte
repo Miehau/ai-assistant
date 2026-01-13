@@ -4,6 +4,7 @@
   import { resolveToolApproval } from "$lib/stores/chat";
 
   export let approvals: ToolExecutionProposedPayload[] = [];
+  export let containerClass = "";
 
   function formatPreview(preview: ToolExecutionProposedPayload["preview"]): string {
     if (!preview) return "";
@@ -31,7 +32,7 @@
 </script>
 
 {#if approvals.length > 0}
-  <div class="mb-4 rounded-2xl border border-border/60 bg-background/60 backdrop-blur p-4 shadow-sm">
+  <div class={`mb-4 w-full rounded-2xl border border-border/60 bg-background/60 backdrop-blur p-4 shadow-sm ${containerClass}`}>
     <div class="flex items-center justify-between">
       <h3 class="text-sm font-semibold text-foreground">Tool approvals required</h3>
       <span class="text-xs text-muted-foreground">{approvals.length} pending</span>
@@ -67,11 +68,11 @@
           </div>
 
           {#if approval.preview}
-            <pre class="mt-3 max-h-64 overflow-auto rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
+            <pre class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
 {formatPreview(approval.preview)}
             </pre>
           {:else}
-            <pre class="mt-3 max-h-48 overflow-auto rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
+            <pre class="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
 {JSON.stringify(approval.args, null, 2)}
             </pre>
           {/if}

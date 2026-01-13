@@ -6,11 +6,18 @@
   import type { Message } from "$lib/types";
   import { streamingMessage, isStreaming } from "$lib/stores/chat";
   import { pageVisible } from "$lib/stores/visibility";
+  import ToolApprovalQueue from "./ToolApprovalQueue.svelte";
+  import ToolActivityPanel from "./ToolActivityPanel.svelte";
+  import type { ToolExecutionProposedPayload } from "$lib/types/events";
+  import type { ToolActivityEntry } from "$lib/stores/chat";
 
   export let messages: Message[] = [];
   export let chatContainer: HTMLElement | null = null;
   export let autoScroll = true;
   export let conversationId: string | undefined = undefined;
+  export let toolApprovals: ToolExecutionProposedPayload[] = [];
+  export let toolActivity: ToolActivityEntry[] = [];
+  export let isLoading = false;
 
   let lastScrollHeight = 0;
   let lastScrollTop = 0;
@@ -201,18 +208,59 @@
     </div>
   {/each}
 
+  {#if toolApprovals.length > 0}
+    <div
+      in:fly={{ y: 10, duration: 150, easing: backOut }}
+      class="w-full message-container flex justify-start"
+    >
+      <ToolApprovalQueue approvals={toolApprovals} containerClass="w-full max-w-5xl min-w-0 flex-1" />
+    </div>
+  {/if}
+
+  {#if toolActivity.length > 0}
+    <div
+      in:fly={{ y: 10, duration: 150, easing: backOut }}
+      class="w-full message-container flex justify-start"
+    >
+      <ToolActivityPanel activities={toolActivity} containerClass="w-full max-w-5xl min-w-0 flex-1" />
+    </div>
+  {/if}
+
+  {#if isLoading && !$isStreaming}
+    <div
+      in:fly={{ y: 10, duration: 150, easing: backOut }}
+      class="w-full message-container flex justify-start"
+    >
+      <div class="rounded-2xl px-4 py-2 w-full max-w-5xl min-w-0 bg-background/60 border border-border/60">
+        <div class="flex items-center gap-2 text-xs text-muted-foreground">
+          <span class="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-400"></span>
+          <span>Agent is working…</span>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- Streaming message displayed separately to avoid array reactivity -->
-  {#if $isStreaming && $streamingMessage}
+  {#if $isStreaming}
     <div
       in:fly={{ y: 10, duration: 150, easing: backOut }}
       class="w-full message-container"
     >
-      <ChatMessage
-        type="received"
-        content={$streamingMessage}
-        conversationId={conversationId}
-        isStreaming={true}
-      />
+      {#if $streamingMessage}
+        <ChatMessage
+          type="received"
+          content={$streamingMessage}
+          conversationId={conversationId}
+          isStreaming={true}
+        />
+      {:else}
+        <div class="rounded-2xl px-4 py-2 w-full max-w-5xl min-w-0 bg-background/60 border border-border/60">
+          <div class="flex items-center gap-2 text-xs text-muted-foreground">
+            <span class="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-400"></span>
+            <span>Agent is working…</span>
+          </div>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

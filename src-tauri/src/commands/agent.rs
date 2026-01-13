@@ -436,9 +436,22 @@ pub fn agent_send_message(
         );
 
         let mut tool_executions = Vec::new();
-        if let Ok(loop_result) = tool_loop_result {
-            accumulated = loop_result.content;
-            tool_executions = loop_result.tool_executions;
+        let mut tool_loop_error: Option<String> = None;
+        match tool_loop_result {
+            Ok(loop_result) => {
+                accumulated = loop_result.content;
+                tool_executions = loop_result.tool_executions;
+                if accumulated.trim().is_empty() && tool_executions.is_empty() {
+                    tool_loop_error = Some("Model returned an empty response.".to_string());
+                }
+            }
+            Err(error) => {
+                tool_loop_error = Some(error);
+            }
+        }
+
+        if let Some(error) = tool_loop_error {
+            accumulated = format!("Tool loop error: {}", error);
         }
 
         if !accumulated.is_empty() {
