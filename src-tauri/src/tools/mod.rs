@@ -260,7 +260,9 @@ impl ToolLoopRunner {
                         let tool_name = tool.metadata.name.clone();
                         let call_args = call.args.clone();
 
-                        self.registry.validate_args(&tool.metadata, &call_args)?;
+                        self.registry
+                            .validate_args(&tool.metadata, &call_args)
+                            .map_err(|err| err.message)?;
 
                         let execution_id = Uuid::new_v4().to_string();
                         let tool_context = ToolExecutionContext {

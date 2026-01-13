@@ -1,4 +1,3 @@
-use chrono::Utc;
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::{mpsc, Arc, Mutex};
