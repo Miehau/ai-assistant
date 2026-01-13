@@ -157,6 +157,7 @@ pub trait BranchOperations: DbOperations {
                     conversation_id: row.get(1)?,
                     created_at,
                     attachments: Vec::new(), // Will be populated separately if needed
+                    tool_executions: Vec::new(),
                 })
             })?
             .collect::<RusqliteResult<Vec<Message>>>()?;
@@ -197,6 +198,7 @@ pub trait BranchOperations: DbOperations {
                         conversation_id: row.get(1)?,
                         created_at,
                         attachments: Vec::new(),
+                        tool_executions: Vec::new(),
                     })
                 })?
                 .collect::<RusqliteResult<Vec<Message>>>()?;

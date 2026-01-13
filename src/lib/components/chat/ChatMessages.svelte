@@ -195,6 +195,7 @@
         attachments={msg.attachments}
         messageId={msg.id}
         conversationId={conversationId}
+        tool_calls={msg.tool_calls}
         agentActivity={msg.agentActivity}
       />
     </div>

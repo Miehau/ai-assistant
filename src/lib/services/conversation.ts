@@ -1,6 +1,15 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { writable, get, derived } from 'svelte/store';
-import type { Message, APIMessage, Attachment, Conversation, ConversationState, DBMessage } from '$lib/types';
+import type {
+  Message,
+  APIMessage,
+  Attachment,
+  Conversation,
+  ConversationState,
+  DBMessage,
+  ToolCallRecord,
+  ToolExecutionDbRecord
+} from '$lib/types';
 import { v4 as uuidv4 } from 'uuid';
 
 export class ConversationService {
@@ -46,12 +55,23 @@ export class ConversationService {
       })
       .map(msg => {
         let content = msg.content;
+        const toolCalls = msg.tool_executions?.map((tool: ToolExecutionDbRecord): ToolCallRecord => ({
+          execution_id: tool.id,
+          tool_name: tool.tool_name,
+          args: tool.parameters ?? {},
+          result: tool.result,
+          success: tool.success,
+          error: tool.error ?? undefined,
+          duration_ms: tool.duration_ms,
+          completed_at: tool.timestamp_ms,
+        }));
 
         return {
           id: msg.id || uuidv4(), // Preserve message ID for branching, generate if missing
           type: msg.role === 'user' ? 'sent' : 'received',
           content,
-          attachments: msg.attachments
+          attachments: msg.attachments,
+          tool_calls: toolCalls
         };
       });
   }

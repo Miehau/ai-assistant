@@ -131,6 +131,20 @@ impl Default for ToolLoopConfig {
 #[derive(Clone, Debug)]
 pub struct ToolLoopResponse {
     pub content: String,
+    pub tool_executions: Vec<ToolExecutionRecord>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolExecutionRecord {
+    pub execution_id: String,
+    pub tool_name: String,
+    pub args: Value,
+    pub result: Option<Value>,
+    pub success: bool,
+    pub error: Option<String>,
+    pub duration_ms: i64,
+    pub iteration: usize,
+    pub timestamp_ms: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,9 +238,15 @@ impl ToolLoopRunner {
     where
         F: FnMut(&[LlmMessage], Option<&str>) -> Result<StreamResult, String>,
     {
+        fn log_tool_event(label: &str, payload: &Value) {
+            let payload_text = serde_json::to_string(payload).unwrap_or_else(|_| payload.to_string());
+            println!("[tool] {}: {}", label, payload_text);
+        }
+
         let system_prompt = self.build_system_prompt(base_system_prompt);
         let base_conversation_id = context.conversation_id.clone();
         let base_message_id = context.message_id.clone();
+        let mut tool_executions: Vec<ToolExecutionRecord> = Vec::new();
 
         for iteration in 0..self.config.max_iterations {
             let response = call_llm(&messages, Some(&system_prompt))?;
@@ -234,7 +254,10 @@ impl ToolLoopRunner {
 
             match action {
                 AgentAction::DirectResponse { content } => {
-                    return Ok(ToolLoopResponse { content });
+                    return Ok(ToolLoopResponse {
+                        content,
+                        tool_executions,
+                    });
                 }
                 AgentAction::ToolCalls { calls } => {
                     if calls.is_empty() {
@@ -255,6 +278,17 @@ impl ToolLoopRunner {
 
                         let execution_id = Uuid::new_v4().to_string();
                         let tool_context = ToolExecutionContext;
+                        log_tool_event(
+                            "call",
+                            &json!({
+                                "execution_id": execution_id,
+                                "tool_name": tool_name,
+                                "args": call_args,
+                                "iteration": iteration + 1,
+                                "conversation_id": base_conversation_id.clone(),
+                                "message_id": base_message_id.clone(),
+                            }),
+                        );
 
                         if tool.metadata.requires_approval {
                             let preview = match tool.preview.as_ref() {
@@ -288,6 +322,17 @@ impl ToolLoopRunner {
                             let timestamp_ms = Utc::now().timestamp_millis();
                             match decision {
                                 ApprovalDecision::Approved => {
+                                    log_tool_event(
+                                        "approval",
+                                        &json!({
+                                            "execution_id": execution_id,
+                                            "tool_name": tool_name,
+                                            "approved": true,
+                                            "iteration": iteration + 1,
+                                            "conversation_id": base_conversation_id.clone(),
+                                            "message_id": base_message_id.clone(),
+                                        }),
+                                    );
                                     self.event_bus.publish(AgentEvent::new_with_timestamp(
                                         EVENT_TOOL_EXECUTION_APPROVED,
                                         json!({
@@ -303,6 +348,17 @@ impl ToolLoopRunner {
                                     ));
                                 }
                                 ApprovalDecision::Denied => {
+                                    log_tool_event(
+                                        "approval",
+                                        &json!({
+                                            "execution_id": execution_id,
+                                            "tool_name": tool_name,
+                                            "approved": false,
+                                            "iteration": iteration + 1,
+                                            "conversation_id": base_conversation_id.clone(),
+                                            "message_id": base_message_id.clone(),
+                                        }),
+                                    );
                                     self.event_bus.publish(AgentEvent::new_with_timestamp(
                                         EVENT_TOOL_EXECUTION_DENIED,
                                         json!({
@@ -341,13 +397,38 @@ impl ToolLoopRunner {
                         ));
 
                         let start = Instant::now();
-                        let result = (tool.handler)(call_args, tool_context);
+                        let result = (tool.handler)(call_args.clone(), tool_context);
                         let duration_ms = start.elapsed().as_millis() as i64;
+                        let completed_at = Utc::now().timestamp_millis();
 
                         match result {
                             Ok(result) => {
                                 let result_for_message = result.clone();
-                                let timestamp_ms = Utc::now().timestamp_millis();
+                                let timestamp_ms = completed_at;
+                                tool_executions.push(ToolExecutionRecord {
+                                    execution_id: execution_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    args: call_args.clone(),
+                                    result: Some(result.clone()),
+                                    success: true,
+                                    error: None,
+                                    duration_ms,
+                                    iteration: iteration + 1,
+                                    timestamp_ms,
+                                });
+                                log_tool_event(
+                                    "response",
+                                    &json!({
+                                        "execution_id": execution_id,
+                                        "tool_name": tool_name,
+                                        "success": true,
+                                        "duration_ms": duration_ms,
+                                        "result": result_for_message,
+                                        "iteration": iteration + 1,
+                                        "conversation_id": base_conversation_id.clone(),
+                                        "message_id": base_message_id.clone(),
+                                    }),
+                                );
                                 self.event_bus.publish(AgentEvent::new_with_timestamp(
                                     EVENT_TOOL_EXECUTION_COMPLETED,
                                     json!({
@@ -380,7 +461,31 @@ impl ToolLoopRunner {
                             }
                             Err(err) => {
                                 let error_message = err.message;
-                                let timestamp_ms = Utc::now().timestamp_millis();
+                                let timestamp_ms = completed_at;
+                                tool_executions.push(ToolExecutionRecord {
+                                    execution_id: execution_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    args: call_args,
+                                    result: None,
+                                    success: false,
+                                    error: Some(error_message.clone()),
+                                    duration_ms,
+                                    iteration: iteration + 1,
+                                    timestamp_ms,
+                                });
+                                log_tool_event(
+                                    "response",
+                                    &json!({
+                                        "execution_id": execution_id,
+                                        "tool_name": tool_name,
+                                        "success": false,
+                                        "duration_ms": duration_ms,
+                                        "error": error_message,
+                                        "iteration": iteration + 1,
+                                        "conversation_id": base_conversation_id.clone(),
+                                        "message_id": base_message_id.clone(),
+                                    }),
+                                );
                                 self.event_bus.publish(AgentEvent::new_with_timestamp(
                                     EVENT_TOOL_EXECUTION_COMPLETED,
                                     json!({

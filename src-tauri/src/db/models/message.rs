@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use serde_json::Value;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct IncomingAttachment {
@@ -39,4 +40,34 @@ pub struct Message {
     pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub attachments: Vec<MessageAttachment>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tool_executions: Vec<MessageToolExecution>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
+pub struct MessageToolExecution {
+    pub id: String,
+    pub message_id: String,
+    pub tool_name: String,
+    pub parameters: Value,
+    pub result: Value,
+    pub success: bool,
+    pub duration_ms: i64,
+    pub timestamp_ms: i64,
+    pub error: Option<String>,
+    pub iteration_number: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
+pub struct MessageToolExecutionInput {
+    pub id: String,
+    pub message_id: String,
+    pub tool_name: String,
+    pub parameters: Value,
+    pub result: Value,
+    pub success: bool,
+    pub duration_ms: i64,
+    pub timestamp_ms: i64,
+    pub error: Option<String>,
+    pub iteration_number: i64,
 }

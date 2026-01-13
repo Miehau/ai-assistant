@@ -14,7 +14,9 @@ import type {
     MessageWithBranch as MessageWithBranchType,
     MessageUsage as MessageUsageType,
     MessageTreeNode as MessageTreeNodeType,
-    BaseMessage
+    BaseMessage,
+    ToolCallRecord,
+    ToolExecutionDbRecord
 } from './types/message';
 import type { Attachment, FileMetadata } from './types/attachments';
 import type { AgentEvent, AgentEventType } from './types/events';
@@ -30,6 +32,8 @@ export type {
     BaseMessage,
     AgentEvent,
     AgentEventType,
+    ToolCallRecord,
+    ToolExecutionDbRecord,
     ToolMetadata
 };
 

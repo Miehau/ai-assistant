@@ -52,14 +52,14 @@
             <div class="flex items-center gap-2">
               <Button
                 size="sm"
-                on:click={() => resolveToolApproval(approval.approval_id, true)}
+                onclick={() => resolveToolApproval(approval.approval_id, true)}
               >
                 Approve
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                on:click={() => resolveToolApproval(approval.approval_id, false)}
+                onclick={() => resolveToolApproval(approval.approval_id, false)}
               >
                 Deny
               </Button>

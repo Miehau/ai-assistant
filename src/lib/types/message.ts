@@ -41,6 +41,8 @@ export interface DisplayMessage extends BaseMessage {
   attachments?: Attachment[];
   /** Optional model name for display (e.g., "gpt-4 • openai") */
   model?: string;
+  /** Optional tool calls attached to this assistant response */
+  tool_calls?: ToolCallRecord[];
 }
 
 /**
@@ -71,6 +73,8 @@ export interface DBMessage {
   attachments?: Attachment[];
   /** Unix timestamp in milliseconds (optional for backward compatibility) */
   timestamp?: number;
+  /** Optional tool executions persisted with the message */
+  tool_executions?: ToolExecutionDbRecord[];
 }
 
 /**
@@ -84,6 +88,31 @@ export interface MessageWithBranch extends DisplayMessage {
   branch_count?: number;
   /** Whether this message has child branches */
   has_branches?: boolean;
+}
+
+export interface ToolCallRecord {
+  execution_id: string;
+  tool_name: string;
+  args: Record<string, unknown>;
+  result?: unknown;
+  success?: boolean;
+  error?: string;
+  duration_ms?: number;
+  started_at?: number;
+  completed_at?: number;
+}
+
+export interface ToolExecutionDbRecord {
+  id: string;
+  message_id: string;
+  tool_name: string;
+  parameters: Record<string, unknown>;
+  result: unknown;
+  success: boolean;
+  duration_ms: number;
+  timestamp_ms: number;
+  error?: string | null;
+  iteration_number: number;
 }
 
 /**

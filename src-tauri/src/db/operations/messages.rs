@@ -1,11 +1,18 @@
 use rusqlite::{params, Result as RusqliteResult};
 use chrono::{TimeZone, Utc};
+use serde_json::Value;
 use uuid::Uuid;
 use std::fs;
 use std::collections::HashMap;
 use base64::Engine;
 use tauri::api::path;
-use crate::db::models::{Message, MessageAttachment, IncomingAttachment};
+use crate::db::models::{
+    Message,
+    MessageAttachment,
+    IncomingAttachment,
+    MessageToolExecution,
+    MessageToolExecutionInput,
+};
 use super::DbOperations;
 use std::time::Instant;
 
@@ -80,6 +87,46 @@ pub trait MessageOperations: DbOperations {
         Ok(message_id)
     }
 
+    fn save_tool_execution(
+        &self,
+        input: MessageToolExecutionInput,
+    ) -> RusqliteResult<MessageToolExecution> {
+        let binding = self.conn();
+        let conn = binding.lock().unwrap();
+
+        conn.execute(
+            "INSERT INTO message_tool_executions (
+                id, message_id, tool_name, parameters, result, success, duration, timestamp, error, iteration_number
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                input.id,
+                input.message_id,
+                input.tool_name,
+                input.parameters.to_string(),
+                input.result.to_string(),
+                input.success,
+                input.duration_ms,
+                input.timestamp_ms,
+                input.error,
+                input.iteration_number,
+            ],
+        )?;
+
+        Ok(MessageToolExecution {
+            id: input.id,
+            message_id: input.message_id,
+            tool_name: input.tool_name,
+            parameters: input.parameters,
+            result: input.result,
+            success: input.success,
+            duration_ms: input.duration_ms,
+            timestamp_ms: input.timestamp_ms,
+            error: input.error,
+            iteration_number: input.iteration_number,
+        })
+    }
+
     fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {
         let start_time = Instant::now();
 
@@ -108,6 +155,7 @@ pub trait MessageOperations: DbOperations {
                 content: row.get(3)?,
                 created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
                 attachments: Vec::new(),
+                tool_executions: Vec::new(),
             })
         })?.collect::<Result<Vec<_>, _>>()?;
 
@@ -179,6 +227,45 @@ pub trait MessageOperations: DbOperations {
             }
         }
 
+        let tool_executions_start = Instant::now();
+        let mut tool_exec_stmt = conn.prepare(
+            "SELECT message_id, id, tool_name, parameters, result, success, duration, timestamp, error, iteration_number
+             FROM message_tool_executions
+             WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)"
+        )?;
+
+        let tool_execs = tool_exec_stmt.query_map(params![conversation_id], |row| {
+            let message_id: String = row.get(0)?;
+            let timestamp_ms: i64 = row.get(7)?;
+
+            let parameters_raw: String = row.get(3)?;
+            let result_raw: String = row.get(4)?;
+            let parameters = serde_json::from_str(&parameters_raw).unwrap_or_else(|_| Value::String(parameters_raw));
+            let result = serde_json::from_str(&result_raw).unwrap_or_else(|_| Value::String(result_raw));
+
+            Ok((message_id, MessageToolExecution {
+                id: row.get(1)?,
+                message_id: row.get(0)?,
+                tool_name: row.get(2)?,
+                parameters,
+                result,
+                success: row.get(5)?,
+                duration_ms: row.get(6)?,
+                timestamp_ms,
+                error: row.get(8)?,
+                iteration_number: row.get(9)?,
+            }))
+        })?;
+
+        for tool_exec in tool_execs {
+            if let Ok((message_id, exec)) = tool_exec {
+                if let Some(message) = message_map.get_mut(&message_id) {
+                    message.tool_executions.push(exec);
+                }
+            }
+        }
+
+        println!("🧰 Tool executions processing time: {:?}", tool_executions_start.elapsed());
         println!("📎 Total attachments processing time: {:?}", attachments_start.elapsed());
         println!("⏱️  Total get_messages time: {:?}", start_time.elapsed());
 

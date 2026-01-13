@@ -12,7 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { branchStore } from '$lib/stores/branches';
 import { startAgentEventBridge } from '$lib/services/eventBridge';
 import { AGENT_EVENT_TYPES } from '$lib/types/events';
-import type { AgentEvent, Attachment } from '$lib/types';
+import type { AgentEvent, Attachment, ToolCallRecord } from '$lib/types';
 import type {
   ToolExecutionCompletedPayload,
   ToolExecutionProposedPayload,
@@ -56,6 +56,7 @@ let streamingAssistantMessageId: string | null = null;
 let streamingChunkBuffer = '';
 let streamingFlushPending = false;
 const TOOL_ACTIVITY_LIMIT = 8;
+const toolCallsByMessageId = new Map<string, Map<string, ToolCallRecord>>();
 
 export type ToolActivityEntry = {
   execution_id: string;
@@ -66,6 +67,44 @@ export type ToolActivityEntry = {
   duration_ms?: number;
   error?: string;
 };
+
+function getToolCallsForMessage(messageId: string): ToolCallRecord[] | undefined {
+  const entries = toolCallsByMessageId.get(messageId);
+  if (!entries) return undefined;
+  return Array.from(entries.values());
+}
+
+function upsertToolCall(
+  messageId: string,
+  executionId: string,
+  payload: Partial<ToolCallRecord>
+) {
+  let entries = toolCallsByMessageId.get(messageId);
+  if (!entries) {
+    entries = new Map<string, ToolCallRecord>();
+    toolCallsByMessageId.set(messageId, entries);
+  }
+
+  const existing = entries.get(executionId);
+  const next: ToolCallRecord = {
+    execution_id: executionId,
+    tool_name: payload.tool_name ?? existing?.tool_name ?? 'unknown',
+    args: payload.args ?? existing?.args ?? {},
+    result: payload.result ?? existing?.result,
+    success: payload.success ?? existing?.success,
+    error: payload.error ?? existing?.error,
+    duration_ms: payload.duration_ms ?? existing?.duration_ms,
+    started_at: payload.started_at ?? existing?.started_at,
+    completed_at: payload.completed_at ?? existing?.completed_at,
+  };
+
+  entries.set(executionId, next);
+  messages.update((msgs) =>
+    msgs.map((msg) =>
+      msg.id === messageId ? { ...msg, tool_calls: getToolCallsForMessage(messageId) } : msg
+    )
+  );
+}
 
 function flushStreamingChunks() {
   if (!streamingChunkBuffer) {
@@ -101,12 +140,16 @@ export async function startAgentEvents() {
           transcript: attachment.transcript,
         }));
 
+        const isAssistant = event.payload.role !== 'user';
         const newMessage: Message = {
           id: event.payload.message_id,
-          type: event.payload.role === 'user' ? 'sent' : 'received',
+          type: isAssistant ? 'received' : 'sent',
           content: event.payload.content,
           attachments: attachments.length ? attachments : undefined,
           timestamp: event.payload.timestamp_ms,
+          tool_calls: isAssistant
+            ? getToolCallsForMessage(event.payload.message_id)
+            : undefined,
         };
 
         return [...msgs, newMessage];
@@ -152,6 +195,7 @@ export async function startAgentEvents() {
       isLoading.set(false);
       pendingToolApprovals.set([]);
       toolActivity.set([]);
+      toolCallsByMessageId.clear();
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_STARTED) {
@@ -228,6 +272,14 @@ export async function startAgentEvents() {
         return;
       }
 
+      if (payload.message_id) {
+        upsertToolCall(payload.message_id, payload.execution_id, {
+          tool_name: payload.tool_name,
+          args: payload.args ?? {},
+          started_at: payload.timestamp_ms,
+        });
+      }
+
       toolActivity.update((entries) => {
         const next = entries.filter((entry) => entry.execution_id !== payload.execution_id);
         next.unshift({
@@ -245,6 +297,17 @@ export async function startAgentEvents() {
       const currentConversation = conversationService.getCurrentConversation();
       if (payload.conversation_id && currentConversation?.id !== payload.conversation_id) {
         return;
+      }
+
+      if (payload.message_id) {
+        upsertToolCall(payload.message_id, payload.execution_id, {
+          tool_name: payload.tool_name,
+          result: payload.result,
+          success: payload.success,
+          error: payload.error,
+          duration_ms: payload.duration_ms,
+          completed_at: payload.timestamp_ms,
+        });
       }
 
       toolActivity.update((entries) => {
@@ -549,6 +612,7 @@ export function clearConversation() {
   streamingMessage.set('');
   pendingToolApprovals.set([]);
   toolActivity.set([]);
+  toolCallsByMessageId.clear();
   conversationService.setCurrentConversation(null);
   // Reset branch context
   chatService.resetBranchContext();

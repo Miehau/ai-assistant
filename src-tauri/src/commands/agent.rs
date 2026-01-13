@@ -5,6 +5,7 @@ use crate::db::{
     Db,
     IncomingAttachment,
     MessageOperations,
+    MessageToolExecutionInput,
     ModelOperations,
     SaveMessageUsageInput,
     UsageOperations,
@@ -434,8 +435,10 @@ pub fn agent_send_message(
             tool_context,
         );
 
+        let mut tool_executions = Vec::new();
         if let Ok(loop_result) = tool_loop_result {
             accumulated = loop_result.content;
+            tool_executions = loop_result.tool_executions;
         }
 
         if !accumulated.is_empty() {
@@ -447,6 +450,22 @@ pub fn agent_send_message(
                 &[],
                 Some(assistant_message_id_for_thread.clone()),
             );
+
+            for execution in tool_executions {
+                let input = MessageToolExecutionInput {
+                    id: execution.execution_id,
+                    message_id: assistant_message_id_for_thread.clone(),
+                    tool_name: execution.tool_name,
+                    parameters: execution.args,
+                    result: execution.result.unwrap_or_else(|| json!(null)),
+                    success: execution.success,
+                    duration_ms: execution.duration_ms,
+                    timestamp_ms: execution.timestamp_ms,
+                    error: execution.error,
+                    iteration_number: execution.iteration as i64,
+                };
+                let _ = MessageOperations::save_tool_execution(&db, input);
+            }
 
             let _ = BranchOperations::create_message_tree_node(
                 &db,
