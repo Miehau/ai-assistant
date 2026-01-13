@@ -11,6 +11,11 @@ pub const EVENT_USAGE_UPDATED: &str = "usage.updated";
 pub const EVENT_ASSISTANT_STREAM_STARTED: &str = "assistant.stream.started";
 pub const EVENT_ASSISTANT_STREAM_CHUNK: &str = "assistant.stream.chunk";
 pub const EVENT_ASSISTANT_STREAM_COMPLETED: &str = "assistant.stream.completed";
+pub const EVENT_TOOL_EXECUTION_STARTED: &str = "tool.execution.started";
+pub const EVENT_TOOL_EXECUTION_COMPLETED: &str = "tool.execution.completed";
+pub const EVENT_TOOL_EXECUTION_PROPOSED: &str = "tool.execution.proposed";
+pub const EVENT_TOOL_EXECUTION_APPROVED: &str = "tool.execution.approved";
+pub const EVENT_TOOL_EXECUTION_DENIED: &str = "tool.execution.denied";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentEvent {

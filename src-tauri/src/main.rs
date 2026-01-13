@@ -6,6 +6,7 @@ mod setup_default_values;
 mod files;
 mod events;
 mod llm;
+mod tools;
 
 use db::Db;
 use events::EventBus;
@@ -37,9 +38,14 @@ fn main() {
                 }
             });
             
+            let tool_registry = tools::ToolRegistry::new();
+            let approval_store = tools::ApprovalStore::new();
+
             app.manage(db);
             app.manage(file_manager);
             app.manage(event_bus);
+            app.manage(tool_registry);
+            app.manage(approval_store);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -112,6 +118,8 @@ fn main() {
             // User preferences commands
             commands::get_preference,
             commands::set_preference,
+            // Tool approval commands
+            commands::resolve_tool_execution_approval,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

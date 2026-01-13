@@ -12,7 +12,6 @@ use crate::db::{
 use crate::events::{
     AgentEvent,
     EventBus,
-    EVENT_ASSISTANT_STREAM_CHUNK,
     EVENT_ASSISTANT_STREAM_COMPLETED,
     EVENT_ASSISTANT_STREAM_STARTED,
     EVENT_CONVERSATION_UPDATED,
@@ -24,16 +23,13 @@ use crate::llm::{
     complete_anthropic,
     complete_openai,
     complete_openai_compatible,
-    stream_anthropic,
-    stream_ndjson,
-    stream_openai,
-    stream_openai_compatible,
-    stream_openai_compatible_response,
     LlmMessage,
     Usage,
 };
+use crate::tools::{ApprovalStore, ToolLoopConfig, ToolLoopContext, ToolLoopRunner, ToolRegistry};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -165,6 +161,8 @@ pub struct AgentGenerateTitleResult {
 pub fn agent_send_message(
     state: State<'_, Db>,
     event_bus: State<'_, EventBus>,
+    tool_registry: State<'_, ToolRegistry>,
+    approvals: State<'_, ApprovalStore>,
     payload: AgentSendMessagePayload,
 ) -> Result<AgentSendMessageResult, String> {
     let AgentSendMessagePayload {
@@ -233,15 +231,6 @@ pub fn agent_send_message(
     );
 
     let mut messages: Vec<LlmMessage> = Vec::new();
-    if let Some(system_prompt) = system_prompt.clone() {
-        if !system_prompt.trim().is_empty() {
-            messages.push(LlmMessage {
-                role: "system".to_string(),
-                content: json!(system_prompt),
-            });
-        }
-    }
-
     for message in history {
         let content = if message.id == user_message_id {
             build_user_content(&message.content, &attachments)
@@ -257,7 +246,7 @@ pub fn agent_send_message(
 
     let provider = provider.to_lowercase();
     let model = model.clone();
-    let stream_enabled = stream.unwrap_or(true);
+    let _stream_enabled = stream.unwrap_or(true);
 
     match provider.as_str() {
         "openai" | "anthropic" | "deepseek" => {
@@ -291,6 +280,8 @@ pub fn agent_send_message(
     let model_for_thread = model.clone();
     let main_branch_id_for_thread = main_branch.id.clone();
     let user_message_id_for_thread = user_message_id.clone();
+    let tool_registry_for_thread = tool_registry.inner().clone();
+    let approvals_for_thread = approvals.inner().clone();
 
     std::thread::spawn(move || {
         let stream_timestamp = Utc::now().timestamp_millis();
@@ -304,227 +295,147 @@ pub fn agent_send_message(
             stream_timestamp,
         ));
 
-        let mut accumulated = String::new();
-        let mut usage: Option<Usage> = None;
         let client = Client::new();
-
-        let result = match provider.as_str() {
-            "openai" => {
-                let api_key = ModelOperations::get_api_key(&db, "openai")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                if api_key.is_empty() {
-                    Err("Missing OpenAI API key".to_string())
-                } else if !stream_enabled {
-                    complete_openai(
-                        &client,
-                        &api_key,
-                        "https://api.openai.com/v1/chat/completions",
-                        &model_for_thread,
-                        &messages,
-                    )
-                } else {
-                    stream_openai(
-                        &client,
-                        &api_key,
-                        "https://api.openai.com/v1/chat/completions",
-                        &model_for_thread,
-                        &messages,
-                        |chunk| {
-                            accumulated.push_str(chunk);
-                            let timestamp_ms = Utc::now().timestamp_millis();
-                            bus.publish(AgentEvent::new_with_timestamp(
-                                EVENT_ASSISTANT_STREAM_CHUNK,
-                                json!({
-                                    "conversation_id": conversation_id_for_thread,
-                                    "message_id": assistant_message_id_for_thread,
-                                    "chunk": chunk,
-                                    "timestamp_ms": timestamp_ms
-                                }),
-                                timestamp_ms,
-                            ));
-                        },
-                    )
-                }
-            }
-            "anthropic" => {
-                let api_key = ModelOperations::get_api_key(&db, "anthropic")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                if api_key.is_empty() {
-                    Err("Missing Anthropic API key".to_string())
-                } else if !stream_enabled {
-                    complete_anthropic(
-                        &client,
-                        &api_key,
-                        &model_for_thread,
-                        system_prompt_for_thread.as_deref(),
-                        &messages,
-                    )
-                } else {
-                    stream_anthropic(
-                        &client,
-                        &api_key,
-                        &model_for_thread,
-                        system_prompt_for_thread.as_deref(),
-                        &messages,
-                        |chunk| {
-                            accumulated.push_str(chunk);
-                            let timestamp_ms = Utc::now().timestamp_millis();
-                            bus.publish(AgentEvent::new_with_timestamp(
-                                EVENT_ASSISTANT_STREAM_CHUNK,
-                                json!({
-                                    "conversation_id": conversation_id_for_thread,
-                                    "message_id": assistant_message_id_for_thread,
-                                    "chunk": chunk,
-                                    "timestamp_ms": timestamp_ms
-                                }),
-                                timestamp_ms,
-                            ));
-                        },
-                    )
-                }
-            }
-            "deepseek" => {
-                let api_key = ModelOperations::get_api_key(&db, "deepseek")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                if api_key.is_empty() {
-                    Err("Missing DeepSeek API key".to_string())
-                } else if !stream_enabled {
-                    complete_openai_compatible(
-                        &client,
-                        Some(&api_key),
-                        "https://api.deepseek.com/chat/completions",
-                        &model_for_thread,
-                        &messages,
-                    )
-                } else {
-                    stream_openai_compatible(
-                        &client,
-                        Some(&api_key),
-                        "https://api.deepseek.com/chat/completions",
-                        &model_for_thread,
-                        &messages,
-                        None,
-                        |chunk| {
-                            accumulated.push_str(chunk);
-                            let timestamp_ms = Utc::now().timestamp_millis();
-                            bus.publish(AgentEvent::new_with_timestamp(
-                                EVENT_ASSISTANT_STREAM_CHUNK,
-                                json!({
-                                    "conversation_id": conversation_id_for_thread,
-                                    "message_id": assistant_message_id_for_thread,
-                                    "chunk": chunk,
-                                    "timestamp_ms": timestamp_ms
-                                }),
-                                timestamp_ms,
-                            ));
-                        },
-                    )
-                }
-            }
-            "custom" | "ollama" => {
-                let (url, api_key) = match custom_backend_id {
-                    Some(ref id) => {
-                        let backend = CustomBackendOperations::get_custom_backend_by_id(&db, id)
-                            .ok()
-                            .flatten();
-                        if let Some(backend) = backend {
-                            (backend.url, backend.api_key)
-                        } else {
-                            (String::new(), None)
-                        }
-                    }
-                    None => {
-                        if provider == "ollama" {
-                            ("http://localhost:11434/v1/chat/completions".to_string(), None)
-                        } else {
-                            (String::new(), None)
-                        }
-                    }
-                };
-
-                if url.is_empty() {
-                    Err("Missing custom backend URL".to_string())
-                } else if !stream_enabled {
-                    complete_openai_compatible(
-                        &client,
-                        api_key.as_deref(),
-                        &url,
-                        &model_for_thread,
-                        &messages,
-                    )
-                } else {
-                    let response_result = {
-                        let mut request = client
-                            .post(&url)
-                            .header("Content-Type", "application/json")
-                            .json(&json!({
-                                "model": model_for_thread,
-                                "messages": messages,
-                                "stream": true
-                            }));
-                        if let Some(key) = api_key.as_deref() {
-                            request = request.bearer_auth(key);
-                        }
-                        request.send().map_err(|e| e.to_string())
-                    };
-
-                    match response_result {
-                        Ok(response) => {
-                            let is_sse = response
-                                .headers()
-                                .get("content-type")
-                                .and_then(|v| v.to_str().ok())
-                                .map(|v| v.contains("text/event-stream"))
-                                .unwrap_or(false);
-
-                            if is_sse {
-                                stream_openai_compatible_response(response, |chunk| {
-                                    accumulated.push_str(chunk);
-                                    let timestamp_ms = Utc::now().timestamp_millis();
-                                    bus.publish(AgentEvent::new_with_timestamp(
-                                        EVENT_ASSISTANT_STREAM_CHUNK,
-                                        json!({
-                                            "conversation_id": conversation_id_for_thread,
-                                            "message_id": assistant_message_id_for_thread,
-                                            "chunk": chunk,
-                                            "timestamp_ms": timestamp_ms
-                                        }),
-                                        timestamp_ms,
-                                    ));
-                                })
-                            } else {
-                                stream_ndjson(response, |chunk| {
-                                    accumulated.push_str(chunk);
-                                    let timestamp_ms = Utc::now().timestamp_millis();
-                                    bus.publish(AgentEvent::new_with_timestamp(
-                                        EVENT_ASSISTANT_STREAM_CHUNK,
-                                        json!({
-                                            "conversation_id": conversation_id_for_thread,
-                                            "message_id": assistant_message_id_for_thread,
-                                            "chunk": chunk,
-                                            "timestamp_ms": timestamp_ms
-                                        }),
-                                        timestamp_ms,
-                                    ));
-                                })
-                            }
-                        }
-                        Err(err) => Err(err),
-                    }
-                }
-            }
-            _ => Err(format!("Unsupported provider: {provider}")),
+        let mut accumulated = String::new();
+        let mut usage_accumulator = Usage {
+            prompt_tokens: 0,
+            completion_tokens: 0,
         };
 
-        if let Ok(stream_result) = result {
-            accumulated = stream_result.content;
-            usage = stream_result.usage;
+        let custom_backend_config = if provider == "custom" {
+            custom_backend_id
+                .as_ref()
+                .and_then(|id| CustomBackendOperations::get_custom_backend_by_id(&db, id).ok())
+                .flatten()
+                .map(|backend| (backend.url, backend.api_key))
+        } else if provider == "ollama" {
+            Some(("http://localhost:11434/v1/chat/completions".to_string(), None))
+        } else {
+            None
+        };
+
+        let tool_loop = ToolLoopRunner::new(
+            Arc::new(tool_registry_for_thread),
+            Arc::new(approvals_for_thread),
+            bus.clone(),
+            ToolLoopConfig::default(),
+        );
+        let tool_context = ToolLoopContext {
+            conversation_id: Some(conversation_id_for_thread.clone()),
+            message_id: Some(assistant_message_id_for_thread.clone()),
+        };
+        let messages_for_usage = messages.clone();
+
+        let mut call_llm = |messages: &[LlmMessage], system_prompt: Option<&str>| {
+            let prepared_messages = if provider == "anthropic" {
+                messages.to_vec()
+            } else {
+                let mut prepared = messages.to_vec();
+                if let Some(system_prompt) = system_prompt {
+                    if !system_prompt.trim().is_empty() {
+                        prepared.insert(
+                            0,
+                            LlmMessage {
+                                role: "system".to_string(),
+                                content: json!(system_prompt),
+                            },
+                        );
+                    }
+                }
+                prepared
+            };
+
+            let result = match provider.as_str() {
+                "openai" => {
+                    let api_key = ModelOperations::get_api_key(&db, "openai")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if api_key.is_empty() {
+                        Err("Missing OpenAI API key".to_string())
+                    } else {
+                        complete_openai(
+                            &client,
+                            &api_key,
+                            "https://api.openai.com/v1/chat/completions",
+                            &model_for_thread,
+                            &prepared_messages,
+                        )
+                    }
+                }
+                "anthropic" => {
+                    let api_key = ModelOperations::get_api_key(&db, "anthropic")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if api_key.is_empty() {
+                        Err("Missing Anthropic API key".to_string())
+                    } else {
+                        complete_anthropic(
+                            &client,
+                            &api_key,
+                            &model_for_thread,
+                            system_prompt,
+                            &prepared_messages,
+                        )
+                    }
+                }
+                "deepseek" => {
+                    let api_key = ModelOperations::get_api_key(&db, "deepseek")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if api_key.is_empty() {
+                        Err("Missing DeepSeek API key".to_string())
+                    } else {
+                        complete_openai_compatible(
+                            &client,
+                            Some(&api_key),
+                            "https://api.deepseek.com/chat/completions",
+                            &model_for_thread,
+                            &prepared_messages,
+                        )
+                    }
+                }
+                "custom" | "ollama" => {
+                    let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
+                    if url.is_empty() {
+                        Err("Missing custom backend URL".to_string())
+                    } else {
+                        complete_openai_compatible(
+                            &client,
+                            api_key.as_deref(),
+                            &url,
+                            &model_for_thread,
+                            &prepared_messages,
+                        )
+                    }
+                }
+                _ => Err(format!("Unsupported provider: {provider}")),
+            };
+
+            if let Ok(ref stream_result) = result {
+                if let Some(usage) = stream_result.usage.as_ref() {
+                    usage_accumulator.prompt_tokens += usage.prompt_tokens;
+                    usage_accumulator.completion_tokens += usage.completion_tokens;
+                } else {
+                    usage_accumulator.prompt_tokens += estimate_prompt_tokens(&prepared_messages);
+                    usage_accumulator.completion_tokens += estimate_tokens(&stream_result.content);
+                }
+            }
+
+            result
+        };
+
+        let tool_loop_result = tool_loop.run(
+            messages,
+            system_prompt_for_thread.as_deref(),
+            &mut call_llm,
+            tool_context,
+        );
+
+        if let Ok(loop_result) = tool_loop_result {
+            accumulated = loop_result.content;
         }
 
         if !accumulated.is_empty() {
@@ -560,18 +471,16 @@ pub fn agent_send_message(
             ));
         }
 
-        let usage = usage
-            .filter(|u| u.prompt_tokens > 0 || u.completion_tokens > 0)
-            .or_else(|| {
-                if accumulated.is_empty() {
-                    None
-                } else {
-                    Some(Usage {
-                        prompt_tokens: estimate_prompt_tokens(&messages),
-                        completion_tokens: estimate_tokens(&accumulated),
-                    })
-                }
-            });
+        let usage = if usage_accumulator.prompt_tokens > 0 || usage_accumulator.completion_tokens > 0 {
+            Some(usage_accumulator)
+        } else if accumulated.is_empty() {
+            None
+        } else {
+            Some(Usage {
+                prompt_tokens: estimate_prompt_tokens(&messages_for_usage),
+                completion_tokens: estimate_tokens(&accumulated),
+            })
+        };
 
         if let Some(usage) = usage {
             let estimated_cost = calculate_estimated_cost(
