@@ -127,6 +127,23 @@
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         {#snippet child({ props })}
+          <a href="/settings" {...props}>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-9 w-9 rounded-lg transition-all {currentPath === '/settings' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
+              aria-label="Settings"
+            >
+              <Settings2 class="size-5" />
+            </Button>
+          </a>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Tooltip.Content side="right" sideOffset={5}>Settings</Tooltip.Content>
+    </Tooltip.Root>
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        {#snippet child({ props })}
           <Button
             {...props}
             variant="ghost"
