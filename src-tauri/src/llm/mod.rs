@@ -20,6 +20,7 @@ pub struct LlmMessage {
     pub content: Value,
 }
 
+#[allow(dead_code)]
 pub fn stream_openai(
     client: &Client,
     api_key: &str,
@@ -179,6 +180,7 @@ pub fn complete_anthropic(
     Ok(StreamResult { content, usage })
 }
 
+#[allow(dead_code)]
 pub fn stream_openai_compatible(
     client: &Client,
     api_key: Option<&str>,
@@ -241,6 +243,7 @@ pub fn stream_openai_compatible(
     })
 }
 
+#[allow(dead_code)]
 pub fn stream_openai_compatible_response(
     response: reqwest::blocking::Response,
     mut on_chunk: impl FnMut(&str),
@@ -283,6 +286,7 @@ pub fn stream_openai_compatible_response(
     })
 }
 
+#[allow(dead_code)]
 pub fn stream_anthropic(
     client: &Client,
     api_key: &str,
@@ -401,6 +405,7 @@ fn value_to_string(value: &Value) -> String {
     value.to_string()
 }
 
+#[allow(dead_code)]
 pub fn stream_ndjson(
     response: reqwest::blocking::Response,
     mut on_chunk: impl FnMut(&str),
@@ -427,6 +432,7 @@ pub fn stream_ndjson(
     Ok(StreamResult { content, usage: None })
 }
 
+#[allow(dead_code)]
 fn parse_sse_response(
     response: reqwest::blocking::Response,
     mut on_value: impl FnMut(Value) -> Option<Usage>,

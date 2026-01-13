@@ -47,6 +47,7 @@ pub type ToolHandler =
 pub type ToolPreviewHandler =
     dyn Fn(Value, ToolExecutionContext) -> Result<Value, ToolError> + Send + Sync;
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ToolExecutionContext {
     pub tool_name: String,
@@ -138,6 +139,7 @@ impl Default for ToolLoopConfig {
 #[derive(Clone, Debug)]
 pub struct ToolLoopResponse {
     pub content: String,
+    #[allow(dead_code)]
     pub iterations: usize,
 }
 
@@ -482,4 +484,123 @@ fn extract_json(raw: &str) -> String {
     }
 
     json_lines.join("\n").trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{register_file_tools, register_search_tool, ToolExecutionContext, ToolRegistry};
+    use crate::db::{Db, PreferenceOperations};
+    use serde_json::json;
+    use std::fs;
+    use std::process::Command;
+    use uuid::Uuid;
+
+    fn setup_db(vault_root: &str) -> Db {
+        let db_path = std::env::temp_dir().join(format!("vault-tools-{}.db", Uuid::new_v4()));
+        let mut db = Db::new(db_path.to_str().unwrap()).expect("db init failed");
+        db.run_migrations().expect("db migrations failed");
+        db.set_preference("plugins.files.vault_root", vault_root)
+            .expect("set vault root failed");
+        db
+    }
+
+    fn call_tool(registry: &ToolRegistry, name: &str, args: serde_json::Value) -> serde_json::Value {
+        let tool = registry.get(name).expect("missing tool");
+        let ctx = ToolExecutionContext {
+            tool_name: name.to_string(),
+            execution_id: "test-execution".to_string(),
+            conversation_id: None,
+            message_id: None,
+            iteration: 1,
+        };
+        (tool.handler)(args, ctx).expect("tool execution failed")
+    }
+
+    fn rg_available() -> bool {
+        Command::new("rg")
+            .arg("--version")
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn vault_file_tools_and_search_smoke() {
+        let vault_root = std::env::temp_dir().join(format!("vault-root-{}", Uuid::new_v4()));
+        fs::create_dir_all(&vault_root).expect("vault root create failed");
+
+        let db = setup_db(vault_root.to_str().unwrap());
+        let mut registry = ToolRegistry::new();
+        register_file_tools(&mut registry, db.clone()).expect("file tools registration failed");
+        register_search_tool(&mut registry, db.clone()).expect("search tool registration failed");
+
+        call_tool(
+            &registry,
+            "files.create",
+            json!({
+                "path": "notes/test.md",
+                "content": "Hello\nWorld\n"
+            }),
+        );
+
+        let read = call_tool(
+            &registry,
+            "files.read",
+            json!({ "path": "notes/test.md" }),
+        );
+        assert!(read
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .contains("World"));
+
+        call_tool(
+            &registry,
+            "files.append",
+            json!({
+                "path": "notes/test.md",
+                "content": "Append\n"
+            }),
+        );
+
+        call_tool(
+            &registry,
+            "files.edit",
+            json!({
+                "path": "notes/test.md",
+                "start_line": 2,
+                "end_line": 2,
+                "content": "Universe"
+            }),
+        );
+
+        let read_updated = call_tool(
+            &registry,
+            "files.read",
+            json!({ "path": "notes/test.md" }),
+        );
+        let updated_content = read_updated
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(updated_content.contains("Universe"));
+        assert!(updated_content.contains("Append"));
+
+        if rg_available() {
+            let search = call_tool(
+                &registry,
+                "search.rg",
+                json!({
+                    "query": "Universe",
+                    "max_results": 5
+                }),
+            );
+            let results_len = search
+                .get("results")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.len())
+                .unwrap_or(0);
+            assert!(results_len > 0);
+        }
+    }
 }
