@@ -29,6 +29,7 @@ import type {
   UpdateCustomBackendInput
 } from '$lib/types/customBackend';
 import type { Attachment, FileMetadata } from '$lib/types/attachments';
+import type { ToolMetadata } from '$lib/types/tools';
 
 interface CacheEntry<T> {
   data: T;
@@ -326,6 +327,12 @@ class BackendClient {
 
   async setPreference(key: string, value: string): Promise<void> {
     return invoke('set_preference', { key, value });
+  }
+
+  // ============ Tools ============
+
+  async listTools(): Promise<ToolMetadata[]> {
+    return invoke('list_tools', {});
   }
 
   // ============ Files ============

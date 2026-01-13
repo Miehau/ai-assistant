@@ -18,6 +18,7 @@ import type {
 } from './types/message';
 import type { Attachment, FileMetadata } from './types/attachments';
 import type { AgentEvent, AgentEventType } from './types/events';
+import type { ToolMetadata } from './types/tools';
 
 // Re-export everything
 export type {
@@ -28,7 +29,8 @@ export type {
     DBMessage,
     BaseMessage,
     AgentEvent,
-    AgentEventType
+    AgentEventType,
+    ToolMetadata
 };
 
 // Re-export with original names

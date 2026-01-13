@@ -124,6 +124,7 @@ fn main() {
             commands::set_preference,
             // Tool approval commands
             commands::resolve_tool_execution_approval,
+            commands::list_tools,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
