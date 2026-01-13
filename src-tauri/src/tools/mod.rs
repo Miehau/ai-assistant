@@ -42,20 +42,12 @@ pub struct ToolDefinition {
     pub preview: Option<Arc<ToolPreviewHandler>>,
 }
 
-pub type ToolHandler =
-    dyn Fn(Value, ToolExecutionContext) -> Result<Value, ToolError> + Send + Sync;
+pub type ToolHandler = dyn Fn(Value, ToolExecutionContext) -> Result<Value, ToolError> + Send + Sync;
 pub type ToolPreviewHandler =
     dyn Fn(Value, ToolExecutionContext) -> Result<Value, ToolError> + Send + Sync;
 
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub struct ToolExecutionContext {
-    pub tool_name: String,
-    pub execution_id: String,
-    pub conversation_id: Option<String>,
-    pub message_id: Option<String>,
-    pub iteration: usize,
-}
+#[derive(Clone, Debug, Default)]
+pub struct ToolExecutionContext;
 
 #[derive(Clone, Debug)]
 pub struct ToolError {
@@ -139,8 +131,6 @@ impl Default for ToolLoopConfig {
 #[derive(Clone, Debug)]
 pub struct ToolLoopResponse {
     pub content: String,
-    #[allow(dead_code)]
-    pub iterations: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -244,10 +234,7 @@ impl ToolLoopRunner {
 
             match action {
                 AgentAction::DirectResponse { content } => {
-                    return Ok(ToolLoopResponse {
-                        content,
-                        iterations: iteration + 1,
-                    });
+                    return Ok(ToolLoopResponse { content });
                 }
                 AgentAction::ToolCalls { calls } => {
                     if calls.is_empty() {
@@ -267,13 +254,7 @@ impl ToolLoopRunner {
                             .map_err(|err| err.message)?;
 
                         let execution_id = Uuid::new_v4().to_string();
-                        let tool_context = ToolExecutionContext {
-                            tool_name: tool_name.clone(),
-                            execution_id: execution_id.clone(),
-                            conversation_id: base_conversation_id.clone(),
-                            message_id: base_message_id.clone(),
-                            iteration: iteration + 1,
-                        };
+                        let tool_context = ToolExecutionContext;
 
                         if tool.metadata.requires_approval {
                             let preview = match tool.preview.as_ref() {
@@ -506,13 +487,7 @@ mod tests {
 
     fn call_tool(registry: &ToolRegistry, name: &str, args: serde_json::Value) -> serde_json::Value {
         let tool = registry.get(name).expect("missing tool");
-        let ctx = ToolExecutionContext {
-            tool_name: name.to_string(),
-            execution_id: "test-execution".to_string(),
-            conversation_id: None,
-            message_id: None,
-            iteration: 1,
-        };
+        let ctx = ToolExecutionContext;
         (tool.handler)(args, ctx).expect("tool execution failed")
     }
 
