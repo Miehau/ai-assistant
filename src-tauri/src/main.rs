@@ -38,7 +38,9 @@ fn main() {
                 }
             });
             
-            let tool_registry = tools::ToolRegistry::new();
+            let mut tool_registry = tools::ToolRegistry::new();
+            tools::register_file_tools(&mut tool_registry, db.clone())
+                .expect("Failed to register file tools");
             let approval_store = tools::ApprovalStore::new();
 
             app.manage(db);
