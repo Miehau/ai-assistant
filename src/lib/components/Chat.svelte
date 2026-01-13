@@ -16,12 +16,14 @@
     sendMessage,
     clearConversation,
     startAgentEvents,
-    pendingToolApprovals
+    pendingToolApprovals,
+    toolActivity
   } from "$lib/stores/chat";
   import ChatMessages from "./chat/ChatMessages.svelte";
   import ChatInput from "./chat/ChatInput.svelte";
   import ChatControls from "./chat/ChatControls.svelte";
   import ToolApprovalQueue from "./chat/ToolApprovalQueue.svelte";
+  import ToolActivityPanel from "./chat/ToolActivityPanel.svelte";
   import { conversationService, currentConversation } from "$lib/services/conversation";
   import { chatService } from "$lib/services/chat";
   import { fade } from "svelte/transition";
@@ -89,6 +91,7 @@
       </div>
     {/if}
     <ToolApprovalQueue approvals={$pendingToolApprovals} />
+    <ToolActivityPanel activities={$toolActivity} />
     <ChatMessages messages={$messages} bind:chatContainer bind:autoScroll conversationId={$currentConversation?.id} />
   </div>
 

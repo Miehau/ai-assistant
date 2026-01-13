@@ -13,7 +13,11 @@ import { branchStore } from '$lib/stores/branches';
 import { startAgentEventBridge } from '$lib/services/eventBridge';
 import { AGENT_EVENT_TYPES } from '$lib/types/events';
 import type { AgentEvent, Attachment } from '$lib/types';
-import type { ToolExecutionProposedPayload } from '$lib/types/events';
+import type {
+  ToolExecutionCompletedPayload,
+  ToolExecutionProposedPayload,
+  ToolExecutionStartedPayload,
+} from '$lib/types/events';
 import { currentConversationUsage } from '$lib/stores/tokenUsage';
 
 // Extended model type with backend name for UI display
@@ -33,6 +37,7 @@ export const attachments = writable<any[]>([]);
 export const currentMessage = writable<string>('');
 export const isFirstMessage = writable<boolean>(true);
 export const pendingToolApprovals = writable<ToolExecutionProposedPayload[]>([]);
+export const toolActivity = writable<ToolActivityEntry[]>([]);
 
 // Streaming-specific stores for smooth updates without array reactivity
 export const streamingMessage = writable<string>('');
@@ -50,6 +55,17 @@ let stopAgentEventBridge: (() => void) | null = null;
 let streamingAssistantMessageId: string | null = null;
 let streamingChunkBuffer = '';
 let streamingFlushPending = false;
+const TOOL_ACTIVITY_LIMIT = 8;
+
+export type ToolActivityEntry = {
+  execution_id: string;
+  tool_name: string;
+  status: 'running' | 'completed' | 'failed';
+  started_at: number;
+  completed_at?: number;
+  duration_ms?: number;
+  error?: string;
+};
 
 function flushStreamingChunks() {
   if (!streamingChunkBuffer) {
@@ -135,6 +151,7 @@ export async function startAgentEvents() {
       streamingAssistantMessageId = null;
       isLoading.set(false);
       pendingToolApprovals.set([]);
+      toolActivity.set([]);
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_STARTED) {
@@ -202,6 +219,65 @@ export async function startAgentEvents() {
       streamingChunkBuffer = '';
       streamingFlushPending = false;
       isLoading.set(false);
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_STARTED) {
+      const payload = event.payload as ToolExecutionStartedPayload;
+      const currentConversation = conversationService.getCurrentConversation();
+      if (payload.conversation_id && currentConversation?.id !== payload.conversation_id) {
+        return;
+      }
+
+      toolActivity.update((entries) => {
+        const next = entries.filter((entry) => entry.execution_id !== payload.execution_id);
+        next.unshift({
+          execution_id: payload.execution_id,
+          tool_name: payload.tool_name,
+          status: 'running',
+          started_at: payload.timestamp_ms,
+        });
+        return next.slice(0, TOOL_ACTIVITY_LIMIT);
+      });
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_COMPLETED) {
+      const payload = event.payload as ToolExecutionCompletedPayload;
+      const currentConversation = conversationService.getCurrentConversation();
+      if (payload.conversation_id && currentConversation?.id !== payload.conversation_id) {
+        return;
+      }
+
+      toolActivity.update((entries) => {
+        const status = payload.success ? 'completed' : 'failed';
+        let updated = false;
+        const next = entries.map((entry) => {
+          if (entry.execution_id !== payload.execution_id) {
+            return entry;
+          }
+          updated = true;
+          return {
+            ...entry,
+            status,
+            completed_at: payload.timestamp_ms,
+            duration_ms: payload.duration_ms,
+            error: payload.error,
+          };
+        });
+
+        if (!updated) {
+          next.unshift({
+            execution_id: payload.execution_id,
+            tool_name: payload.tool_name,
+            status,
+            started_at: payload.timestamp_ms,
+            completed_at: payload.timestamp_ms,
+            duration_ms: payload.duration_ms,
+            error: payload.error,
+          });
+        }
+
+        return next.slice(0, TOOL_ACTIVITY_LIMIT);
+      });
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED) {
@@ -472,6 +548,7 @@ export function clearConversation() {
   isStreaming.set(false);
   streamingMessage.set('');
   pendingToolApprovals.set([]);
+  toolActivity.set([]);
   conversationService.setCurrentConversation(null);
   // Reset branch context
   chatService.resetBranchContext();
