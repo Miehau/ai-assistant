@@ -13,6 +13,7 @@ import { branchStore } from '$lib/stores/branches';
 import { startAgentEventBridge } from '$lib/services/eventBridge';
 import { AGENT_EVENT_TYPES } from '$lib/types/events';
 import type { AgentEvent, Attachment } from '$lib/types';
+import type { ToolExecutionProposedPayload } from '$lib/types/events';
 import { currentConversationUsage } from '$lib/stores/tokenUsage';
 
 // Extended model type with backend name for UI display
@@ -31,6 +32,7 @@ export const isLoading = writable<boolean>(false);
 export const attachments = writable<any[]>([]);
 export const currentMessage = writable<string>('');
 export const isFirstMessage = writable<boolean>(true);
+export const pendingToolApprovals = writable<ToolExecutionProposedPayload[]>([]);
 
 // Streaming-specific stores for smooth updates without array reactivity
 export const streamingMessage = writable<string>('');
@@ -132,6 +134,7 @@ export async function startAgentEvents() {
       streamingMessage.set('');
       streamingAssistantMessageId = null;
       isLoading.set(false);
+      pendingToolApprovals.set([]);
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_STARTED) {
@@ -199,6 +202,29 @@ export async function startAgentEvents() {
       streamingChunkBuffer = '';
       streamingFlushPending = false;
       isLoading.set(false);
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED) {
+      const currentConversation = conversationService.getCurrentConversation();
+      if (event.payload.conversation_id && currentConversation?.id !== event.payload.conversation_id) {
+        return;
+      }
+
+      pendingToolApprovals.update((approvals) => {
+        if (approvals.some((entry) => entry.approval_id === event.payload.approval_id)) {
+          return approvals;
+        }
+        return [...approvals, event.payload];
+      });
+    }
+
+    if (
+      event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_APPROVED ||
+      event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_DENIED
+    ) {
+      pendingToolApprovals.update((approvals) =>
+        approvals.filter((entry) => entry.approval_id !== event.payload.approval_id)
+      );
     }
   });
 }
@@ -445,11 +471,23 @@ export function clearConversation() {
   // Clear streaming state
   isStreaming.set(false);
   streamingMessage.set('');
+  pendingToolApprovals.set([]);
   conversationService.setCurrentConversation(null);
   // Reset branch context
   chatService.resetBranchContext();
   // Reset branch store
   branchStore.reset();
+}
+
+export async function resolveToolApproval(approvalId: string, approved: boolean) {
+  try {
+    await invoke('resolve_tool_execution_approval', {
+      approval_id: approvalId,
+      approved,
+    });
+  } catch (error) {
+    console.error('Failed to resolve tool approval:', error);
+  }
 }
 
 // Initialize streaming setting

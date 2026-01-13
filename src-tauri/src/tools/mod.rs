@@ -18,7 +18,11 @@ use std::time::Instant;
 use uuid::Uuid;
 
 mod files;
+mod search;
+mod vault;
+
 pub use files::register_file_tools;
+pub use search::register_search_tool;
 
 pub const DEFAULT_MAX_ITERATIONS: usize = 4;
 

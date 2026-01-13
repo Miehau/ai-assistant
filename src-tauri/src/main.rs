@@ -41,6 +41,8 @@ fn main() {
             let mut tool_registry = tools::ToolRegistry::new();
             tools::register_file_tools(&mut tool_registry, db.clone())
                 .expect("Failed to register file tools");
+            tools::register_search_tool(&mut tool_registry, db.clone())
+                .expect("Failed to register search tool");
             let approval_store = tools::ApprovalStore::new();
 
             app.manage(db);

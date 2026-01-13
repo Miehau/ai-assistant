@@ -15,11 +15,13 @@
     toggleStreaming,
     sendMessage,
     clearConversation,
-    startAgentEvents
+    startAgentEvents,
+    pendingToolApprovals
   } from "$lib/stores/chat";
   import ChatMessages from "./chat/ChatMessages.svelte";
   import ChatInput from "./chat/ChatInput.svelte";
   import ChatControls from "./chat/ChatControls.svelte";
+  import ToolApprovalQueue from "./chat/ToolApprovalQueue.svelte";
   import { conversationService, currentConversation } from "$lib/services/conversation";
   import { chatService } from "$lib/services/chat";
   import { fade } from "svelte/transition";
@@ -86,6 +88,7 @@
         </div>
       </div>
     {/if}
+    <ToolApprovalQueue approvals={$pendingToolApprovals} />
     <ChatMessages messages={$messages} bind:chatContainer bind:autoScroll conversationId={$currentConversation?.id} />
   </div>
 
