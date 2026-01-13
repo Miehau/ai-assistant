@@ -98,21 +98,6 @@
       "currency": "USD",
       "note": "GPT-3.5 Turbo pricing"
     },
-    "dall-e-3": {
-      "standard_1024": 0.040,
-      "standard_1792": 0.080,
-      "hd_1024": 0.080,
-      "hd_1792": 0.120,
-      "per": "image",
-      "currency": "USD",
-      "note": "DALL-E 3 pricing per image"
-    },
-    "whisper-1": {
-      "audio": 0.006,
-      "per": "minute",
-      "currency": "USD",
-      "note": "Whisper audio transcription pricing"
-    },
     "claude-sonnet-4-5-20250929": {
       "input": 0.003,
       "output": 0.015,
@@ -153,10 +138,8 @@
     "lastUpdated": "2025-11-11",
     "source": "OpenAI and Anthropic official pricing as of November 2025",
     "notes": [
-      "Prices are per 1000 tokens unless otherwise specified",
-      "Pricing for unreleased models (GPT-5, GPT-4.1) are estimates",
-      "DALL-E 3 prices vary by resolution and quality",
-      "Whisper pricing is per minute of audio"
+      "Prices are per 1000 tokens",
+      "Pricing for unreleased models (GPT-5, GPT-4.1) are estimates"
     ]
   }
 }
