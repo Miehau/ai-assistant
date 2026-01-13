@@ -25,6 +25,7 @@
         "open": true
       },
       "dialog": {
+        "open": true,
         "confirm": true,
         "message": true
       }
