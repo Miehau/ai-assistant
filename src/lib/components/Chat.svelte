@@ -17,7 +17,12 @@
     clearConversation,
     startAgentEvents,
     pendingToolApprovals,
-    toolActivity
+    toolActivity,
+    agentPhase,
+    agentPlan,
+    agentPlanSteps,
+    pendingStepApprovals,
+    pendingHumanInput
   } from "$lib/stores/chat";
   import ChatMessages from "./chat/ChatMessages.svelte";
   import ChatInput from "./chat/ChatInput.svelte";
@@ -92,6 +97,11 @@
       messages={$messages}
       toolApprovals={$pendingToolApprovals}
       toolActivity={$toolActivity}
+      agentPhase={$agentPhase}
+      agentPlan={$agentPlan}
+      agentPlanSteps={$agentPlanSteps}
+      stepApprovals={$pendingStepApprovals}
+      humanInputPrompt={$pendingHumanInput}
       isLoading={$isLoading}
       bind:chatContainer
       bind:autoScroll

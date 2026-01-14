@@ -8,6 +8,7 @@
   import { Button } from "$lib/components/ui/button";
 
   const VAULT_ROOT_KEY = "plugins.files.vault_root";
+  const PHASED_AGENT_KEY = "agent.use_phased_loop";
 
   let vaultRoot = $state("");
   let savedRoot = $state<string | null>(null);
@@ -18,10 +19,15 @@
   let tools = $state<ToolMetadata[]>([]);
   let toolsLoading = $state(true);
   let toolsError = $state("");
+  let phasedAgentEnabled = $state(false);
+  let phasedAgentSaving = $state(false);
+  let phasedAgentMessage = $state("");
+  let phasedAgentTone = $state<"idle" | "success" | "error">("idle");
 
   onMount(() => {
     loadVaultRoot();
     loadTools();
+    loadPhasedAgentPreference();
   });
 
   async function loadVaultRoot() {
@@ -85,6 +91,33 @@
     }
   }
 
+  async function loadPhasedAgentPreference() {
+    try {
+      const value = await backend.getPreference(PHASED_AGENT_KEY);
+      phasedAgentEnabled = value === "true";
+    } catch (error) {
+      phasedAgentMessage = "Failed to load agent setting.";
+      phasedAgentTone = "error";
+    }
+  }
+
+  async function savePhasedAgentPreference(enabled: boolean) {
+    phasedAgentSaving = true;
+    phasedAgentMessage = "";
+    phasedAgentTone = "idle";
+    try {
+      await backend.setPreference(PHASED_AGENT_KEY, enabled ? "true" : "false");
+      phasedAgentEnabled = enabled;
+      phasedAgentMessage = "Agent setting saved.";
+      phasedAgentTone = "success";
+    } catch (error) {
+      phasedAgentMessage = "Failed to save agent setting.";
+      phasedAgentTone = "error";
+    } finally {
+      phasedAgentSaving = false;
+    }
+  }
+
   function formatSchema(schema: ToolMetadata["args_schema"] | ToolMetadata["result_schema"]): string {
     try {
       return JSON.stringify(schema, null, 2);
@@ -139,6 +172,43 @@
           </p>
         {/if}
       </div>
+    </Card.Content>
+  </Card.Root>
+
+  <div class="mt-8 mb-4">
+    <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Agent</p>
+    <h3 class="text-xl font-semibold">Phased agent loop</h3>
+    <p class="text-sm text-muted-foreground/70 mt-1">
+      Enable the phased planning flow with step approvals and recovery.
+    </p>
+  </div>
+
+  <Card.Root class="surface-card border-0 overflow-hidden">
+    <Card.Content class="p-6 space-y-3">
+      <label class="flex items-center gap-3 text-sm">
+        <input
+          type="checkbox"
+          checked={phasedAgentEnabled}
+          disabled={phasedAgentSaving}
+          on:change={(event) =>
+            savePhasedAgentPreference((event.target as HTMLInputElement).checked)
+          }
+        />
+        <span class="text-foreground">Use phased agent loop</span>
+      </label>
+      {#if phasedAgentMessage}
+        <p
+          class={`text-xs ${
+            phasedAgentTone === "success"
+              ? "text-emerald-400"
+              : phasedAgentTone === "error"
+                ? "text-red-400"
+                : "text-muted-foreground"
+          }`}
+        >
+          {phasedAgentMessage}
+        </p>
+      {/if}
     </Card.Content>
   </Card.Root>
 

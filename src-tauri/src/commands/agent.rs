@@ -7,9 +7,11 @@ use crate::db::{
     MessageOperations,
     MessageToolExecutionInput,
     ModelOperations,
+    PreferenceOperations,
     SaveMessageUsageInput,
     UsageOperations,
 };
+use crate::agent::{HumanInputStore, PhaseOrchestrator, StepApprovalDecision, StepApprovalStore};
 use crate::events::{
     AgentEvent,
     EventBus,
@@ -164,6 +166,8 @@ pub fn agent_send_message(
     event_bus: State<'_, EventBus>,
     tool_registry: State<'_, ToolRegistry>,
     approvals: State<'_, ApprovalStore>,
+    step_approvals: State<'_, StepApprovalStore>,
+    human_input: State<'_, HumanInputStore>,
     payload: AgentSendMessagePayload,
 ) -> Result<AgentSendMessageResult, String> {
     let AgentSendMessagePayload {
@@ -248,6 +252,10 @@ pub fn agent_send_message(
     let provider = provider.to_lowercase();
     let model = model.clone();
     let _stream_enabled = stream.unwrap_or(true);
+    let use_phased_loop = PreferenceOperations::get_preference(&*state, "agent.use_phased_loop")
+        .map_err(|e| e.to_string())?
+        .map(|value| value == "true")
+        .unwrap_or(false);
 
     match provider.as_str() {
         "openai" | "anthropic" | "deepseek" => {
@@ -283,6 +291,9 @@ pub fn agent_send_message(
     let user_message_id_for_thread = user_message_id.clone();
     let tool_registry_for_thread = tool_registry.inner().clone();
     let approvals_for_thread = approvals.inner().clone();
+    let step_approvals_for_thread = step_approvals.inner().clone();
+    let human_input_for_thread = human_input.inner().clone();
+    let use_phased_loop_for_thread = use_phased_loop;
 
     std::thread::spawn(move || {
         let stream_timestamp = Utc::now().timestamp_millis();
@@ -315,143 +326,297 @@ pub fn agent_send_message(
             None
         };
 
-        let tool_loop = ToolLoopRunner::new(
-            Arc::new(tool_registry_for_thread),
-            Arc::new(approvals_for_thread),
-            bus.clone(),
-            ToolLoopConfig::default(),
-        );
-        let tool_context = ToolLoopContext {
-            conversation_id: Some(conversation_id_for_thread.clone()),
-            message_id: Some(assistant_message_id_for_thread.clone()),
-        };
         let messages_for_usage = messages.clone();
 
-        let mut call_llm = |messages: &[LlmMessage], system_prompt: Option<&str>| {
-            let prepared_messages = if provider == "anthropic" {
-                messages.to_vec()
-            } else {
-                let mut prepared = messages.to_vec();
-                if let Some(system_prompt) = system_prompt {
-                    if !system_prompt.trim().is_empty() {
-                        prepared.insert(
-                            0,
-                            LlmMessage {
-                                role: "system".to_string(),
-                                content: json!(system_prompt),
-                            },
-                        );
-                    }
-                }
-                prepared
-            };
-
-            let result = match provider.as_str() {
-                "openai" => {
-                    let api_key = ModelOperations::get_api_key(&db, "openai")
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default();
-                    if api_key.is_empty() {
-                        Err("Missing OpenAI API key".to_string())
-                    } else {
-                        complete_openai(
-                            &client,
-                            &api_key,
-                            "https://api.openai.com/v1/chat/completions",
-                            &model_for_thread,
-                            &prepared_messages,
-                        )
-                    }
-                }
-                "anthropic" => {
-                    let api_key = ModelOperations::get_api_key(&db, "anthropic")
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default();
-                    if api_key.is_empty() {
-                        Err("Missing Anthropic API key".to_string())
-                    } else {
-                        complete_anthropic(
-                            &client,
-                            &api_key,
-                            &model_for_thread,
-                            system_prompt,
-                            &prepared_messages,
-                        )
-                    }
-                }
-                "deepseek" => {
-                    let api_key = ModelOperations::get_api_key(&db, "deepseek")
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default();
-                    if api_key.is_empty() {
-                        Err("Missing DeepSeek API key".to_string())
-                    } else {
-                        complete_openai_compatible(
-                            &client,
-                            Some(&api_key),
-                            "https://api.deepseek.com/chat/completions",
-                            &model_for_thread,
-                            &prepared_messages,
-                        )
-                    }
-                }
-                "custom" | "ollama" => {
-                    let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
-                    if url.is_empty() {
-                        Err("Missing custom backend URL".to_string())
-                    } else {
-                        complete_openai_compatible(
-                            &client,
-                            api_key.as_deref(),
-                            &url,
-                            &model_for_thread,
-                            &prepared_messages,
-                        )
-                    }
-                }
-                _ => Err(format!("Unsupported provider: {provider}")),
-            };
-
-            if let Ok(ref stream_result) = result {
-                if let Some(usage) = stream_result.usage.as_ref() {
-                    usage_accumulator.prompt_tokens += usage.prompt_tokens;
-                    usage_accumulator.completion_tokens += usage.completion_tokens;
+        let mut tool_execution_inputs: Vec<MessageToolExecutionInput> = Vec::new();
+        if use_phased_loop_for_thread {
+            let mut call_llm = |messages: &[LlmMessage], system_prompt: Option<&str>| {
+                let prepared_messages = if provider == "anthropic" {
+                    messages.to_vec()
                 } else {
-                    usage_accumulator.prompt_tokens += estimate_prompt_tokens(&prepared_messages);
-                    usage_accumulator.completion_tokens += estimate_tokens(&stream_result.content);
+                    let mut prepared = messages.to_vec();
+                    if let Some(system_prompt) = system_prompt {
+                        if !system_prompt.trim().is_empty() {
+                            prepared.insert(
+                                0,
+                                LlmMessage {
+                                    role: "system".to_string(),
+                                    content: json!(system_prompt),
+                                },
+                            );
+                        }
+                    }
+                    prepared
+                };
+
+                let result = match provider.as_str() {
+                    "openai" => {
+                        let api_key = ModelOperations::get_api_key(&db, "openai")
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        if api_key.is_empty() {
+                            Err("Missing OpenAI API key".to_string())
+                        } else {
+                            complete_openai(
+                                &client,
+                                &api_key,
+                                "https://api.openai.com/v1/chat/completions",
+                                &model_for_thread,
+                                &prepared_messages,
+                            )
+                        }
+                    }
+                    "anthropic" => {
+                        let api_key = ModelOperations::get_api_key(&db, "anthropic")
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        if api_key.is_empty() {
+                            Err("Missing Anthropic API key".to_string())
+                        } else {
+                            complete_anthropic(
+                                &client,
+                                &api_key,
+                                &model_for_thread,
+                                system_prompt,
+                                &prepared_messages,
+                            )
+                        }
+                    }
+                    "deepseek" => {
+                        let api_key = ModelOperations::get_api_key(&db, "deepseek")
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        if api_key.is_empty() {
+                            Err("Missing DeepSeek API key".to_string())
+                        } else {
+                            complete_openai_compatible(
+                                &client,
+                                Some(&api_key),
+                                "https://api.deepseek.com/chat/completions",
+                                &model_for_thread,
+                                &prepared_messages,
+                            )
+                        }
+                    }
+                    "custom" | "ollama" => {
+                        let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
+                        if url.is_empty() {
+                            Err("Missing custom backend URL".to_string())
+                        } else {
+                            complete_openai_compatible(
+                                &client,
+                                api_key.as_deref(),
+                                &url,
+                                &model_for_thread,
+                                &prepared_messages,
+                            )
+                        }
+                    }
+                    _ => Err(format!("Unsupported provider: {provider}")),
+                };
+
+                if let Ok(ref stream_result) = result {
+                    if let Some(usage) = stream_result.usage.as_ref() {
+                        usage_accumulator.prompt_tokens += usage.prompt_tokens;
+                        usage_accumulator.completion_tokens += usage.completion_tokens;
+                    } else {
+                        usage_accumulator.prompt_tokens += estimate_prompt_tokens(&prepared_messages);
+                        usage_accumulator.completion_tokens += estimate_tokens(&stream_result.content);
+                    }
+                }
+
+                result
+            };
+
+            let mut orchestrator = match PhaseOrchestrator::new(
+                db.clone(),
+                bus.clone(),
+                tool_registry_for_thread.clone(),
+                step_approvals_for_thread.clone(),
+                human_input_for_thread.clone(),
+                messages,
+                system_prompt_for_thread.clone(),
+                conversation_id_for_thread.clone(),
+                user_message_id_for_thread.clone(),
+                assistant_message_id_for_thread.clone(),
+            ) {
+                Ok(orchestrator) => Some(orchestrator),
+                Err(error) => {
+                    accumulated = format!("Agent setup error: {}", error);
+                    None
+                }
+            };
+
+            if let Some(ref mut orchestrator) = orchestrator {
+                match orchestrator.run(&content, &mut call_llm) {
+                    Ok(response) => {
+                        accumulated = response;
+                    }
+                    Err(error) => {
+                        accumulated = format!("Agent error: {}", error);
+                    }
+                }
+                tool_execution_inputs = orchestrator.take_tool_executions();
+            }
+        } else {
+            let mut call_llm = |messages: &[LlmMessage], system_prompt: Option<&str>| {
+                let prepared_messages = if provider == "anthropic" {
+                    messages.to_vec()
+                } else {
+                    let mut prepared = messages.to_vec();
+                    if let Some(system_prompt) = system_prompt {
+                        if !system_prompt.trim().is_empty() {
+                            prepared.insert(
+                                0,
+                                LlmMessage {
+                                    role: "system".to_string(),
+                                    content: json!(system_prompt),
+                                },
+                            );
+                        }
+                    }
+                    prepared
+                };
+
+                let result = match provider.as_str() {
+                    "openai" => {
+                        let api_key = ModelOperations::get_api_key(&db, "openai")
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        if api_key.is_empty() {
+                            Err("Missing OpenAI API key".to_string())
+                        } else {
+                            complete_openai(
+                                &client,
+                                &api_key,
+                                "https://api.openai.com/v1/chat/completions",
+                                &model_for_thread,
+                                &prepared_messages,
+                            )
+                        }
+                    }
+                    "anthropic" => {
+                        let api_key = ModelOperations::get_api_key(&db, "anthropic")
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        if api_key.is_empty() {
+                            Err("Missing Anthropic API key".to_string())
+                        } else {
+                            complete_anthropic(
+                                &client,
+                                &api_key,
+                                &model_for_thread,
+                                system_prompt,
+                                &prepared_messages,
+                            )
+                        }
+                    }
+                    "deepseek" => {
+                        let api_key = ModelOperations::get_api_key(&db, "deepseek")
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        if api_key.is_empty() {
+                            Err("Missing DeepSeek API key".to_string())
+                        } else {
+                            complete_openai_compatible(
+                                &client,
+                                Some(&api_key),
+                                "https://api.deepseek.com/chat/completions",
+                                &model_for_thread,
+                                &prepared_messages,
+                            )
+                        }
+                    }
+                    "custom" | "ollama" => {
+                        let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
+                        if url.is_empty() {
+                            Err("Missing custom backend URL".to_string())
+                        } else {
+                            complete_openai_compatible(
+                                &client,
+                                api_key.as_deref(),
+                                &url,
+                                &model_for_thread,
+                                &prepared_messages,
+                            )
+                        }
+                    }
+                    _ => Err(format!("Unsupported provider: {provider}")),
+                };
+
+                if let Ok(ref stream_result) = result {
+                    if let Some(usage) = stream_result.usage.as_ref() {
+                        usage_accumulator.prompt_tokens += usage.prompt_tokens;
+                        usage_accumulator.completion_tokens += usage.completion_tokens;
+                    } else {
+                        usage_accumulator.prompt_tokens += estimate_prompt_tokens(&prepared_messages);
+                        usage_accumulator.completion_tokens += estimate_tokens(&stream_result.content);
+                    }
+                }
+
+                result
+            };
+
+            let tool_loop = ToolLoopRunner::new(
+                Arc::new(tool_registry_for_thread),
+                Arc::new(approvals_for_thread),
+                bus.clone(),
+                ToolLoopConfig::default(),
+            );
+            let tool_context = ToolLoopContext {
+                conversation_id: Some(conversation_id_for_thread.clone()),
+                message_id: Some(assistant_message_id_for_thread.clone()),
+            };
+
+            let tool_loop_result = tool_loop.run(
+                messages,
+                system_prompt_for_thread.as_deref(),
+                &mut call_llm,
+                tool_context,
+            );
+
+            let mut tool_loop_error: Option<String> = None;
+            match tool_loop_result {
+                Ok(loop_result) => {
+                    accumulated = loop_result.content;
+                    if accumulated.trim().is_empty() && loop_result.tool_executions.is_empty() {
+                        tool_loop_error = Some("Model returned an empty response.".to_string());
+                    }
+                    tool_execution_inputs = loop_result
+                        .tool_executions
+                        .into_iter()
+                        .map(|execution| MessageToolExecutionInput {
+                            id: execution.execution_id,
+                            message_id: assistant_message_id_for_thread.clone(),
+                            tool_name: execution.tool_name,
+                            parameters: execution.args,
+                            result: execution.result.unwrap_or_else(|| json!(null)),
+                            success: execution.success,
+                            duration_ms: execution.duration_ms,
+                            timestamp_ms: execution.timestamp_ms,
+                            error: execution.error,
+                            iteration_number: execution.iteration as i64,
+                        })
+                        .collect();
+                }
+                Err(error) => {
+                    tool_loop_error = Some(error);
                 }
             }
 
-            result
-        };
-
-        let tool_loop_result = tool_loop.run(
-            messages,
-            system_prompt_for_thread.as_deref(),
-            &mut call_llm,
-            tool_context,
-        );
-
-        let mut tool_executions = Vec::new();
-        let mut tool_loop_error: Option<String> = None;
-        match tool_loop_result {
-            Ok(loop_result) => {
-                accumulated = loop_result.content;
-                tool_executions = loop_result.tool_executions;
-                if accumulated.trim().is_empty() && tool_executions.is_empty() {
-                    tool_loop_error = Some("Model returned an empty response.".to_string());
-                }
-            }
-            Err(error) => {
-                tool_loop_error = Some(error);
+            if let Some(error) = tool_loop_error {
+                accumulated = format!("Tool loop error: {}", error);
             }
         }
 
-        if let Some(error) = tool_loop_error {
-            accumulated = format!("Tool loop error: {}", error);
+        if accumulated.trim().is_empty() && !tool_execution_inputs.is_empty() {
+            accumulated = "Tool results available below.".to_string();
         }
 
         if !accumulated.is_empty() {
@@ -464,19 +629,7 @@ pub fn agent_send_message(
                 Some(assistant_message_id_for_thread.clone()),
             );
 
-            for execution in tool_executions {
-                let input = MessageToolExecutionInput {
-                    id: execution.execution_id,
-                    message_id: assistant_message_id_for_thread.clone(),
-                    tool_name: execution.tool_name,
-                    parameters: execution.args,
-                    result: execution.result.unwrap_or_else(|| json!(null)),
-                    success: execution.success,
-                    duration_ms: execution.duration_ms,
-                    timestamp_ms: execution.timestamp_ms,
-                    error: execution.error,
-                    iteration_number: execution.iteration as i64,
-                };
+            for input in tool_execution_inputs {
                 let _ = MessageOperations::save_tool_execution(&db, input);
             }
 
@@ -582,6 +735,32 @@ pub fn agent_send_message(
         user_message_id,
         assistant_message_id,
     })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn resolve_step_approval(
+    approvals: State<'_, StepApprovalStore>,
+    approval_id: String,
+    decision: String,
+    feedback: Option<String>,
+) -> Result<(), String> {
+    let decision = match decision.as_str() {
+        "approved" => StepApprovalDecision::Approved,
+        "skipped" => StepApprovalDecision::Skipped,
+        "modified" => StepApprovalDecision::Modified { feedback },
+        "denied" => StepApprovalDecision::Denied { feedback },
+        _ => return Err("Invalid step approval decision".to_string()),
+    };
+    approvals.resolve(&approval_id, decision)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn agent_submit_human_input(
+    human_input: State<'_, HumanInputStore>,
+    request_id: String,
+    content: String,
+) -> Result<(), String> {
+    human_input.resolve(&request_id, content)
 }
 
 #[tauri::command(rename_all = "snake_case")]

@@ -7,6 +7,7 @@ mod files;
 mod events;
 mod llm;
 mod tools;
+mod agent;
 
 use db::Db;
 use events::EventBus;
@@ -44,12 +45,16 @@ fn main() {
             tools::register_search_tool(&mut tool_registry, db.clone())
                 .expect("Failed to register search tool");
             let approval_store = tools::ApprovalStore::new();
+            let step_approval_store = agent::StepApprovalStore::new();
+            let human_input_store = agent::HumanInputStore::new();
 
             app.manage(db);
             app.manage(file_manager);
             app.manage(event_bus);
             app.manage(tool_registry);
             app.manage(approval_store);
+            app.manage(step_approval_store);
+            app.manage(human_input_store);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -125,6 +130,8 @@ fn main() {
             // Tool approval commands
             commands::resolve_tool_execution_approval,
             commands::list_tools,
+            commands::resolve_step_approval,
+            commands::agent_submit_human_input,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

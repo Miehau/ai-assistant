@@ -14,6 +14,17 @@ pub const EVENT_TOOL_EXECUTION_COMPLETED: &str = "tool.execution.completed";
 pub const EVENT_TOOL_EXECUTION_PROPOSED: &str = "tool.execution.proposed";
 pub const EVENT_TOOL_EXECUTION_APPROVED: &str = "tool.execution.approved";
 pub const EVENT_TOOL_EXECUTION_DENIED: &str = "tool.execution.denied";
+pub const EVENT_AGENT_PHASE_CHANGED: &str = "agent.phase.changed";
+pub const EVENT_AGENT_TRIAGE_COMPLETED: &str = "agent.triage.completed";
+pub const EVENT_AGENT_PLAN_CREATED: &str = "agent.plan.created";
+pub const EVENT_AGENT_PLAN_ADJUSTED: &str = "agent.plan.adjusted";
+pub const EVENT_AGENT_STEP_PROPOSED: &str = "agent.step.proposed";
+pub const EVENT_AGENT_STEP_APPROVED: &str = "agent.step.approved";
+pub const EVENT_AGENT_STEP_STARTED: &str = "agent.step.started";
+pub const EVENT_AGENT_STEP_COMPLETED: &str = "agent.step.completed";
+pub const EVENT_AGENT_REFLECTION_COMPLETED: &str = "agent.reflection.completed";
+pub const EVENT_AGENT_NEEDS_HUMAN_INPUT: &str = "agent.needs_human_input";
+pub const EVENT_AGENT_COMPLETED: &str = "agent.completed";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentEvent {

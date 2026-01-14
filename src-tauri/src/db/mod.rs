@@ -30,6 +30,7 @@ impl UsageOperations for Db {}
 impl BranchOperations for Db {}
 impl CustomBackendOperations for Db {}
 impl PreferenceOperations for Db {}
+impl AgentSessionOperations for Db {}
 
 impl Db {
     pub fn new(db_path: &str) -> Result<Self, DatabaseError> {
@@ -274,6 +275,66 @@ impl Db {
                 value TEXT NOT NULL,
                 updated_at INTEGER DEFAULT (strftime('%s', 'now'))
             );"),
+            // Agent session orchestration tables
+            M::up("CREATE TABLE IF NOT EXISTS agent_sessions (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                phase_data TEXT NOT NULL,
+                config TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                completed_at INTEGER,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );"),
+            M::up("CREATE INDEX IF NOT EXISTS idx_agent_sessions_conversation ON agent_sessions(conversation_id);"),
+            M::up("CREATE TABLE IF NOT EXISTS agent_plans (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+                goal TEXT NOT NULL,
+                assumptions TEXT NOT NULL,
+                revision_number INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
+            );"),
+            M::up("CREATE INDEX IF NOT EXISTS idx_agent_plans_session ON agent_plans(session_id);"),
+            M::up("CREATE TABLE IF NOT EXISTS agent_plan_steps (
+                id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL REFERENCES agent_plans(id),
+                sequence INTEGER NOT NULL,
+                description TEXT NOT NULL,
+                expected_outcome TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                action_data TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (plan_id) REFERENCES agent_plans(id) ON DELETE CASCADE
+            );"),
+            M::up("CREATE INDEX IF NOT EXISTS idx_agent_plan_steps_plan ON agent_plan_steps(plan_id);"),
+            M::up("CREATE TABLE IF NOT EXISTS agent_step_results (
+                id TEXT PRIMARY KEY,
+                step_id TEXT NOT NULL REFERENCES agent_plan_steps(id),
+                session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+                success INTEGER NOT NULL,
+                output TEXT,
+                error TEXT,
+                duration_ms INTEGER NOT NULL,
+                completed_at INTEGER NOT NULL,
+                FOREIGN KEY (step_id) REFERENCES agent_plan_steps(id) ON DELETE CASCADE,
+                FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
+            );"),
+            M::up("CREATE INDEX IF NOT EXISTS idx_agent_step_results_step ON agent_step_results(step_id);"),
+            M::up("CREATE TABLE IF NOT EXISTS agent_step_approvals (
+                id TEXT PRIMARY KEY,
+                step_id TEXT NOT NULL REFERENCES agent_plan_steps(id),
+                decision TEXT NOT NULL,
+                auto_approve_reason TEXT,
+                feedback TEXT,
+                decided_at INTEGER NOT NULL,
+                FOREIGN KEY (step_id) REFERENCES agent_plan_steps(id) ON DELETE CASCADE
+            );"),
+            M::up("CREATE INDEX IF NOT EXISTS idx_agent_step_approvals_step ON agent_step_approvals(step_id);"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();

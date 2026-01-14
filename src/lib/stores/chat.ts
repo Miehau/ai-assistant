@@ -14,10 +14,18 @@ import { startAgentEventBridge } from '$lib/services/eventBridge';
 import { AGENT_EVENT_TYPES } from '$lib/types/events';
 import type { AgentEvent, Attachment, ToolCallRecord } from '$lib/types';
 import type {
+  AgentNeedsHumanInputPayload,
+  AgentPhaseChangedPayload,
+  AgentPlanPayload,
+  AgentStepApprovedPayload,
+  AgentStepCompletedPayload,
+  AgentStepProposedPayload,
+  AgentStepStartedPayload,
   ToolExecutionCompletedPayload,
   ToolExecutionProposedPayload,
   ToolExecutionStartedPayload,
 } from '$lib/types/events';
+import type { AgentPlan, AgentPlanStep, PhaseKind } from '$lib/types/agent';
 import { currentConversationUsage } from '$lib/stores/tokenUsage';
 
 // Extended model type with backend name for UI display
@@ -38,6 +46,11 @@ export const currentMessage = writable<string>('');
 export const isFirstMessage = writable<boolean>(true);
 export const pendingToolApprovals = writable<ToolExecutionProposedPayload[]>([]);
 export const toolActivity = writable<ToolActivityEntry[]>([]);
+export const agentPhase = writable<PhaseKind | null>(null);
+export const agentPlan = writable<AgentPlan | null>(null);
+export const agentPlanSteps = writable<AgentPlanStep[]>([]);
+export const pendingStepApprovals = writable<AgentStepProposedPayload[]>([]);
+export const pendingHumanInput = writable<AgentNeedsHumanInputPayload | null>(null);
 
 // Streaming-specific stores for smooth updates without array reactivity
 export const streamingMessage = writable<string>('');
@@ -103,6 +116,12 @@ function upsertToolCall(
     msgs.map((msg) =>
       msg.id === messageId ? { ...msg, tool_calls: getToolCallsForMessage(messageId) } : msg
     )
+  );
+}
+
+function updatePlanStep(stepId: string, updates: Partial<AgentPlanStep>) {
+  agentPlanSteps.update((steps) =>
+    steps.map((step) => (step.id === stepId ? { ...step, ...updates } : step))
   );
 }
 
@@ -196,6 +215,11 @@ export async function startAgentEvents() {
       pendingToolApprovals.set([]);
       toolActivity.set([]);
       toolCallsByMessageId.clear();
+      agentPhase.set(null);
+      agentPlan.set(null);
+      agentPlanSteps.set([]);
+      pendingStepApprovals.set([]);
+      pendingHumanInput.set(null);
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_STARTED) {
@@ -370,6 +394,75 @@ export async function startAgentEvents() {
       pendingToolApprovals.update((approvals) =>
         approvals.filter((entry) => entry.approval_id !== event.payload.approval_id)
       );
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.AGENT_PHASE_CHANGED) {
+      const payload = event.payload as AgentPhaseChangedPayload;
+      agentPhase.set(payload.phase as PhaseKind);
+    }
+
+    if (
+      event.event_type === AGENT_EVENT_TYPES.AGENT_PLAN_CREATED ||
+      event.event_type === AGENT_EVENT_TYPES.AGENT_PLAN_ADJUSTED
+    ) {
+      const payload = event.payload as AgentPlanPayload;
+      const plan = payload.plan as AgentPlan;
+      agentPlan.set(plan);
+      agentPlanSteps.set(plan?.steps || []);
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.AGENT_STEP_PROPOSED) {
+      const payload = event.payload as AgentStepProposedPayload;
+      const step = payload.step as AgentPlanStep;
+      if (step?.id) {
+        updatePlanStep(step.id, { status: step.status });
+      }
+      if (payload.approval_id) {
+        pendingStepApprovals.update((approvals) => {
+          if (approvals.some((entry) => entry.approval_id === payload.approval_id)) {
+            return approvals;
+          }
+          return [...approvals, payload];
+        });
+      }
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.AGENT_STEP_APPROVED) {
+      const payload = event.payload as AgentStepApprovedPayload;
+      if (payload.approval_id) {
+        pendingStepApprovals.update((approvals) =>
+          approvals.filter((entry) => entry.approval_id !== payload.approval_id)
+        );
+      }
+      const decision = payload.decision;
+      if (decision === 'skipped') {
+        updatePlanStep(payload.step_id, { status: 'Skipped' });
+      } else if (decision === 'approved' || decision === 'auto_approved') {
+        updatePlanStep(payload.step_id, { status: 'Approved' });
+      } else if (decision === 'denied') {
+        updatePlanStep(payload.step_id, { status: 'Failed' });
+      }
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.AGENT_STEP_STARTED) {
+      const payload = event.payload as AgentStepStartedPayload;
+      updatePlanStep(payload.step_id, { status: 'Executing' });
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.AGENT_STEP_COMPLETED) {
+      const payload = event.payload as AgentStepCompletedPayload;
+      updatePlanStep(payload.step_id, { status: payload.success ? 'Completed' : 'Failed' });
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.AGENT_NEEDS_HUMAN_INPUT) {
+      const payload = event.payload as AgentNeedsHumanInputPayload;
+      pendingHumanInput.set(payload);
+      isLoading.set(false);
+      isStreaming.set(false);
+      streamingMessage.set('');
+      streamingAssistantMessageId = null;
+      streamingChunkBuffer = '';
+      streamingFlushPending = false;
     }
   });
 }
@@ -619,6 +712,11 @@ export function clearConversation() {
   pendingToolApprovals.set([]);
   toolActivity.set([]);
   toolCallsByMessageId.clear();
+  agentPhase.set(null);
+  agentPlan.set(null);
+  agentPlanSteps.set([]);
+  pendingStepApprovals.set([]);
+  pendingHumanInput.set(null);
   conversationService.setCurrentConversation(null);
   // Reset branch context
   chatService.resetBranchContext();
@@ -634,6 +732,35 @@ export async function resolveToolApproval(approvalId: string, approved: boolean)
     });
   } catch (error) {
     console.error('Failed to resolve tool approval:', error);
+  }
+}
+
+export async function resolveStepApproval(
+  approvalId: string,
+  decision: 'approved' | 'skipped' | 'modified' | 'denied',
+  feedback?: string
+) {
+  try {
+    await invoke('resolve_step_approval', {
+      approval_id: approvalId,
+      decision,
+      feedback,
+    });
+  } catch (error) {
+    console.error('Failed to resolve step approval:', error);
+  }
+}
+
+export async function submitHumanInput(requestId: string, content: string) {
+  try {
+    await invoke('agent_submit_human_input', {
+      request_id: requestId,
+      content,
+    });
+    isLoading.set(true);
+    pendingHumanInput.set(null);
+  } catch (error) {
+    console.error('Failed to submit human input:', error);
   }
 }
 

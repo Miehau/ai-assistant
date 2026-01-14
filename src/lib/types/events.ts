@@ -12,6 +12,17 @@ export const AGENT_EVENT_TYPES = {
   TOOL_EXECUTION_PROPOSED: 'tool.execution.proposed',
   TOOL_EXECUTION_APPROVED: 'tool.execution.approved',
   TOOL_EXECUTION_DENIED: 'tool.execution.denied',
+  AGENT_PHASE_CHANGED: 'agent.phase.changed',
+  AGENT_TRIAGE_COMPLETED: 'agent.triage.completed',
+  AGENT_PLAN_CREATED: 'agent.plan.created',
+  AGENT_PLAN_ADJUSTED: 'agent.plan.adjusted',
+  AGENT_STEP_PROPOSED: 'agent.step.proposed',
+  AGENT_STEP_APPROVED: 'agent.step.approved',
+  AGENT_STEP_STARTED: 'agent.step.started',
+  AGENT_STEP_COMPLETED: 'agent.step.completed',
+  AGENT_REFLECTION_COMPLETED: 'agent.reflection.completed',
+  AGENT_NEEDS_HUMAN_INPUT: 'agent.needs_human_input',
+  AGENT_COMPLETED: 'agent.completed',
 } as const;
 
 export type AgentEventType = typeof AGENT_EVENT_TYPES[keyof typeof AGENT_EVENT_TYPES];
@@ -39,6 +50,17 @@ export type AgentEventPayloadMap = {
   'tool.execution.proposed': ToolExecutionProposedPayload;
   'tool.execution.approved': ToolExecutionDecisionPayload;
   'tool.execution.denied': ToolExecutionDecisionPayload;
+  'agent.phase.changed': AgentPhaseChangedPayload;
+  'agent.triage.completed': AgentTriageCompletedPayload;
+  'agent.plan.created': AgentPlanPayload;
+  'agent.plan.adjusted': AgentPlanPayload;
+  'agent.step.proposed': AgentStepProposedPayload;
+  'agent.step.approved': AgentStepApprovedPayload;
+  'agent.step.started': AgentStepStartedPayload;
+  'agent.step.completed': AgentStepCompletedPayload;
+  'agent.reflection.completed': AgentReflectionCompletedPayload;
+  'agent.needs_human_input': AgentNeedsHumanInputPayload;
+  'agent.completed': AgentCompletedPayload;
 };
 
 export interface EventAttachment {
@@ -145,6 +167,68 @@ export interface ToolExecutionCompletedPayload {
   conversation_id?: string;
   message_id?: string;
   timestamp_ms: number;
+}
+
+export interface AgentPhaseChangedPayload {
+  session_id: string;
+  phase: unknown;
+}
+
+export interface AgentTriageCompletedPayload {
+  session_id: string;
+  decision: string;
+  reasoning?: string | null;
+}
+
+export interface AgentPlanPayload {
+  session_id: string;
+  plan: unknown;
+}
+
+export interface AgentStepProposedPayload {
+  session_id: string;
+  step: unknown;
+  risk: string;
+  approval_id?: string | null;
+  preview?: unknown;
+}
+
+export interface AgentStepApprovedPayload {
+  session_id: string;
+  step_id: string;
+  decision: string;
+  approval_id?: string;
+  feedback?: string | null;
+}
+
+export interface AgentStepStartedPayload {
+  session_id: string;
+  step_id: string;
+}
+
+export interface AgentStepCompletedPayload {
+  session_id: string;
+  step_id: string;
+  success: boolean;
+  result?: unknown;
+  error?: string | null;
+}
+
+export interface AgentReflectionCompletedPayload {
+  session_id: string;
+  decision: string;
+  reason?: string | null;
+}
+
+export interface AgentNeedsHumanInputPayload {
+  session_id: string;
+  request_id: string;
+  question: string;
+}
+
+export interface AgentCompletedPayload {
+  session_id: string;
+  response: string;
 }
 
 export interface AgentEvent<T extends AgentEventType = AgentEventType> {
