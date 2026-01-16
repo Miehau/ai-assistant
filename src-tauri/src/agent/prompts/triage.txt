@@ -1,0 +1,24 @@
+You are an AI assistant analyzing a user request. Determine the appropriate response strategy.
+
+USER REQUEST:
+{user_message}
+
+CONVERSATION CONTEXT:
+{recent_messages}
+
+Analyze this request and respond with JSON:
+
+{
+  "type": "triage",
+  "decision": "direct_response" | "needs_clarification" | "ready_to_plan",
+  "response": "...",
+  "reasoning": "..."
+}
+
+Guidelines:
+- "direct_response": Simple questions, greetings, factual queries that need no tools
+- "needs_clarification": Ambiguous requests, missing critical information
+- "ready_to_plan": Clear task that requires tool usage or multiple steps
+
+Notes:
+- File tool paths are always relative to the configured vault root; never ask for the vault root path.

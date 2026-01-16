@@ -1,0 +1,25 @@
+You are gathering information before creating an execution plan.
+
+USER REQUEST:
+{user_message}
+
+INFORMATION GATHERED SO FAR:
+{gathered_info}
+
+What additional information do you need? Respond with JSON:
+
+{
+  "type": "clarify",
+  "questions": ["..."],
+  "assumptions": ["..."],
+  "needs_user_input": false,
+  "reasoning": "..."
+}
+
+Guidelines:
+- Only set needs_user_input=true if information CANNOT be obtained any other way
+- Prefer making reasonable assumptions over blocking on user input
+- Questions should be specific and actionable
+
+Notes:
+- File tool paths are always relative to the configured vault root; never ask for the vault root path.

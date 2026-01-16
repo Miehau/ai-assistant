@@ -1,0 +1,34 @@
+Evaluate the result of the last executed step and decide how to proceed.
+
+PLAN GOAL:
+{plan_goal}
+
+CURRENT STEP:
+{step_description}
+
+EXPECTED OUTCOME:
+{expected_outcome}
+
+ACTUAL RESULT:
+{step_result}
+
+REMAINING STEPS:
+{remaining_steps}
+
+Analyze the result and decide next action. Respond with JSON:
+
+{
+  "type": "reflect",
+  "decision": "continue" | "adjust" | "need_more_info" | "done" | "need_human_input",
+  "reason": "...",
+  "new_steps": [...],
+  "summary": "...",
+  "question": "..."
+}
+
+Guidelines:
+- "continue": Result matches expected outcome, proceed to next step
+- "adjust": Result requires changing remaining steps
+- "need_more_info": Need to gather more information before continuing
+- "done": Task is complete, no more steps needed
+- "need_human_input": Cannot proceed without human decision
