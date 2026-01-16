@@ -17,7 +17,6 @@
     clearConversation,
     startAgentEvents,
     pendingToolApprovals,
-    toolActivity,
     agentPhase,
     agentPlan,
     agentPlanSteps,
@@ -96,7 +95,6 @@
     <ChatMessages
       messages={$messages}
       toolApprovals={$pendingToolApprovals}
-      toolActivity={$toolActivity}
       agentPhase={$agentPhase}
       agentPlan={$agentPlan}
       agentPlanSteps={$agentPlanSteps}

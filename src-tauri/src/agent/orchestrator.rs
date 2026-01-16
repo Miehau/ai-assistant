@@ -34,7 +34,7 @@ use crate::events::{
     EVENT_AGENT_STEP_STARTED,
     EVENT_AGENT_TRIAGE_COMPLETED,
 };
-use crate::llm::{LlmMessage, StreamResult};
+use crate::llm::{json_schema_output_format, LlmMessage, StreamResult};
 use crate::tools::{ToolExecutionContext, ToolRegistry};
 use chrono::Utc;
 use serde::Deserialize;
@@ -104,7 +104,7 @@ impl PhaseOrchestrator {
 
     pub fn run<F>(&mut self, user_message: &str, call_llm: &mut F) -> Result<String, String>
     where
-        F: FnMut(&[LlmMessage], Option<&str>) -> Result<StreamResult, String>,
+        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         let mut turns = 0u32;
         self.publish_phase_change(self.session.phase.clone());
@@ -630,18 +630,18 @@ impl PhaseOrchestrator {
 
     fn call_triage<F>(&mut self, call_llm: &mut F, user_message: &str) -> Result<TriageResponse, String>
     where
-        F: FnMut(&[LlmMessage], Option<&str>) -> Result<StreamResult, String>,
+        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         let prompt = TRIAGE_PROMPT
             .replace("{user_message}", user_message)
             .replace("{recent_messages}", &self.render_history());
-        let response = self.call_llm_json(call_llm, &prompt)?;
+        let response = self.call_llm_json(call_llm, &prompt, Some(triage_output_format()))?;
         parse_triage_response(&response)
     }
 
     fn call_clarify<F>(&mut self, call_llm: &mut F, user_message: &str) -> Result<ClarifyResponse, String>
     where
-        F: FnMut(&[LlmMessage], Option<&str>) -> Result<StreamResult, String>,
+        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         let gathered = if self.session.gathered_info.is_empty() {
             "None".to_string()
@@ -656,7 +656,7 @@ impl PhaseOrchestrator {
         let prompt = CLARIFY_PROMPT
             .replace("{user_message}", user_message)
             .replace("{gathered_info}", &gathered);
-        let response = self.call_llm_json(call_llm, &prompt)?;
+        let response = self.call_llm_json(call_llm, &prompt, Some(clarify_output_format()))?;
         parse_clarify_response(&response)
     }
 
@@ -667,7 +667,7 @@ impl PhaseOrchestrator {
         revision: u32,
     ) -> Result<Plan, String>
     where
-        F: FnMut(&[LlmMessage], Option<&str>) -> Result<StreamResult, String>,
+        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         let tool_list = serde_json::to_string(&self.tool_registry.prompt_json())
             .unwrap_or_else(|_| "[]".to_string());
@@ -693,7 +693,7 @@ impl PhaseOrchestrator {
             } else {
                 base_prompt.clone()
             };
-            let response = self.call_llm_json(call_llm, &prompt)?;
+            let response = self.call_llm_json(call_llm, &prompt, Some(plan_output_format()))?;
             match parse_plan_response(&response, revision, &self.tool_registry) {
                 Ok(plan) => return Ok(plan),
                 Err(err) => last_error = Some(err),
@@ -713,7 +713,7 @@ impl PhaseOrchestrator {
         step: &PlanStep,
     ) -> Result<ReflectResponse, String>
     where
-        F: FnMut(&[LlmMessage], Option<&str>) -> Result<StreamResult, String>,
+        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         let remaining_steps = plan
             .steps
@@ -734,13 +734,13 @@ impl PhaseOrchestrator {
             .replace("{expected_outcome}", &step.expected_outcome)
             .replace("{step_result}", &step_result)
             .replace("{remaining_steps}", &remaining_steps);
-        let response = self.call_llm_json(call_llm, &prompt)?;
+        let response = self.call_llm_json(call_llm, &prompt, Some(reflect_output_format()))?;
         parse_reflect_response(&response)
     }
 
     fn call_think<F>(&mut self, call_llm: &mut F, prompt: &str) -> Result<String, String>
     where
-        F: FnMut(&[LlmMessage], Option<&str>) -> Result<StreamResult, String>,
+        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         let response = (call_llm)(
             &[LlmMessage {
@@ -748,13 +748,19 @@ impl PhaseOrchestrator {
                 content: json!(prompt),
             }],
             self.base_system_prompt.as_deref(),
+            None,
         )?;
         Ok(response.content)
     }
 
-    fn call_llm_json<F>(&mut self, call_llm: &mut F, prompt: &str) -> Result<Value, String>
+    fn call_llm_json<F>(
+        &mut self,
+        call_llm: &mut F,
+        prompt: &str,
+        output_format: Option<Value>,
+    ) -> Result<Value, String>
     where
-        F: FnMut(&[LlmMessage], Option<&str>) -> Result<StreamResult, String>,
+        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         let response = (call_llm)(
             &[LlmMessage {
@@ -762,6 +768,7 @@ impl PhaseOrchestrator {
                 content: json!(prompt),
             }],
             self.base_system_prompt.as_deref(),
+            output_format,
         )?;
         let json_text = extract_json(&response.content);
         serde_json::from_str(&json_text).map_err(|err| format!("Invalid JSON: {err}"))
@@ -979,7 +986,6 @@ struct PlanResponse {
 
 #[derive(Debug, Deserialize)]
 struct PlanStepInput {
-    id: Option<String>,
     description: String,
     expected_outcome: String,
     action: Value,
@@ -1021,7 +1027,7 @@ fn parse_plan_response(
         .map(|(sequence, step)| {
             let action = parse_step_action(step.action, registry)?;
             Ok(PlanStep {
-                id: step.id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+                id: Uuid::new_v4().to_string(),
                 sequence,
                 description: step.description,
                 expected_outcome: step.expected_outcome,
@@ -1080,6 +1086,131 @@ fn parse_step_action(value: Value, registry: &ToolRegistry) -> Result<StepAction
     }
 
     Err("Unknown step action".to_string())
+}
+
+fn plan_step_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "description": { "type": "string" },
+            "expected_outcome": { "type": "string" },
+            "action": {
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "tool": { "type": "string" },
+                            "args": {
+                                "type": "object",
+                                "additionalProperties": {}
+                            }
+                        },
+                        "required": ["tool", "args"],
+                        "additionalProperties": false
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "ask_user": { "type": "string" }
+                        },
+                        "required": ["ask_user"],
+                        "additionalProperties": false
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "question": { "type": "string" }
+                        },
+                        "required": ["question"],
+                        "additionalProperties": false
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "think": { "type": "string" }
+                        },
+                        "required": ["think"],
+                        "additionalProperties": false
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "prompt": { "type": "string" }
+                        },
+                        "required": ["prompt"],
+                        "additionalProperties": false
+                    }
+                ]
+            }
+        },
+        "required": ["description", "expected_outcome", "action"],
+        "additionalProperties": false
+    })
+}
+
+fn triage_output_format() -> Value {
+    json_schema_output_format(json!({
+        "type": "object",
+        "properties": {
+            "type": { "type": "string", "enum": ["triage"] },
+            "decision": {
+                "type": "string",
+                "enum": ["direct_response", "needs_clarification", "ready_to_plan"]
+            },
+            "response": { "type": ["string", "null"] },
+            "reasoning": { "type": ["string", "null"] }
+        },
+        "required": ["type", "decision"],
+        "additionalProperties": false
+    }))
+}
+
+fn clarify_output_format() -> Value {
+    json_schema_output_format(json!({
+        "type": "object",
+        "properties": {
+            "type": { "type": "string", "enum": ["clarify"] },
+            "questions": { "type": "array", "items": { "type": "string" } },
+            "assumptions": { "type": "array", "items": { "type": "string" } },
+            "needs_user_input": { "type": "boolean" },
+            "reasoning": { "type": ["string", "null"] }
+        },
+        "required": ["type", "questions", "assumptions", "needs_user_input"],
+        "additionalProperties": false
+    }))
+}
+
+fn plan_output_format() -> Value {
+    json_schema_output_format(json!({
+        "type": "object",
+        "properties": {
+            "type": { "type": "string", "enum": ["plan"] },
+            "goal": { "type": "string" },
+            "assumptions": { "type": "array", "items": { "type": "string" } },
+            "steps": { "type": "array", "items": plan_step_schema() }
+        },
+        "required": ["type", "goal", "assumptions", "steps"],
+        "additionalProperties": false
+    }))
+}
+
+fn reflect_output_format() -> Value {
+    json_schema_output_format(json!({
+        "type": "object",
+        "properties": {
+            "type": { "type": "string", "enum": ["reflect"] },
+            "decision": {
+                "type": "string",
+                "enum": ["continue", "adjust", "need_more_info", "done", "need_human_input"]
+            },
+            "reason": { "type": ["string", "null"] },
+            "new_steps": { "type": ["array", "null"], "items": plan_step_schema() },
+            "summary": { "type": ["string", "null"] },
+            "question": { "type": ["string", "null"] }
+        },
+        "required": ["type", "decision"],
+        "additionalProperties": false
+    }))
 }
 
 fn extract_json(raw: &str) -> String {

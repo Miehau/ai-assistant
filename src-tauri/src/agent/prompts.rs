@@ -19,6 +19,9 @@ Guidelines:
 - "direct_response": Simple questions, greetings, factual queries that need no tools
 - "needs_clarification": Ambiguous requests, missing critical information
 - "ready_to_plan": Clear task that requires tool usage or multiple steps
+
+Notes:
+- File tool paths are always relative to the configured vault root; never ask for the vault root path.
 "#;
 
 pub const CLARIFY_PROMPT: &str = r#"You are gathering information before creating an execution plan.
@@ -43,6 +46,9 @@ Guidelines:
 - Only set needs_user_input=true if information CANNOT be obtained any other way
 - Prefer making reasonable assumptions over blocking on user input
 - Questions should be specific and actionable
+
+Notes:
+- File tool paths are always relative to the configured vault root; never ask for the vault root path.
 "#;
 
 pub const PLAN_PROMPT: &str = r#"Create a step-by-step execution plan for the user's request.
@@ -64,7 +70,6 @@ Create a plan with concrete steps. Respond with JSON:
   "assumptions": ["..."],
   "steps": [
     {{
-      "id": "step-1",
       "description": "...",
       "expected_outcome": "...",
       "action": {{ "tool": "tool_name", "args": {{...}} }}
@@ -77,6 +82,10 @@ Guidelines:
 - Steps should be atomic and verifiable
 - Expected outcomes should be specific and measurable
 - Order steps logically (dependencies first)
+
+Notes:
+- File tool paths are always relative to the configured vault root; never ask for the vault root path.
+- If a file path is missing, ask for the relative path and filename only.
 "#;
 
 pub const REFLECT_PROMPT: &str = r#"Evaluate the result of the last executed step and decide how to proceed.

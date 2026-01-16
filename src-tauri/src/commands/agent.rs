@@ -24,6 +24,7 @@ use crate::events::{
 };
 use crate::llm::{
     complete_anthropic,
+    complete_anthropic_with_output_format,
     complete_openai,
     complete_openai_compatible,
     LlmMessage,
@@ -36,7 +37,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::State;
 use uuid::Uuid;
 
@@ -330,7 +331,8 @@ pub fn agent_send_message(
 
         let mut tool_execution_inputs: Vec<MessageToolExecutionInput> = Vec::new();
         if use_phased_loop_for_thread {
-            let mut call_llm = |messages: &[LlmMessage], system_prompt: Option<&str>| {
+            let mut call_llm =
+                |messages: &[LlmMessage], system_prompt: Option<&str>, output_format: Option<Value>| {
                 let prepared_messages = if provider == "anthropic" {
                     messages.to_vec()
                 } else {
@@ -375,12 +377,13 @@ pub fn agent_send_message(
                         if api_key.is_empty() {
                             Err("Missing Anthropic API key".to_string())
                         } else {
-                            complete_anthropic(
+                            complete_anthropic_with_output_format(
                                 &client,
                                 &api_key,
                                 &model_for_thread,
                                 system_prompt,
                                 &prepared_messages,
+                                output_format,
                             )
                         }
                     }
@@ -462,7 +465,8 @@ pub fn agent_send_message(
                 tool_execution_inputs = orchestrator.take_tool_executions();
             }
         } else {
-            let mut call_llm = |messages: &[LlmMessage], system_prompt: Option<&str>| {
+            let mut call_llm =
+                |messages: &[LlmMessage], system_prompt: Option<&str>, output_format: Option<Value>| {
                 let prepared_messages = if provider == "anthropic" {
                     messages.to_vec()
                 } else {
@@ -507,12 +511,13 @@ pub fn agent_send_message(
                         if api_key.is_empty() {
                             Err("Missing Anthropic API key".to_string())
                         } else {
-                            complete_anthropic(
+                            complete_anthropic_with_output_format(
                                 &client,
                                 &api_key,
                                 &model_for_thread,
                                 system_prompt,
                                 &prepared_messages,
+                                output_format,
                             )
                         }
                     }

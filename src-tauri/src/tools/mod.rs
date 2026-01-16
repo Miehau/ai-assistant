@@ -237,7 +237,7 @@ impl ToolLoopRunner {
         context: ToolLoopContext,
     ) -> Result<ToolLoopResponse, String>
     where
-        F: FnMut(&[LlmMessage], Option<&str>) -> Result<StreamResult, String>,
+        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         fn log_tool_event(label: &str, payload: &Value) {
             let payload_text = serde_json::to_string(payload).unwrap_or_else(|_| payload.to_string());
@@ -259,7 +259,7 @@ impl ToolLoopRunner {
         let mut plan_reminders = 0u8;
 
         while tool_iterations < self.config.max_iterations {
-            let response = call_llm(&messages, Some(&system_prompt))?;
+            let response = call_llm(&messages, Some(&system_prompt), None)?;
             let action = parse_agent_action(&response.content)?;
 
             match action {
@@ -334,7 +334,7 @@ impl ToolLoopRunner {
                             .get(&call.tool)
                             .ok_or_else(|| format!("Unknown tool: {}", call.tool))?;
                         let tool_name = tool.metadata.name.clone();
-                        let call_args = call.args.clone();
+                        let call_args = normalize_tool_args(call.args)?;
                         let call_key = serde_json::to_string(&json!({
                             "tool": tool_name,
                             "args": call_args
@@ -665,7 +665,8 @@ Valid response formats:\n\
 2) Plan:\n\
 {\"type\":\"plan\",\"steps\":[\"step 1\", \"step 2\", \"...\"]}\n\
 3) Tool call (single only):\n\
-{\"type\":\"tool_calls\",\"calls\":[{\"tool\":\"<name>\",\"args\":{...}}]}\n\n\
+{\"type\":\"tool_calls\",\"calls\":[{\"tool\":\"<name>\",\"args\":\"{...}\"}]}\n\
+Note: \"args\" MUST be a JSON string containing the tool arguments object.\n\n\
 STRICT JSON OUTPUT RULES:\n\
 - Output must be a single JSON object and nothing else.\n\
 - Do not include preambles, explanations, or trailing text.\n\
@@ -673,7 +674,7 @@ STRICT JSON OUTPUT RULES:\n\
 - Do not include comments.\n\
 - If you must choose, prefer {\"type\":\"direct_response\"}.\n\n\
 Example (valid):\n\
-{\"type\":\"tool_calls\",\"calls\":[{\"tool\":\"files.create\",\"args\":{\"path\":\"notes/todo.md\",\"content\":\"- Buy milk\\n\"}}]}\n\n\
+{\"type\":\"tool_calls\",\"calls\":[{\"tool\":\"files.create\",\"args\":\"{\\\"path\\\":\\\"notes/todo.md\\\",\\\"content\\\":\\\"- Buy milk\\\\n\\\"}\"}]}\n\n\
 Available tools:\n",
         );
         prompt.push_str(&tool_list_str);
@@ -718,6 +719,21 @@ fn extract_json(raw: &str) -> String {
     }
 
     json_lines.join("\n").trim().to_string()
+}
+
+fn normalize_tool_args(args: Value) -> Result<Value, String> {
+    match args {
+        Value::Null => Ok(json!({})),
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(json!({}));
+            }
+            serde_json::from_str(trimmed)
+                .map_err(|err| format!("Failed to parse tool args JSON string: {err}"))
+        }
+        other => Ok(other),
+    }
 }
 
 #[cfg(test)]

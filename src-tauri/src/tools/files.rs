@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub fn register_file_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
+    register_list_tool(registry, db.clone())?;
     register_read_tool(registry, db.clone(), "files.read", "Read file contents")?;
     register_read_tool(registry, db.clone(), "files.open", "Open file contents")?;
     register_write_tool(registry, db.clone(), "files.write", "Write/replace file contents")?;
@@ -17,6 +18,85 @@ pub fn register_file_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), St
     register_create_tool(registry, db.clone())?;
     register_edit_tool(registry, db)?;
     Ok(())
+}
+
+fn register_list_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
+    let metadata = ToolMetadata {
+        name: "files.list".to_string(),
+        description: "List files and folders under a vault path".to_string(),
+        args_schema: json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "depth": { "type": "integer", "minimum": 0 },
+                "include_files": { "type": "boolean" },
+                "include_dirs": { "type": "boolean" }
+            },
+            "additionalProperties": false
+        }),
+        result_schema: json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" },
+                            "type": { "type": "string", "enum": ["file", "dir"] }
+                        },
+                        "required": ["path", "type"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["path", "entries"],
+            "additionalProperties": false
+        }),
+        requires_approval: false,
+    };
+
+    let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(2) as usize;
+        let include_files = args.get("include_files").and_then(|v| v.as_bool()).unwrap_or(true);
+        let include_dirs = args.get("include_dirs").and_then(|v| v.as_bool()).unwrap_or(true);
+        let requested_path = optional_string_arg(&args, "path").unwrap_or_default();
+        let vault_root = crate::tools::vault::get_vault_root(&db)?;
+        let (root_path, display_path) = if requested_path.trim().is_empty() {
+            let display = crate::tools::vault::to_display_path(&vault_root, &vault_root);
+            let display = if display.is_empty() { ".".to_string() } else { display };
+            (vault_root.clone(), display)
+        } else {
+            let vault_path = resolve_vault_path(&db, &requested_path)?;
+            (vault_path.full_path, vault_path.display_path)
+        };
+
+        if !root_path.is_dir() {
+            return Err(ToolError::new("Path is not a directory"));
+        }
+
+        let mut entries: Vec<Value> = Vec::new();
+        list_dir(
+            &vault_root,
+            &root_path,
+            depth,
+            include_files,
+            include_dirs,
+            &mut entries,
+        )?;
+
+        Ok(json!({
+            "path": display_path,
+            "entries": entries
+        }))
+    });
+
+    registry.register(ToolDefinition {
+        metadata,
+        handler,
+        preview: None,
+    })
 }
 
 fn register_read_tool(
@@ -392,4 +472,39 @@ fn build_diff_preview(path: &str, before: &str, after: &str) -> Value {
         "after": after,
         "diff": diff
     })
+}
+
+fn list_dir(
+    base: &Path,
+    current: &Path,
+    depth: usize,
+    include_files: bool,
+    include_dirs: bool,
+    entries: &mut Vec<Value>,
+) -> Result<(), ToolError> {
+    if depth == 0 {
+        return Ok(());
+    }
+    let read_dir = fs::read_dir(current)
+        .map_err(|err| ToolError::new(format!("Failed to read directory: {err}")))?;
+    for entry in read_dir {
+        let entry = entry.map_err(|err| ToolError::new(format!("Failed to read entry: {err}")))?;
+        let path = entry.path();
+        let metadata = entry
+            .metadata()
+            .map_err(|err| ToolError::new(format!("Failed to inspect entry: {err}")))?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        let display_path = crate::tools::vault::to_display_path(base, &path);
+        if metadata.is_dir() {
+            if include_dirs {
+                entries.push(json!({ "path": display_path, "type": "dir" }));
+            }
+            list_dir(base, &path, depth.saturating_sub(1), include_files, include_dirs, entries)?;
+        } else if metadata.is_file() && include_files {
+            entries.push(json!({ "path": display_path, "type": "file" }));
+        }
+    }
+    Ok(())
 }

@@ -114,47 +114,43 @@ pub fn complete_anthropic(
     system: Option<&str>,
     messages: &[LlmMessage],
 ) -> Result<StreamResult, String> {
+    complete_anthropic_with_output_format(client, api_key, model, system, messages, None)
+}
+
+pub fn json_schema_output_format(schema: Value) -> Value {
+    serde_json::json!({
+        "type": "json_schema",
+        "schema": schema
+    })
+}
+
+pub fn complete_anthropic_with_output_format(
+    client: &Client,
+    api_key: &str,
+    model: &str,
+    system: Option<&str>,
+    messages: &[LlmMessage],
+    output_format: Option<Value>,
+) -> Result<StreamResult, String> {
     let formatted_messages = messages
         .iter()
         .filter(|m| m.role != "system")
         .map(|m| serde_json::json!({ "role": m.role, "content": value_to_string(&m.content) }))
         .collect::<Vec<_>>();
 
-    let output_format = serde_json::json!({
-        "type": "json_schema",
-        "schema": {
-            "type": "object",
-            "properties": {
-                "type": { "type": "string", "enum": ["direct_response", "plan", "tool_calls"] },
-                "content": { "type": "string" },
-                "steps": { "type": "array", "items": { "type": "string" } },
-                "calls": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "tool": { "type": "string" },
-                            "args": { "type": "object" }
-                        },
-                        "required": ["tool", "args"],
-                        "additionalProperties": false
-                    }
-                }
-            },
-            "required": ["type"],
-            "additionalProperties": false
-        }
-    });
-
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "system": system,
         "messages": formatted_messages,
         "stream": false,
         "max_tokens": 4096,
         "temperature": 0,
-        "output_format": output_format
     });
+
+    let has_output_format = output_format.is_some();
+    if let Some(output_format_value) = output_format {
+        body["output_format"] = output_format_value;
+    }
 
     let send_request = |payload: &Value, structured_outputs: bool| -> Result<Value, String> {
         let mut request = client
@@ -178,7 +174,7 @@ pub fn complete_anthropic(
         response.json().map_err(|e| e.to_string())
     };
 
-    let value = send_request(&body, true)?;
+    let value = send_request(&body, has_output_format)?;
 
     println!(
         "[llm] provider=anthropic model={} raw_response={}",
