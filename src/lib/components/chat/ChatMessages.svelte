@@ -8,11 +8,8 @@
   import { pageVisible } from "$lib/stores/visibility";
   import ToolApprovalQueue from "./ToolApprovalQueue.svelte";
   import AgentPlanPanel from "./AgentPlanPanel.svelte";
-  import StepApprovalQueue from "./StepApprovalQueue.svelte";
-  import HumanInputPrompt from "./HumanInputPrompt.svelte";
   import type { ToolExecutionProposedPayload } from "$lib/types/events";
   import type { AgentPlan, AgentPlanStep, PhaseKind } from "$lib/types/agent";
-  import type { AgentNeedsHumanInputPayload, AgentStepProposedPayload } from "$lib/types/events";
 
   export let messages: Message[] = [];
   export let chatContainer: HTMLElement | null = null;
@@ -22,8 +19,6 @@
   export let agentPhase: PhaseKind | null = null;
   export let agentPlan: AgentPlan | null = null;
   export let agentPlanSteps: AgentPlanStep[] = [];
-  export let stepApprovals: AgentStepProposedPayload[] = [];
-  export let humanInputPrompt: AgentNeedsHumanInputPayload | null = null;
   export let isLoading = false;
 
   let lastScrollHeight = 0;
@@ -221,24 +216,6 @@
       class="w-full message-container flex justify-start"
     >
       <ToolApprovalQueue approvals={toolApprovals} containerClass="w-full max-w-5xl min-w-0 flex-1" />
-    </div>
-  {/if}
-
-  {#if stepApprovals.length > 0}
-    <div
-      in:fly={{ y: 10, duration: 150, easing: backOut }}
-      class="w-full message-container flex justify-start"
-    >
-      <StepApprovalQueue approvals={stepApprovals} containerClass="w-full max-w-5xl min-w-0 flex-1" />
-    </div>
-  {/if}
-
-  {#if humanInputPrompt}
-    <div
-      in:fly={{ y: 10, duration: 150, easing: backOut }}
-      class="w-full message-container flex justify-start"
-    >
-      <HumanInputPrompt prompt={humanInputPrompt} containerClass="w-full max-w-5xl min-w-0 flex-1" />
     </div>
   {/if}
 

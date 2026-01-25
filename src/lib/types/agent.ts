@@ -24,6 +24,7 @@ export type AgentStepAction =
   | { ToolCall: { tool: string; args: Record<string, unknown> } }
   | { AskUser: { question: string } }
   | { Think: { prompt: string } }
+  | { Respond: { message: string } }
   | Record<string, unknown>;
 
 export type AgentStepStatus =

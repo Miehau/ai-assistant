@@ -26,7 +26,7 @@ pub fn get_vault_root(db: &Db) -> Result<PathBuf, ToolError> {
 
 pub fn resolve_vault_path(db: &Db, input: &str) -> Result<VaultPath, ToolError> {
     let root = get_vault_root(db)?;
-    let relative = normalize_relative_path(input)?;
+    let relative = normalize_vault_input(&root, input)?;
     reject_symlink_components(&root, &relative)?;
     let full_path = root.join(&relative);
     ensure_inside_root(&root, &full_path)?;
@@ -44,6 +44,30 @@ pub fn normalize_relative_path(input: &str) -> Result<PathBuf, ToolError> {
     let path = Path::new(input);
     if path.is_absolute() {
         return Err(ToolError::new("Absolute paths are not allowed"));
+    }
+    normalize_relative_path_buf(path)
+}
+
+fn normalize_vault_input(root: &Path, input: &str) -> Result<PathBuf, ToolError> {
+    if input.trim().is_empty() {
+        return Err(ToolError::new("Path is required"));
+    }
+    let path = Path::new(input);
+    if path.is_absolute() {
+        if !path.starts_with(root) {
+            return Err(ToolError::new("Path escapes vault root"));
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| ToolError::new("Path escapes vault root"))?;
+        return normalize_relative_path_buf(relative);
+    }
+    normalize_relative_path_buf(path)
+}
+
+fn normalize_relative_path_buf(path: &Path) -> Result<PathBuf, ToolError> {
+    if path.as_os_str().is_empty() {
+        return Err(ToolError::new("Path is required"));
     }
     for component in path.components() {
         match component {

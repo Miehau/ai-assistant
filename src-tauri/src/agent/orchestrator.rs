@@ -1,20 +1,13 @@
-use crate::agent::prompts::{CLARIFY_PROMPT, PLAN_PROMPT, REFLECT_PROMPT, TRIAGE_PROMPT};
-use crate::agent::risk::RiskClassifier;
-use crate::agent::stores::{HumanInputStore, StepApprovalDecision, StepApprovalStore};
+use crate::agent::prompts::CONTROLLER_PROMPT;
 use crate::db::{
     AgentConfig,
     AgentSession,
     AgentSessionOperations,
-    ApprovalDecision,
-    GatheredInfo,
-    InfoSource,
     MessageToolExecutionInput,
     PhaseKind,
     Plan,
     PlanStep,
-    ResumeTarget,
     StepAction,
-    StepApproval,
     StepResult,
     StepStatus,
     ToolExecutionRecord,
@@ -23,46 +16,47 @@ use crate::events::{
     AgentEvent,
     EventBus,
     EVENT_AGENT_COMPLETED,
-    EVENT_AGENT_NEEDS_HUMAN_INPUT,
     EVENT_AGENT_PHASE_CHANGED,
     EVENT_AGENT_PLAN_ADJUSTED,
     EVENT_AGENT_PLAN_CREATED,
-    EVENT_AGENT_REFLECTION_COMPLETED,
-    EVENT_AGENT_STEP_APPROVED,
     EVENT_AGENT_STEP_COMPLETED,
     EVENT_AGENT_STEP_PROPOSED,
     EVENT_AGENT_STEP_STARTED,
-    EVENT_AGENT_TRIAGE_COMPLETED,
+    EVENT_TOOL_EXECUTION_APPROVED,
+    EVENT_TOOL_EXECUTION_COMPLETED,
+    EVENT_TOOL_EXECUTION_DENIED,
+    EVENT_TOOL_EXECUTION_PROPOSED,
+    EVENT_TOOL_EXECUTION_STARTED,
 };
 use crate::llm::{json_schema_output_format, LlmMessage, StreamResult};
-use crate::tools::{ToolExecutionContext, ToolRegistry};
+use crate::tools::{ApprovalStore, ToolApprovalDecision, ToolExecutionContext, ToolRegistry};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::Instant;
 use uuid::Uuid;
 
-pub struct PhaseOrchestrator {
+pub struct DynamicController {
     db: crate::db::Db,
     event_bus: EventBus,
     tool_registry: ToolRegistry,
-    approvals: StepApprovalStore,
-    human_input: HumanInputStore,
-    risk: RiskClassifier,
+    approvals: ApprovalStore,
     session: AgentSession,
     messages: Vec<LlmMessage>,
     base_system_prompt: Option<String>,
     assistant_message_id: String,
     pending_tool_executions: Vec<MessageToolExecutionInput>,
+    last_step_result: Option<StepResult>,
+    tool_calls_made: u32,
 }
 
-impl PhaseOrchestrator {
+impl DynamicController {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db: crate::db::Db,
         event_bus: EventBus,
         tool_registry: ToolRegistry,
-        approvals: StepApprovalStore,
-        human_input: HumanInputStore,
+        approvals: ApprovalStore,
         messages: Vec<LlmMessage>,
         base_system_prompt: Option<String>,
         conversation_id: String,
@@ -74,7 +68,7 @@ impl PhaseOrchestrator {
             id: Uuid::new_v4().to_string(),
             conversation_id,
             message_id,
-            phase: PhaseKind::Triage,
+            phase: PhaseKind::Controller,
             plan: None,
             gathered_info: Vec::new(),
             step_results: Vec::new(),
@@ -92,13 +86,13 @@ impl PhaseOrchestrator {
             event_bus,
             tool_registry,
             approvals,
-            human_input,
-            risk: RiskClassifier::new(),
             session,
             messages,
             base_system_prompt,
             assistant_message_id,
             pending_tool_executions: Vec::new(),
+            last_step_result: None,
+            tool_calls_made: 0,
         })
     }
 
@@ -106,636 +100,430 @@ impl PhaseOrchestrator {
     where
         F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
+        self.ensure_plan(user_message)?;
+        self.set_phase(PhaseKind::Controller)?;
+
         let mut turns = 0u32;
-        self.publish_phase_change(self.session.phase.clone());
         loop {
             if turns >= self.session.config.max_total_llm_turns {
                 return Err("Exceeded maximum LLM turns".to_string());
             }
             turns += 1;
 
-            match self.session.phase.clone() {
-                PhaseKind::Triage => {
-                    let triage = self.call_triage(call_llm, user_message)?;
-                    self.event_bus.publish(AgentEvent::new_with_timestamp(
-                        EVENT_AGENT_TRIAGE_COMPLETED,
-                        json!({
-                            "session_id": self.session.id,
-                            "decision": triage.decision,
-                            "reasoning": triage.reasoning,
-                        }),
-                        Utc::now().timestamp_millis(),
-                    ));
-
-                    match triage.decision.as_str() {
-                        "direct_response" => {
-                            let response = triage.response.unwrap_or_else(|| "".to_string());
-                            self.transition_to(PhaseKind::Complete {
-                                final_response: response.clone(),
-                            })?;
-                            continue;
-                        }
-                        "needs_clarification" => {
-                            self.transition_to(PhaseKind::Clarifying {
-                                attempts: 0,
-                                pending_questions: Vec::new(),
-                            })?;
-                        }
-                        "ready_to_plan" => {
-                            self.transition_to(PhaseKind::Planning { revision: 0 })?;
-                        }
-                        _ => {
-                            self.transition_to(PhaseKind::Clarifying {
-                                attempts: 0,
-                                pending_questions: Vec::new(),
-                            })?;
-                        }
+            let decision = self.call_controller(call_llm, user_message, turns)?;
+            match decision {
+                ControllerAction::NextStep { step } => {
+                    if let Some(response) = self.execute_step(call_llm, step)? {
+                        return self.finish(response);
                     }
                 }
-                PhaseKind::Clarifying {
-                    attempts,
-                    pending_questions: _,
-                } => {
-                    if attempts >= self.session.config.max_clarify_iters {
-                        self.transition_to(PhaseKind::Planning { revision: 0 })?;
-                        continue;
-                    }
-
-                    let clarify = self.call_clarify(call_llm, user_message)?;
-                    if clarify.needs_user_input && !clarify.questions.is_empty() {
-                        let question = clarify.questions.join("\n");
-                        let answer = self.ask_human(question.clone(), ResumeTarget::Clarifying)?;
-                        self.session.gathered_info.push(GatheredInfo {
-                            question,
-                            answer,
-                            source: InfoSource::User,
-                            gathered_at: Utc::now(),
-                        });
-                        self.transition_to(PhaseKind::Clarifying {
-                            attempts: attempts + 1,
-                            pending_questions: Vec::new(),
-                        })?;
-                    } else if !clarify.questions.is_empty() {
-                        for assumption in clarify.assumptions {
-                            self.session.gathered_info.push(GatheredInfo {
-                                question: assumption.clone(),
-                                answer: assumption,
-                                source: InfoSource::Assumption,
-                                gathered_at: Utc::now(),
-                            });
-                        }
-                        self.transition_to(PhaseKind::Planning { revision: 0 })?;
-                    } else {
-                        self.transition_to(PhaseKind::Planning { revision: 0 })?;
-                    }
+                ControllerAction::Complete { message } => {
+                    return self.finish(message);
                 }
-                PhaseKind::Planning { revision } => {
-                    let plan = self.call_plan(call_llm, user_message, revision)?;
-                    self.session.plan = Some(plan.clone());
-                    AgentSessionOperations::save_agent_plan(&self.db, &self.session.id, &plan)
-                        .map_err(|e| e.to_string())?;
-                    AgentSessionOperations::save_plan_steps(&self.db, &plan.id, &plan.steps)
-                        .map_err(|e| e.to_string())?;
-                    let event_type = if revision == 0 {
-                        EVENT_AGENT_PLAN_CREATED
-                    } else {
-                        EVENT_AGENT_PLAN_ADJUSTED
-                    };
-                    self.event_bus.publish(AgentEvent::new_with_timestamp(
-                        event_type,
-                        json!({
-                            "session_id": self.session.id,
-                            "plan": plan,
-                        }),
-                        Utc::now().timestamp_millis(),
-                    ));
-                    self.transition_to(PhaseKind::ProposingStep { step_index: 0 })?;
-                }
-                PhaseKind::ProposingStep { .. } => {
-                    let next_index = self.select_next_step_index();
-                    if next_index.is_none() {
-                        self.transition_to(PhaseKind::Complete {
-                            final_response: "Task completed.".to_string(),
-                        })?;
-                        continue;
-                    }
-                    let step_index = next_index.unwrap();
-                    let (step_id, step_snapshot, needs_approval, risk_label, approval_request, preview, plan_revision) = {
-                        let plan = self.session.plan.as_mut().ok_or("Missing plan")?;
-                        let step = plan.steps.get_mut(step_index).ok_or("Invalid step index")?;
-                        step.status = StepStatus::Proposed;
-                        AgentSessionOperations::update_plan_step_status(&self.db, &step.id, StepStatus::Proposed)
-                            .map_err(|e| e.to_string())?;
-
-                        let (needs_approval, risk_label, approval_request) = match &step.action {
-                            StepAction::ToolCall { tool, .. } => {
-                                let risk = self.risk.classify(tool);
-                                let needs = self.risk.requires_approval(risk);
-                                let request = if needs {
-                                    let (approval_id, approval_rx) = self.approvals.create_request();
-                                    Some((approval_id, approval_rx))
-                                } else {
-                                    None
-                                };
-                                (needs, format!("{:?}", risk), request)
-                            }
-                            _ => (false, "None".to_string(), None),
-                        };
-
-                        let preview = match &step.action {
-                            StepAction::ToolCall { tool, args } => {
-                                self.tool_registry.get(tool).and_then(|tool_def| {
-                                    tool_def.preview.as_ref().and_then(|preview| {
-                                        preview(args.clone(), ToolExecutionContext).ok()
-                                    })
-                                })
-                            }
-                            _ => None,
-                        };
-
-                        (
-                            step.id.clone(),
-                            step.clone(),
-                            needs_approval,
-                            risk_label,
-                            approval_request,
-                            preview,
-                            plan.revision_count,
-                        )
-                    };
-
-                    self.event_bus.publish(AgentEvent::new_with_timestamp(
-                        EVENT_AGENT_STEP_PROPOSED,
-                        json!({
-                            "session_id": self.session.id,
-                            "step": step_snapshot,
-                            "risk": risk_label,
-                            "approval_id": approval_request.as_ref().map(|(id, _)| id.clone()),
-                            "preview": preview,
-                        }),
-                        Utc::now().timestamp_millis(),
-                    ));
-
-                    if !needs_approval {
-                        let approval = StepApproval {
-                            decision: ApprovalDecision::AutoApproved {
-                                reason: "Risk auto-approval".to_string(),
-                            },
-                            feedback: None,
-                            decided_at: Utc::now(),
-                        };
-                        if let Some(step) = self.session.plan.as_mut().and_then(|plan| plan.steps.iter_mut().find(|s| s.id == step_id)) {
-                            step.status = StepStatus::Approved;
-                            step.approval = Some(approval.clone());
-                        }
-                        AgentSessionOperations::update_plan_step_status(&self.db, &step_id, StepStatus::Approved)
-                            .map_err(|e| e.to_string())?;
-                        AgentSessionOperations::save_step_approval(&self.db, &step_id, &approval)
-                            .map_err(|e| e.to_string())?;
-                        self.event_bus.publish(AgentEvent::new_with_timestamp(
-                            EVENT_AGENT_STEP_APPROVED,
-                            json!({
-                                "session_id": self.session.id,
-                                "step_id": step_id,
-                                "decision": "auto_approved",
-                            }),
-                            Utc::now().timestamp_millis(),
-                        ));
-                        self.transition_to(PhaseKind::Executing {
-                            step_id: step_id.clone(),
-                            tool_iteration: 0,
-                        })?;
-                        continue;
-                    }
-
-                    let (approval_id, approval_rx) =
-                        approval_request.ok_or("Missing approval request")?;
-                    let decision = approval_rx
-                        .recv_timeout(std::time::Duration::from_millis(
-                            self.session.config.approval_timeout_ms,
-                        ))
-                        .map_err(|_| "Step approval timeout".to_string())?;
-
-                    match decision {
-                        StepApprovalDecision::Approved => {
-                            let approval = StepApproval {
-                                decision: ApprovalDecision::Approved,
-                                feedback: None,
-                                decided_at: Utc::now(),
-                            };
-                            if let Some(step) = self.session.plan.as_mut().and_then(|plan| plan.steps.iter_mut().find(|s| s.id == step_id)) {
-                                step.status = StepStatus::Approved;
-                                step.approval = Some(approval.clone());
-                            }
-                            AgentSessionOperations::update_plan_step_status(&self.db, &step_id, StepStatus::Approved)
-                                .map_err(|e| e.to_string())?;
-                            AgentSessionOperations::save_step_approval(&self.db, &step_id, &approval)
-                                .map_err(|e| e.to_string())?;
-                            self.event_bus.publish(AgentEvent::new_with_timestamp(
-                                EVENT_AGENT_STEP_APPROVED,
-                                json!({
-                                    "session_id": self.session.id,
-                                    "step_id": step_id,
-                                    "decision": "approved",
-                                    "approval_id": approval_id,
-                                }),
-                                Utc::now().timestamp_millis(),
-                            ));
-                            self.transition_to(PhaseKind::Executing {
-                                step_id: step_id.clone(),
-                                tool_iteration: 0,
-                            })?;
-                        }
-                        StepApprovalDecision::Skipped => {
-                            let approval = StepApproval {
-                                decision: ApprovalDecision::Skipped,
-                                feedback: None,
-                                decided_at: Utc::now(),
-                            };
-                            if let Some(step) = self.session.plan.as_mut().and_then(|plan| plan.steps.iter_mut().find(|s| s.id == step_id)) {
-                                step.status = StepStatus::Skipped;
-                                step.approval = Some(approval.clone());
-                            }
-                            AgentSessionOperations::update_plan_step_status(&self.db, &step_id, StepStatus::Skipped)
-                                .map_err(|e| e.to_string())?;
-                            AgentSessionOperations::save_step_approval(&self.db, &step_id, &approval)
-                                .map_err(|e| e.to_string())?;
-                            self.event_bus.publish(AgentEvent::new_with_timestamp(
-                                EVENT_AGENT_STEP_APPROVED,
-                                json!({
-                                    "session_id": self.session.id,
-                                    "step_id": step_id,
-                                    "decision": "skipped",
-                                    "approval_id": approval_id,
-                                }),
-                                Utc::now().timestamp_millis(),
-                            ));
-                            self.transition_to(PhaseKind::ProposingStep { step_index })?;
-                        }
-                        StepApprovalDecision::Modified { feedback } => {
-                            let approval = StepApproval {
-                                decision: ApprovalDecision::Modified,
-                                feedback: feedback.clone(),
-                                decided_at: Utc::now(),
-                            };
-                            if let Some(step) = self.session.plan.as_mut().and_then(|plan| plan.steps.iter_mut().find(|s| s.id == step_id)) {
-                                step.approval = Some(approval.clone());
-                            }
-                            AgentSessionOperations::save_step_approval(&self.db, &step_id, &approval)
-                                .map_err(|e| e.to_string())?;
-                            self.event_bus.publish(AgentEvent::new_with_timestamp(
-                                EVENT_AGENT_STEP_APPROVED,
-                                json!({
-                                    "session_id": self.session.id,
-                                    "step_id": step_id,
-                                    "decision": "modified",
-                                    "approval_id": approval_id,
-                                    "feedback": feedback,
-                                }),
-                                Utc::now().timestamp_millis(),
-                            ));
-                            let revision = plan_revision + 1;
-                            self.transition_to(PhaseKind::Planning { revision })?;
-                        }
-                        StepApprovalDecision::Denied { feedback } => {
-                            let approval = StepApproval {
-                                decision: ApprovalDecision::Denied,
-                                feedback: feedback.clone(),
-                                decided_at: Utc::now(),
-                            };
-                            if let Some(step) = self.session.plan.as_mut().and_then(|plan| plan.steps.iter_mut().find(|s| s.id == step_id)) {
-                                step.approval = Some(approval.clone());
-                            }
-                            AgentSessionOperations::save_step_approval(&self.db, &step_id, &approval)
-                                .map_err(|e| e.to_string())?;
-                            self.event_bus.publish(AgentEvent::new_with_timestamp(
-                                EVENT_AGENT_STEP_APPROVED,
-                                json!({
-                                    "session_id": self.session.id,
-                                    "step_id": step_id,
-                                    "decision": "denied",
-                                    "approval_id": approval_id,
-                                    "feedback": feedback,
-                                }),
-                                Utc::now().timestamp_millis(),
-                            ));
-                            let _ = self.ask_human(
-                                "What would you like me to do instead?".to_string(),
-                                ResumeTarget::Planning {
-                                    revision: plan_revision + 1,
-                                },
-                            )?;
-                            let revision = plan_revision + 1;
-                            self.transition_to(PhaseKind::Planning { revision })?;
-                        }
-                    }
-                }
-                PhaseKind::Executing { step_id, tool_iteration } => {
-                    if tool_iteration >= self.session.config.max_tool_calls_per_step {
-                        return Err("Exceeded tool call limit".to_string());
-                    }
-
-                    let action = {
-                        let plan = self.session.plan.as_mut().ok_or("Missing plan")?;
-                        let step = plan
-                            .steps
-                            .iter_mut()
-                            .find(|s| s.id == step_id)
-                            .ok_or("Step not found")?;
-                        step.status = StepStatus::Executing;
-                        AgentSessionOperations::update_plan_step_status(&self.db, &step.id, StepStatus::Executing)
-                            .map_err(|e| e.to_string())?;
-                        step.action.clone()
-                    };
-
-                    self.event_bus.publish(AgentEvent::new_with_timestamp(
-                        EVENT_AGENT_STEP_STARTED,
-                        json!({
-                            "session_id": self.session.id,
-                            "step_id": step_id,
-                        }),
-                        Utc::now().timestamp_millis(),
-                    ));
-
-                    let result = match action {
-                        StepAction::ToolCall { tool, args } => {
-                            self.execute_tool(step_id.clone(), &tool, args)?
-                        }
-                        StepAction::AskUser { question } => {
-                            let answer = self.ask_human(question.clone(), ResumeTarget::Reflecting)?;
-                            StepResult {
-                                step_id: step_id.clone(),
-                                success: true,
-                                output: Some(json!({ "answer": answer })),
-                                error: None,
-                                tool_executions: Vec::new(),
-                                duration_ms: 0,
-                                completed_at: Utc::now(),
-                            }
-                        }
-                        StepAction::Think { prompt } => {
-                            let output = self.call_think(call_llm, &prompt)?;
-                            StepResult {
-                                step_id: step_id.clone(),
-                                success: true,
-                                output: Some(json!({ "output": output })),
-                                error: None,
-                                tool_executions: Vec::new(),
-                                duration_ms: 0,
-                                completed_at: Utc::now(),
-                            }
-                        }
-                    };
-
-                    if let Some(step) = self.session.plan.as_mut().and_then(|plan| plan.steps.iter_mut().find(|s| s.id == step_id)) {
-                        step.result = Some(result.clone());
-                        step.status = if result.success {
-                            StepStatus::Completed
-                        } else {
-                            StepStatus::Failed
-                        };
-                        AgentSessionOperations::update_plan_step_status(&self.db, &step.id, step.status.clone())
-                            .map_err(|e| e.to_string())?;
-                    }
-                    AgentSessionOperations::save_step_result(&self.db, &result)
-                        .map_err(|e| e.to_string())?;
-                    self.event_bus.publish(AgentEvent::new_with_timestamp(
-                        EVENT_AGENT_STEP_COMPLETED,
-                        json!({
-                            "session_id": self.session.id,
-                            "step_id": step_id,
-                            "success": result.success,
-                            "result": result.output,
-                            "error": result.error,
-                        }),
-                        Utc::now().timestamp_millis(),
-                    ));
-
-                    self.transition_to(PhaseKind::Reflecting)?;
-                }
-                PhaseKind::Reflecting => {
-                    let (plan_snapshot, last_step_snapshot, revision) = {
-                        let plan = self.session.plan.as_ref().ok_or("Missing plan")?;
-                        let last_step = plan
-                            .steps
-                            .iter()
-                            .filter(|s| matches!(s.status, StepStatus::Completed | StepStatus::Failed))
-                            .max_by(|a, b| a.sequence.cmp(&b.sequence))
-                            .ok_or("No completed step to reflect on")?;
-                        (plan.clone(), last_step.clone(), plan.revision_count)
-                    };
-                    let reflect = self.call_reflect(call_llm, &plan_snapshot, &last_step_snapshot)?;
-                    self.event_bus.publish(AgentEvent::new_with_timestamp(
-                        EVENT_AGENT_REFLECTION_COMPLETED,
-                        json!({
-                            "session_id": self.session.id,
-                            "decision": reflect.decision,
-                            "reason": reflect.reason,
-                        }),
-                        Utc::now().timestamp_millis(),
-                    ));
-
-                    match reflect.decision.as_str() {
-                        "continue" => {
-                            self.transition_to(PhaseKind::ProposingStep { step_index: 0 })?;
-                        }
-                        "adjust" => {
-                            self.transition_to(PhaseKind::Planning { revision: revision + 1 })?;
-                        }
-                        "need_more_info" => {
-                            self.transition_to(PhaseKind::Clarifying {
-                                attempts: 0,
-                                pending_questions: Vec::new(),
-                            })?;
-                        }
-                        "done" => {
-                            let summary = reflect.summary.unwrap_or_else(|| "Done.".to_string());
-                            self.transition_to(PhaseKind::Complete {
-                                final_response: summary.clone(),
-                            })?;
-                            continue;
-                        }
-                        "need_human_input" => {
-                            let question = reflect
-                                .question
-                                .unwrap_or_else(|| "Can you clarify?".to_string());
-                            let answer = self.ask_human(question, ResumeTarget::Reflecting)?;
-                            self.session.gathered_info.push(GatheredInfo {
-                                question: "Reflection follow-up".to_string(),
-                                answer,
-                                source: InfoSource::User,
-                                gathered_at: Utc::now(),
-                            });
-                            self.transition_to(PhaseKind::Reflecting)?;
-                        }
-                        _ => {
-                            self.transition_to(PhaseKind::Complete {
-                                final_response: "Task completed.".to_string(),
-                            })?;
-                            continue;
-                        }
-                    }
-                }
-                PhaseKind::Complete { final_response } => {
-                    AgentSessionOperations::update_agent_session_completed(
-                        &self.db,
-                        &self.session.id,
-                        &final_response,
-                    )
-                    .map_err(|e| e.to_string())?;
-                    self.event_bus.publish(AgentEvent::new_with_timestamp(
-                        EVENT_AGENT_COMPLETED,
-                        json!({
-                            "session_id": self.session.id,
-                            "response": final_response,
-                        }),
-                        Utc::now().timestamp_millis(),
-                    ));
-                    return Ok(final_response);
-                }
-                PhaseKind::NeedsHumanInput { .. } => {
-                    return Err("Unexpected human input phase".to_string());
-                }
-                PhaseKind::GuardrailStop { reason, .. } => {
-                    return Err(reason);
+                ControllerAction::GuardrailStop { reason, message } => {
+                    let detail = message.unwrap_or_else(|| reason.clone());
+                    self.set_phase(PhaseKind::GuardrailStop {
+                        reason,
+                        recoverable: false,
+                    })?;
+                    return Err(detail);
                 }
             }
         }
     }
 
-    fn transition_to(&mut self, next: PhaseKind) -> Result<(), String> {
-        let current = self.session.phase.clone();
-        if !current.is_valid_transition(&next) {
-            return Err("Invalid phase transition".to_string());
-        }
-        self.session.phase = next.clone();
-        self.session.updated_at = Utc::now();
-        AgentSessionOperations::update_agent_session_phase(&self.db, &self.session.id, &next)
+    fn finish(&mut self, response: String) -> Result<String, String> {
+        AgentSessionOperations::update_agent_session_completed(&self.db, &self.session.id, &response)
             .map_err(|e| e.to_string())?;
-        self.publish_phase_change(next);
-        Ok(())
-    }
-
-    fn publish_phase_change(&self, to: PhaseKind) {
-        let _ = &to;
         self.event_bus.publish(AgentEvent::new_with_timestamp(
-            EVENT_AGENT_PHASE_CHANGED,
+            EVENT_AGENT_COMPLETED,
             json!({
                 "session_id": self.session.id,
-                "phase": to,
+                "response": response.clone(),
             }),
             Utc::now().timestamp_millis(),
         ));
+        Ok(response)
     }
 
-    fn call_triage<F>(&mut self, call_llm: &mut F, user_message: &str) -> Result<TriageResponse, String>
-    where
-        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
-    {
-        let prompt = TRIAGE_PROMPT
-            .replace("{user_message}", user_message)
-            .replace("{recent_messages}", &self.render_history());
-        let response = self.call_llm_json(call_llm, &prompt, Some(triage_output_format()))?;
-        parse_triage_response(&response)
-    }
+    fn ensure_plan(&mut self, user_message: &str) -> Result<(), String> {
+        if self.session.plan.is_some() {
+            return Ok(());
+        }
 
-    fn call_clarify<F>(&mut self, call_llm: &mut F, user_message: &str) -> Result<ClarifyResponse, String>
-    where
-        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
-    {
-        let gathered = if self.session.gathered_info.is_empty() {
-            "None".to_string()
-        } else {
-            self.session
-                .gathered_info
-                .iter()
-                .map(|info| format!("- {}: {}", info.question, info.answer))
-                .collect::<Vec<_>>()
-                .join("\n")
+        let now = Utc::now();
+        let goal = summarize_goal(user_message);
+        let plan = Plan {
+            id: Uuid::new_v4().to_string(),
+            goal,
+            assumptions: Vec::new(),
+            steps: Vec::new(),
+            revision_count: 0,
+            created_at: now,
         };
-        let prompt = CLARIFY_PROMPT
-            .replace("{user_message}", user_message)
-            .replace("{gathered_info}", &gathered);
-        let response = self.call_llm_json(call_llm, &prompt, Some(clarify_output_format()))?;
-        parse_clarify_response(&response)
+
+        self.session.plan = Some(plan.clone());
+        AgentSessionOperations::save_agent_plan(&self.db, &self.session.id, &plan)
+            .map_err(|e| e.to_string())?;
+        self.event_bus.publish(AgentEvent::new_with_timestamp(
+            EVENT_AGENT_PLAN_CREATED,
+            json!({
+                "session_id": self.session.id,
+                "plan": plan,
+            }),
+            Utc::now().timestamp_millis(),
+        ));
+        Ok(())
     }
 
-    fn call_plan<F>(
+    fn execute_step<F>(
         &mut self,
         call_llm: &mut F,
-        user_message: &str,
-        revision: u32,
-    ) -> Result<Plan, String>
+        step: ControllerStep,
+    ) -> Result<Option<String>, String>
     where
         F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
-        let tool_list = serde_json::to_string(&self.tool_registry.prompt_json())
-            .unwrap_or_else(|_| "[]".to_string());
-        let gathered = if self.session.gathered_info.is_empty() {
-            "None".to_string()
-        } else {
-            self.session
-                .gathered_info
-                .iter()
-                .map(|info| format!("- {}: {}", info.question, info.answer))
-                .collect::<Vec<_>>()
-                .join("\n")
+        let plan = self.session.plan.as_mut().ok_or("Missing plan")?;
+        let step_id = format!("step-{}", Uuid::new_v4());
+        let sequence = plan.steps.len();
+        let expected_outcome = "Step result recorded.".to_string();
+        let action = match &step {
+            ControllerStep::Tool { tool, args, .. } => StepAction::ToolCall {
+                tool: tool.clone(),
+                args: normalize_tool_args(args.clone()),
+            },
+            ControllerStep::Respond { message, .. } => StepAction::Respond {
+                message: message.clone(),
+            },
+            ControllerStep::Think { description } => StepAction::Think {
+                prompt: description.clone(),
+            },
         };
-        let base_prompt = PLAN_PROMPT
-            .replace("{user_message}", user_message)
-            .replace("{gathered_info}", &gathered)
-            .replace("{tool_descriptions}", &tool_list);
 
-        let mut last_error = None;
-        for attempt in 0..2 {
-            let prompt = if let Some(err) = last_error.as_ref() {
-                format!("{base_prompt}\n\nPrevious error: {err}\nPlease fix the plan JSON.")
-            } else {
-                base_prompt.clone()
-            };
-            let response = self.call_llm_json(call_llm, &prompt, Some(plan_output_format()))?;
-            match parse_plan_response(&response, revision, &self.tool_registry) {
-                Ok(plan) => return Ok(plan),
-                Err(err) => last_error = Some(err),
+        let plan_step = PlanStep {
+            id: step_id.clone(),
+            sequence,
+            description: step.description().to_string(),
+            expected_outcome,
+            action,
+            status: StepStatus::Proposed,
+            result: None,
+            approval: None,
+        };
+
+        plan.steps.push(plan_step.clone());
+        AgentSessionOperations::save_plan_steps(&self.db, &plan.id, &[plan_step.clone()])
+            .map_err(|e| e.to_string())?;
+
+        self.event_bus.publish(AgentEvent::new_with_timestamp(
+            EVENT_AGENT_PLAN_ADJUSTED,
+            json!({
+                "session_id": self.session.id,
+                "plan": plan.clone(),
+            }),
+            Utc::now().timestamp_millis(),
+        ));
+
+        let preview = match &step {
+            ControllerStep::Tool { tool, args, .. } => self
+                .tool_registry
+                .get(tool)
+                .and_then(|tool_def| tool_def.preview.as_ref())
+                .and_then(|preview| {
+                    preview(normalize_tool_args(args.clone()), ToolExecutionContext).ok()
+                }),
+            _ => None,
+        };
+
+        self.event_bus.publish(AgentEvent::new_with_timestamp(
+            EVENT_AGENT_STEP_PROPOSED,
+            json!({
+                "session_id": self.session.id,
+                "step": plan_step,
+                "risk": "None",
+                "approval_id": null,
+                "preview": preview,
+            }),
+            Utc::now().timestamp_millis(),
+        ));
+
+        self.set_phase(PhaseKind::Executing {
+            step_id: step_id.clone(),
+            tool_iteration: 0,
+        })?;
+        self.update_step_status(&step_id, StepStatus::Executing)?;
+        self.event_bus.publish(AgentEvent::new_with_timestamp(
+            EVENT_AGENT_STEP_STARTED,
+            json!({
+                "session_id": self.session.id,
+                "step_id": step_id.clone(),
+            }),
+            Utc::now().timestamp_millis(),
+        ));
+
+        let respond_message = match &step {
+            ControllerStep::Respond { message, .. } => Some(message.clone()),
+            _ => None,
+        };
+
+        let result = match step {
+            ControllerStep::Tool { tool, args, .. } => {
+                self.execute_tool(&step_id, &tool, normalize_tool_args(args))?
             }
-            if attempt == 1 {
-                break;
+            ControllerStep::Respond { message, .. } => {
+                StepResult {
+                    step_id: step_id.clone(),
+                    success: true,
+                    output: Some(json!({ "message": message })),
+                    error: None,
+                    tool_executions: Vec::new(),
+                    duration_ms: 0,
+                    completed_at: Utc::now(),
+                }
+            }
+            ControllerStep::Think { description } => {
+                let output = self.call_think(call_llm, &description)?;
+                StepResult {
+                    step_id: step_id.clone(),
+                    success: true,
+                    output: Some(json!({ "note": output })),
+                    error: None,
+                    tool_executions: Vec::new(),
+                    duration_ms: 0,
+                    completed_at: Utc::now(),
+                }
+            }
+        };
+
+        let status = if result.success {
+            StepStatus::Completed
+        } else {
+            StepStatus::Failed
+        };
+        if let Some(step) = self
+            .session
+            .plan
+            .as_mut()
+            .and_then(|plan| plan.steps.iter_mut().find(|s| s.id == step_id))
+        {
+            step.status = status.clone();
+            step.result = Some(result.clone());
+        }
+        self.update_step_status(&step_id, status.clone())?;
+        AgentSessionOperations::save_step_result(&self.db, &result)
+            .map_err(|e| e.to_string())?;
+
+        self.event_bus.publish(AgentEvent::new_with_timestamp(
+            EVENT_AGENT_STEP_COMPLETED,
+            json!({
+                "session_id": self.session.id,
+                "step_id": step_id.clone(),
+                "success": result.success,
+                "result": result.output.clone(),
+                "error": result.error.clone(),
+            }),
+            Utc::now().timestamp_millis(),
+        ));
+
+        self.last_step_result = Some(result.clone());
+        self.session.step_results.push(result);
+        self.set_phase(PhaseKind::Controller)?;
+
+        Ok(respond_message)
+    }
+
+    fn execute_tool(
+        &mut self,
+        step_id: &str,
+        tool_name: &str,
+        args: Value,
+    ) -> Result<StepResult, String> {
+        if self.tool_calls_made >= self.session.config.max_tool_calls_per_step {
+            return Err("Exceeded tool call limit".to_string());
+        }
+
+        let tool = self
+            .tool_registry
+            .get(tool_name)
+            .ok_or_else(|| format!("Unknown tool: {tool_name}"))?;
+        self.tool_registry
+            .validate_args(&tool.metadata, &args)
+            .map_err(|err| err.message)?;
+
+        let execution_id = Uuid::new_v4().to_string();
+        let mut tool_executions = Vec::new();
+
+        if tool.metadata.requires_approval {
+            let preview = match tool.preview.as_ref() {
+                Some(preview_fn) => Some(preview_fn(args.clone(), ToolExecutionContext)
+                    .map_err(|err| err.message)?),
+                None => None,
+            };
+            let (approval_id, approval_rx) = self.approvals.create_request();
+            let timestamp_ms = Utc::now().timestamp_millis();
+            self.event_bus.publish(AgentEvent::new_with_timestamp(
+                EVENT_TOOL_EXECUTION_PROPOSED,
+                json!({
+                    "execution_id": execution_id.clone(),
+                    "approval_id": approval_id.clone(),
+                    "tool_name": tool_name,
+                    "args": args.clone(),
+                    "preview": preview,
+                    "iteration": self.tool_calls_made + 1,
+                    "conversation_id": self.session.conversation_id,
+                    "message_id": self.assistant_message_id,
+                    "timestamp_ms": timestamp_ms,
+                }),
+                timestamp_ms,
+            ));
+
+            let decision = approval_rx
+                .recv()
+                .map_err(|_| "Approval channel closed".to_string())?;
+
+            let timestamp_ms = Utc::now().timestamp_millis();
+            match decision {
+                ToolApprovalDecision::Approved => {
+                    self.event_bus.publish(AgentEvent::new_with_timestamp(
+                        EVENT_TOOL_EXECUTION_APPROVED,
+                        json!({
+                            "execution_id": execution_id.clone(),
+                            "approval_id": approval_id,
+                            "tool_name": tool_name,
+                            "iteration": self.tool_calls_made + 1,
+                            "conversation_id": self.session.conversation_id,
+                            "message_id": self.assistant_message_id,
+                            "timestamp_ms": timestamp_ms,
+                        }),
+                        timestamp_ms,
+                    ));
+                }
+                ToolApprovalDecision::Denied => {
+                    self.event_bus.publish(AgentEvent::new_with_timestamp(
+                        EVENT_TOOL_EXECUTION_DENIED,
+                        json!({
+                            "execution_id": execution_id,
+                            "approval_id": approval_id,
+                            "tool_name": tool_name,
+                            "iteration": self.tool_calls_made + 1,
+                            "conversation_id": self.session.conversation_id,
+                            "message_id": self.assistant_message_id,
+                            "timestamp_ms": timestamp_ms,
+                        }),
+                        timestamp_ms,
+                    ));
+                    return Ok(StepResult {
+                        step_id: step_id.to_string(),
+                        success: false,
+                        output: None,
+                        error: Some("Tool execution denied".to_string()),
+                        tool_executions,
+                        duration_ms: 0,
+                        completed_at: Utc::now(),
+                    });
+                }
             }
         }
 
-        Err(last_error.unwrap_or_else(|| "Failed to create plan".to_string()))
-    }
+        self.tool_calls_made += 1;
+        let timestamp_ms = Utc::now().timestamp_millis();
+        self.event_bus.publish(AgentEvent::new_with_timestamp(
+            EVENT_TOOL_EXECUTION_STARTED,
+            json!({
+                "execution_id": execution_id.clone(),
+                "tool_name": tool_name,
+                "args": args.clone(),
+                "requires_approval": tool.metadata.requires_approval,
+                "iteration": self.tool_calls_made,
+                "conversation_id": self.session.conversation_id,
+                "message_id": self.assistant_message_id,
+                "timestamp_ms": timestamp_ms,
+            }),
+            timestamp_ms,
+        ));
 
-    fn call_reflect<F>(
-        &mut self,
-        call_llm: &mut F,
-        plan: &Plan,
-        step: &PlanStep,
-    ) -> Result<ReflectResponse, String>
-    where
-        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
-    {
-        let remaining_steps = plan
-            .steps
-            .iter()
-            .filter(|s| matches!(s.status, StepStatus::Pending | StepStatus::Proposed | StepStatus::Approved))
-            .map(|s| format!("- {}", s.description))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let step_result = step
-            .result
-            .as_ref()
-            .map(|result| serde_json::to_string(result).unwrap_or_default())
-            .unwrap_or_else(|| "No result".to_string());
+        let start = Instant::now();
+        let result = (tool.handler)(args.clone(), ToolExecutionContext);
+        let duration_ms = start.elapsed().as_millis() as i64;
+        let completed_at = Utc::now();
+        let timestamp_ms = completed_at.timestamp_millis();
 
-        let prompt = REFLECT_PROMPT
-            .replace("{plan_goal}", &plan.goal)
-            .replace("{step_description}", &step.description)
-            .replace("{expected_outcome}", &step.expected_outcome)
-            .replace("{step_result}", &step_result)
-            .replace("{remaining_steps}", &remaining_steps);
-        let response = self.call_llm_json(call_llm, &prompt, Some(reflect_output_format()))?;
-        parse_reflect_response(&response)
+        let (success, output, error) = match result {
+            Ok(output) => {
+                let result_for_event = output.clone();
+                self.event_bus.publish(AgentEvent::new_with_timestamp(
+                    EVENT_TOOL_EXECUTION_COMPLETED,
+                    json!({
+                        "execution_id": execution_id.clone(),
+                        "tool_name": tool_name,
+                        "result": result_for_event,
+                        "success": true,
+                        "duration_ms": duration_ms,
+                        "iteration": self.tool_calls_made,
+                        "conversation_id": self.session.conversation_id,
+                        "message_id": self.assistant_message_id,
+                        "timestamp_ms": timestamp_ms,
+                    }),
+                    timestamp_ms,
+                ));
+                (true, Some(output), None)
+            }
+            Err(err) => {
+                let error_message = err.message.clone();
+                self.event_bus.publish(AgentEvent::new_with_timestamp(
+                    EVENT_TOOL_EXECUTION_COMPLETED,
+                    json!({
+                        "execution_id": execution_id.clone(),
+                        "tool_name": tool_name,
+                        "success": false,
+                        "error": error_message,
+                        "duration_ms": duration_ms,
+                        "iteration": self.tool_calls_made,
+                        "conversation_id": self.session.conversation_id,
+                        "message_id": self.assistant_message_id,
+                        "timestamp_ms": timestamp_ms,
+                    }),
+                    timestamp_ms,
+                ));
+                (false, None, Some(error_message))
+            }
+        };
+
+        tool_executions.push(ToolExecutionRecord {
+            execution_id: execution_id.clone(),
+            tool_name: tool_name.to_string(),
+            args: args.clone(),
+            result: output.clone(),
+            success,
+            error: error.clone(),
+            duration_ms,
+            iteration: self.tool_calls_made as usize,
+            timestamp_ms,
+        });
+
+        self.pending_tool_executions.push(MessageToolExecutionInput {
+            id: execution_id,
+            message_id: self.assistant_message_id.clone(),
+            tool_name: tool_name.to_string(),
+            parameters: args,
+            result: output.clone().unwrap_or_else(|| json!(null)),
+            success,
+            duration_ms,
+            timestamp_ms,
+            error: error.clone(),
+            iteration_number: self.tool_calls_made as i64,
+        });
+
+        Ok(StepResult {
+            step_id: step_id.to_string(),
+            success,
+            output,
+            error,
+            tool_executions,
+            duration_ms,
+            completed_at,
+        })
     }
 
     fn call_think<F>(&mut self, call_llm: &mut F, prompt: &str) -> Result<String, String>
@@ -751,6 +539,28 @@ impl PhaseOrchestrator {
             None,
         )?;
         Ok(response.content)
+    }
+
+    fn call_controller<F>(
+        &mut self,
+        call_llm: &mut F,
+        user_message: &str,
+        turns: u32,
+    ) -> Result<ControllerAction, String>
+    where
+        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
+    {
+        let tool_list = serde_json::to_string(&self.tool_registry.prompt_json())
+            .unwrap_or_else(|_| "[]".to_string());
+        let prompt = CONTROLLER_PROMPT
+            .replace("{user_message}", user_message)
+            .replace("{recent_messages}", &self.render_history(8))
+            .replace("{state_summary}", &self.render_state_summary())
+            .replace("{last_tool_output}", &self.render_last_tool_output())
+            .replace("{limits}", &self.render_limits(turns))
+            .replace("{tool_descriptions}", &tool_list);
+        let response = self.call_llm_json(call_llm, &prompt, Some(controller_output_format()))?;
+        parse_controller_action(&response)
     }
 
     fn call_llm_json<F>(
@@ -774,9 +584,15 @@ impl PhaseOrchestrator {
         serde_json::from_str(&json_text).map_err(|err| format!("Invalid JSON: {err}"))
     }
 
-    fn render_history(&self) -> String {
+    fn render_history(&self, limit: usize) -> String {
+        let start = if self.messages.len() > limit {
+            self.messages.len() - limit
+        } else {
+            0
+        };
         self.messages
             .iter()
+            .skip(start)
             .map(|message| {
                 let content = value_to_string(&message.content);
                 format!("{}: {}", message.role, content)
@@ -785,175 +601,88 @@ impl PhaseOrchestrator {
             .join("\n")
     }
 
-    fn ask_human(
-        &mut self,
-        question: String,
-        resume_to: ResumeTarget,
-    ) -> Result<String, String> {
-        let (request_id, rx) = self.human_input.create_request();
-        let phase = PhaseKind::NeedsHumanInput {
-            question: question.clone(),
-            context: None,
-            resume_to,
-        };
+    fn render_state_summary(&self) -> String {
+        let mut lines = Vec::new();
+        let total_steps = self
+            .session
+            .plan
+            .as_ref()
+            .map(|plan| plan.steps.len())
+            .unwrap_or(0);
+        lines.push(format!("Steps so far: {total_steps}"));
+
+        if let Some(plan) = self.session.plan.as_ref() {
+            for step in plan.steps.iter().rev().take(3) {
+                let status = format!("{:?}", step.status);
+                lines.push(format!("- {} [{}]", step.description, status));
+                if let Some(result) = step.result.as_ref() {
+                    if let Some(output) = result.output.as_ref() {
+                        lines.push(format!("  result: {}", output));
+                    } else if let Some(error) = result.error.as_ref() {
+                        lines.push(format!("  error: {}", error));
+                    }
+                }
+            }
+        }
+
+        lines.join("\n")
+    }
+
+    fn render_last_tool_output(&self) -> String {
+        match self.last_step_result.as_ref() {
+            Some(result) => {
+                if let Some(output) = result.output.as_ref() {
+                    output.to_string()
+                } else if let Some(error) = result.error.as_ref() {
+                    format!("error: {error}")
+                } else {
+                    "None".to_string()
+                }
+            }
+            None => "None".to_string(),
+        }
+    }
+
+    fn render_limits(&self, turns: u32) -> String {
+        let remaining_turns = self
+            .session
+            .config
+            .max_total_llm_turns
+            .saturating_sub(turns);
+        let remaining_tools = self
+            .session
+            .config
+            .max_tool_calls_per_step
+            .saturating_sub(self.tool_calls_made);
+        format!(
+            "Remaining turns: {}. Remaining tool calls: {}.",
+            remaining_turns, remaining_tools
+        )
+    }
+
+    fn update_step_status(&self, step_id: &str, status: StepStatus) -> Result<(), String> {
+        AgentSessionOperations::update_plan_step_status(&self.db, step_id, status)
+            .map_err(|e| e.to_string())
+    }
+
+    fn set_phase(&mut self, next: PhaseKind) -> Result<(), String> {
+        self.session.phase = next.clone();
+        self.session.updated_at = Utc::now();
+        AgentSessionOperations::update_agent_session_phase(&self.db, &self.session.id, &next)
+            .map_err(|e| e.to_string())?;
+        self.publish_phase_change(next);
+        Ok(())
+    }
+
+    fn publish_phase_change(&self, to: PhaseKind) {
         self.event_bus.publish(AgentEvent::new_with_timestamp(
-            EVENT_AGENT_NEEDS_HUMAN_INPUT,
+            EVENT_AGENT_PHASE_CHANGED,
             json!({
                 "session_id": self.session.id,
-                "request_id": request_id,
-                "question": question,
+                "phase": to,
             }),
             Utc::now().timestamp_millis(),
         ));
-        self.session.phase = phase;
-        AgentSessionOperations::update_agent_session_phase(&self.db, &self.session.id, &self.session.phase)
-            .map_err(|e| e.to_string())?;
-        self.publish_phase_change(self.session.phase.clone());
-        let answer = rx
-            .recv_timeout(std::time::Duration::from_millis(
-                self.session.config.approval_timeout_ms,
-            ))
-            .map_err(|_| "Human input timeout".to_string())?;
-        Ok(answer)
-    }
-
-    fn execute_tool(
-        &mut self,
-        step_id: String,
-        tool_name: &str,
-        args: Value,
-    ) -> Result<StepResult, String> {
-        let tool = self
-            .tool_registry
-            .get(tool_name)
-            .ok_or_else(|| format!("Unknown tool: {tool_name}"))?;
-        self.tool_registry
-            .validate_args(&tool.metadata, &args)
-            .map_err(|err| err.message)?;
-
-        let execution_id = Uuid::new_v4().to_string();
-        let timestamp_ms = Utc::now().timestamp_millis();
-        self.event_bus.publish(AgentEvent::new_with_timestamp(
-            crate::events::EVENT_TOOL_EXECUTION_STARTED,
-            json!({
-                "execution_id": execution_id,
-                "tool_name": tool_name,
-                "args": args,
-                "requires_approval": false,
-                "iteration": 1,
-                "conversation_id": self.session.conversation_id,
-                "message_id": self.assistant_message_id,
-                "timestamp_ms": timestamp_ms,
-            }),
-            timestamp_ms,
-        ));
-
-        let start = Instant::now();
-        let result = (tool.handler)(args.clone(), ToolExecutionContext);
-        let duration_ms = start.elapsed().as_millis() as i64;
-        let completed_at = Utc::now();
-        let timestamp_ms = completed_at.timestamp_millis();
-
-        let (success, output, error) = match result {
-            Ok(output) => {
-                self.event_bus.publish(AgentEvent::new_with_timestamp(
-                    crate::events::EVENT_TOOL_EXECUTION_COMPLETED,
-                    json!({
-                        "execution_id": execution_id,
-                        "tool_name": tool_name,
-                        "result": output,
-                        "success": true,
-                        "duration_ms": duration_ms,
-                        "iteration": 1,
-                        "conversation_id": self.session.conversation_id,
-                        "message_id": self.assistant_message_id,
-                        "timestamp_ms": timestamp_ms,
-                    }),
-                    timestamp_ms,
-                ));
-                (true, Some(output), None)
-            }
-            Err(err) => {
-                self.event_bus.publish(AgentEvent::new_with_timestamp(
-                    crate::events::EVENT_TOOL_EXECUTION_COMPLETED,
-                    json!({
-                        "execution_id": execution_id,
-                        "tool_name": tool_name,
-                        "success": false,
-                        "error": err.message,
-                        "duration_ms": duration_ms,
-                        "iteration": 1,
-                        "conversation_id": self.session.conversation_id,
-                        "message_id": self.assistant_message_id,
-                        "timestamp_ms": timestamp_ms,
-                    }),
-                    timestamp_ms,
-                ));
-                (false, None, Some(err.message))
-            }
-        };
-
-        let record = ToolExecutionRecord {
-            execution_id: execution_id.clone(),
-            tool_name: tool_name.to_string(),
-            args: args.clone(),
-            result: output.clone(),
-            success,
-            error: error.clone(),
-            duration_ms,
-            iteration: 1,
-            timestamp_ms,
-        };
-
-        self.pending_tool_executions.push(MessageToolExecutionInput {
-            id: execution_id,
-            message_id: self.assistant_message_id.clone(),
-            tool_name: tool_name.to_string(),
-            parameters: args,
-            result: output.clone().unwrap_or_else(|| json!(null)),
-            success,
-            duration_ms,
-            timestamp_ms,
-            error: error.clone(),
-            iteration_number: 1,
-        });
-
-        Ok(StepResult {
-            step_id,
-            success,
-            output,
-            error,
-            tool_executions: vec![record],
-            duration_ms,
-            completed_at,
-        })
-    }
-
-    fn select_next_step_index(&self) -> Option<usize> {
-        let plan = self.session.plan.as_ref()?;
-        let mut candidates: Vec<(usize, &PlanStep)> = plan
-            .steps
-            .iter()
-            .enumerate()
-            .filter(|(_, step)| {
-                matches!(
-                    step.status,
-                    StepStatus::Executing | StepStatus::Approved | StepStatus::Proposed
-                )
-            })
-            .collect();
-
-        if candidates.is_empty() {
-            candidates = plan
-                .steps
-                .iter()
-                .enumerate()
-                .filter(|(_, step)| step.status == StepStatus::Pending)
-                .collect();
-        }
-
-        candidates.sort_by(|a, b| a.1.sequence.cmp(&b.1.sequence));
-        candidates.first().map(|(idx, _)| *idx)
     }
 
     pub fn take_tool_executions(&mut self) -> Vec<MessageToolExecutionInput> {
@@ -962,255 +691,105 @@ impl PhaseOrchestrator {
 }
 
 #[derive(Debug, Deserialize)]
-struct TriageResponse {
-    decision: String,
-    response: Option<String>,
-    reasoning: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct ClarifyResponse {
-    questions: Vec<String>,
-    assumptions: Vec<String>,
-    needs_user_input: bool,
-    reasoning: Option<String>,
+#[serde(tag = "action", rename_all = "snake_case")]
+enum ControllerAction {
+    NextStep { step: ControllerStep },
+    Complete { message: String },
+    GuardrailStop { reason: String, message: Option<String> },
 }
 
 #[derive(Debug, Deserialize)]
-struct PlanResponse {
-    goal: String,
-    assumptions: Vec<String>,
-    steps: Vec<PlanStepInput>,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ControllerStep {
+    Tool {
+        description: String,
+        tool: String,
+        #[serde(default)]
+        args: Value,
+    },
+    Respond {
+        description: String,
+        message: String,
+    },
+    Think {
+        description: String,
+    },
 }
 
-#[derive(Debug, Deserialize)]
-struct PlanStepInput {
-    description: String,
-    expected_outcome: String,
-    action: Value,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct ReflectResponse {
-    decision: String,
-    reason: Option<String>,
-    new_steps: Option<Vec<PlanStepInput>>,
-    summary: Option<String>,
-    question: Option<String>,
-}
-
-fn parse_triage_response(value: &Value) -> Result<TriageResponse, String> {
-    serde_json::from_value(value.clone()).map_err(|err| format!("Invalid triage response: {err}"))
-}
-
-fn parse_clarify_response(value: &Value) -> Result<ClarifyResponse, String> {
-    serde_json::from_value(value.clone()).map_err(|err| format!("Invalid clarify response: {err}"))
-}
-
-fn parse_plan_response(
-    value: &Value,
-    revision: u32,
-    registry: &ToolRegistry,
-) -> Result<Plan, String> {
-    let parsed: PlanResponse =
-        serde_json::from_value(value.clone()).map_err(|err| format!("Invalid plan response: {err}"))?;
-    if parsed.steps.is_empty() {
-        return Err("Plan must include at least one step".to_string());
-    }
-    let now = Utc::now();
-    let steps = parsed
-        .steps
-        .into_iter()
-        .enumerate()
-        .map(|(sequence, step)| {
-            let action = parse_step_action(step.action, registry)?;
-            Ok(PlanStep {
-                id: Uuid::new_v4().to_string(),
-                sequence,
-                description: step.description,
-                expected_outcome: step.expected_outcome,
-                action,
-                status: StepStatus::Pending,
-                result: None,
-                approval: None,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-
-    Ok(Plan {
-        id: Uuid::new_v4().to_string(),
-        goal: parsed.goal,
-        assumptions: parsed.assumptions,
-        steps,
-        revision_count: revision,
-        created_at: now,
-    })
-}
-
-fn parse_reflect_response(value: &Value) -> Result<ReflectResponse, String> {
-    serde_json::from_value(value.clone()).map_err(|err| format!("Invalid reflect response: {err}"))
-}
-
-fn parse_step_action(value: Value, registry: &ToolRegistry) -> Result<StepAction, String> {
-    if let Some(tool) = value.get("tool").and_then(|v| v.as_str()) {
-        let args = value.get("args").cloned().unwrap_or_else(|| json!({}));
-        if registry.get(tool).is_none() {
-            return Err(format!("Unknown tool in plan: {tool}"));
+impl ControllerStep {
+    fn description(&self) -> &str {
+        match self {
+            ControllerStep::Tool { description, .. } => description,
+            ControllerStep::Respond { description, .. } => description,
+            ControllerStep::Think { description } => description,
         }
-        return Ok(StepAction::ToolCall {
-            tool: tool.to_string(),
-            args,
-        });
     }
-
-    if let Some(question) = value
-        .get("ask_user")
-        .and_then(|v| v.as_str())
-        .or_else(|| value.get("question").and_then(|v| v.as_str()))
-    {
-        return Ok(StepAction::AskUser {
-            question: question.to_string(),
-        });
-    }
-
-    if let Some(prompt) = value
-        .get("think")
-        .and_then(|v| v.as_str())
-        .or_else(|| value.get("prompt").and_then(|v| v.as_str()))
-    {
-        return Ok(StepAction::Think {
-            prompt: prompt.to_string(),
-        });
-    }
-
-    Err("Unknown step action".to_string())
 }
 
-fn plan_step_schema() -> Value {
-    json!({
+fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
+    serde_json::from_value(value.clone()).map_err(|err| format!("Invalid controller output: {err}"))
+}
+
+fn controller_output_format() -> Value {
+    json_schema_output_format(json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
+        "required": ["action"],
         "properties": {
-            "description": { "type": "string" },
-            "expected_outcome": { "type": "string" },
             "action": {
-                "oneOf": [
-                    {
-                        "type": "object",
-                        "properties": {
-                            "tool": { "type": "string" },
-                            "args": {
-                                "type": "object",
-                                "additionalProperties": {}
-                            }
-                        },
-                        "required": ["tool", "args"],
-                        "additionalProperties": false
+                "type": "string",
+                "enum": ["next_step", "complete", "guardrail_stop"]
+            },
+            "step": {
+                "type": "object",
+                "required": ["type", "description"],
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": ["tool", "respond", "think"]
                     },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "ask_user": { "type": "string" }
-                        },
-                        "required": ["ask_user"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "question": { "type": "string" }
-                        },
-                        "required": ["question"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "think": { "type": "string" }
-                        },
-                        "required": ["think"],
-                        "additionalProperties": false
-                    },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "prompt": { "type": "string" }
-                        },
-                        "required": ["prompt"],
-                        "additionalProperties": false
-                    }
-                ]
+                    "description": { "type": "string" },
+                    "tool": { "type": "string" },
+                    "args": { "type": "string" },
+                    "message": { "type": "string" }
+                },
+                "additionalProperties": false
+            },
+            "message": { "type": "string" },
+            "reason": { "type": "string" }
+        },
+        "additionalProperties": false
+    }))
+}
+
+fn summarize_goal(message: &str) -> String {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return "Agent task".to_string();
+    }
+    let mut result = String::new();
+    for ch in trimmed.chars().take(160) {
+        result.push(ch);
+    }
+    result
+}
+
+fn normalize_tool_args(args: Value) -> Value {
+    match args {
+        Value::Null => json!({}),
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return json!({});
             }
-        },
-        "required": ["description", "expected_outcome", "action"],
-        "additionalProperties": false
-    })
-}
-
-fn triage_output_format() -> Value {
-    json_schema_output_format(json!({
-        "type": "object",
-        "properties": {
-            "type": { "type": "string", "enum": ["triage"] },
-            "decision": {
-                "type": "string",
-                "enum": ["direct_response", "needs_clarification", "ready_to_plan"]
-            },
-            "response": { "type": ["string", "null"] },
-            "reasoning": { "type": ["string", "null"] }
-        },
-        "required": ["type", "decision"],
-        "additionalProperties": false
-    }))
-}
-
-fn clarify_output_format() -> Value {
-    json_schema_output_format(json!({
-        "type": "object",
-        "properties": {
-            "type": { "type": "string", "enum": ["clarify"] },
-            "questions": { "type": "array", "items": { "type": "string" } },
-            "assumptions": { "type": "array", "items": { "type": "string" } },
-            "needs_user_input": { "type": "boolean" },
-            "reasoning": { "type": ["string", "null"] }
-        },
-        "required": ["type", "questions", "assumptions", "needs_user_input"],
-        "additionalProperties": false
-    }))
-}
-
-fn plan_output_format() -> Value {
-    json_schema_output_format(json!({
-        "type": "object",
-        "properties": {
-            "type": { "type": "string", "enum": ["plan"] },
-            "goal": { "type": "string" },
-            "assumptions": { "type": "array", "items": { "type": "string" } },
-            "steps": { "type": "array", "items": plan_step_schema() }
-        },
-        "required": ["type", "goal", "assumptions", "steps"],
-        "additionalProperties": false
-    }))
-}
-
-fn reflect_output_format() -> Value {
-    json_schema_output_format(json!({
-        "type": "object",
-        "properties": {
-            "type": { "type": "string", "enum": ["reflect"] },
-            "decision": {
-                "type": "string",
-                "enum": ["continue", "adjust", "need_more_info", "done", "need_human_input"]
-            },
-            "reason": { "type": ["string", "null"] },
-            "new_steps": { "type": ["array", "null"], "items": plan_step_schema() },
-            "summary": { "type": ["string", "null"] },
-            "question": { "type": ["string", "null"] }
-        },
-        "required": ["type", "decision"],
-        "additionalProperties": false
-    }))
+            match serde_json::from_str::<Value>(trimmed) {
+                Ok(value) if value.is_object() => value,
+                Ok(value) => json!({ "value": value }),
+                Err(_) => json!({ "input": text }),
+            }
+        }
+        other => other,
+    }
 }
 
 fn extract_json(raw: &str) -> String {

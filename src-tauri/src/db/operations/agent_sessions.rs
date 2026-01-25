@@ -5,12 +5,10 @@ use serde_json::Value;
 use crate::db::models::{
     AgentConfig,
     AgentSession,
-    ApprovalDecision,
     PhaseKind,
     Plan,
     PlanStep,
     StepAction,
-    StepApproval,
     StepResult,
     StepStatus,
 };
@@ -172,36 +170,6 @@ pub trait AgentSessionOperations: DbOperations {
         Ok(())
     }
 
-    fn save_step_approval(&self, step_id: &str, approval: &StepApproval) -> RusqliteResult<()> {
-        let binding = self.conn();
-        let conn = binding.lock().unwrap();
-
-        let (decision, auto_reason) = match &approval.decision {
-            ApprovalDecision::Approved => ("approved", None),
-            ApprovalDecision::Skipped => ("skipped", None),
-            ApprovalDecision::Modified => ("modified", None),
-            ApprovalDecision::Denied => ("denied", None),
-            ApprovalDecision::AutoApproved { reason } => ("auto_approved", Some(reason.clone())),
-        };
-
-        conn.execute(
-            "INSERT INTO agent_step_approvals (
-                id, step_id, decision, auto_approve_reason, feedback, decided_at
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                step_id,
-                step_id,
-                decision,
-                auto_reason,
-                approval.feedback,
-                approval.decided_at.timestamp(),
-            ],
-        )?;
-
-        Ok(())
-    }
-
     #[allow(dead_code)]
     fn find_incomplete_session(&self, conversation_id: &str) -> RusqliteResult<Option<AgentSession>> {
         let binding = self.conn();
@@ -335,6 +303,11 @@ fn serialize_step_action(action: &StepAction) -> (String, String) {
             serde_json::to_string(&serde_json::json!({ "prompt": prompt }))
                 .unwrap_or_else(|_| "{}".to_string()),
         ),
+        StepAction::Respond { message } => (
+            "respond".to_string(),
+            serde_json::to_string(&serde_json::json!({ "message": message }))
+                .unwrap_or_else(|_| "{}".to_string()),
+        ),
     }
 }
 
@@ -356,6 +329,13 @@ fn parse_step_action(action_type: &str, action_data: &str) -> StepAction {
         "think" => StepAction::Think {
             prompt: data
                 .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        },
+        "respond" => StepAction::Respond {
+            message: data
+                .get("message")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),

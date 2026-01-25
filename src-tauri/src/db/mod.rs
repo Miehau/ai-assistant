@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 mod error;
 mod models;
 mod operations;
+#[cfg(test)]
+mod tests;
 
 pub use error::DatabaseError;
 pub use models::*;

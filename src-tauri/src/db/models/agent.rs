@@ -18,6 +18,7 @@ pub struct AgentSession {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PhaseKind {
+    Controller,
     Triage,
     Clarifying {
         attempts: u32,
@@ -60,6 +61,7 @@ pub enum ResumeTarget {
 impl PhaseKind {
     pub fn kind(&self) -> &'static str {
         match self {
+            PhaseKind::Controller => "controller",
             PhaseKind::Triage => "triage",
             PhaseKind::Clarifying { .. } => "clarifying",
             PhaseKind::Planning { .. } => "planning",
@@ -74,6 +76,13 @@ impl PhaseKind {
 
     pub fn is_valid_transition(&self, next: &PhaseKind) -> bool {
         match (self, next) {
+            (PhaseKind::Controller, PhaseKind::Controller) => true,
+            (PhaseKind::Controller, PhaseKind::Executing { .. }) => true,
+            (PhaseKind::Controller, PhaseKind::Complete { .. }) => true,
+            (PhaseKind::Controller, PhaseKind::GuardrailStop { .. }) => true,
+            (PhaseKind::Controller, PhaseKind::NeedsHumanInput { .. }) => true,
+            (PhaseKind::Executing { .. }, PhaseKind::Controller) => true,
+
             (PhaseKind::Triage, PhaseKind::Complete { .. }) => true,
             (PhaseKind::Triage, PhaseKind::Clarifying { .. }) => true,
             (PhaseKind::Triage, PhaseKind::Planning { revision: 0 }) => true,
@@ -144,6 +153,7 @@ pub enum StepAction {
     ToolCall { tool: String, args: serde_json::Value },
     AskUser { question: String },
     Think { prompt: String },
+    Respond { message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

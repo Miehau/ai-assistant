@@ -19,9 +19,7 @@
     pendingToolApprovals,
     agentPhase,
     agentPlan,
-    agentPlanSteps,
-    pendingStepApprovals,
-    pendingHumanInput
+    agentPlanSteps
   } from "$lib/stores/chat";
   import ChatMessages from "./chat/ChatMessages.svelte";
   import ChatInput from "./chat/ChatInput.svelte";
@@ -98,8 +96,6 @@
       agentPhase={$agentPhase}
       agentPlan={$agentPlan}
       agentPlanSteps={$agentPlanSteps}
-      stepApprovals={$pendingStepApprovals}
-      humanInputPrompt={$pendingHumanInput}
       isLoading={$isLoading}
       bind:chatContainer
       bind:autoScroll

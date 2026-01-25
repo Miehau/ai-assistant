@@ -14,10 +14,8 @@ import { startAgentEventBridge } from '$lib/services/eventBridge';
 import { AGENT_EVENT_TYPES } from '$lib/types/events';
 import type { AgentEvent, Attachment, ToolCallRecord } from '$lib/types';
 import type {
-  AgentNeedsHumanInputPayload,
   AgentPhaseChangedPayload,
   AgentPlanPayload,
-  AgentStepApprovedPayload,
   AgentStepCompletedPayload,
   AgentStepProposedPayload,
   AgentStepStartedPayload,
@@ -49,8 +47,6 @@ export const toolActivity = writable<ToolActivityEntry[]>([]);
 export const agentPhase = writable<PhaseKind | null>(null);
 export const agentPlan = writable<AgentPlan | null>(null);
 export const agentPlanSteps = writable<AgentPlanStep[]>([]);
-export const pendingStepApprovals = writable<AgentStepProposedPayload[]>([]);
-export const pendingHumanInput = writable<AgentNeedsHumanInputPayload | null>(null);
 
 // Streaming-specific stores for smooth updates without array reactivity
 export const streamingMessage = writable<string>('');
@@ -218,8 +214,6 @@ export async function startAgentEvents() {
       agentPhase.set(null);
       agentPlan.set(null);
       agentPlanSteps.set([]);
-      pendingStepApprovals.set([]);
-      pendingHumanInput.set(null);
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_STARTED) {
@@ -417,31 +411,6 @@ export async function startAgentEvents() {
       if (step?.id) {
         updatePlanStep(step.id, { status: step.status });
       }
-      if (payload.approval_id) {
-        pendingStepApprovals.update((approvals) => {
-          if (approvals.some((entry) => entry.approval_id === payload.approval_id)) {
-            return approvals;
-          }
-          return [...approvals, payload];
-        });
-      }
-    }
-
-    if (event.event_type === AGENT_EVENT_TYPES.AGENT_STEP_APPROVED) {
-      const payload = event.payload as AgentStepApprovedPayload;
-      if (payload.approval_id) {
-        pendingStepApprovals.update((approvals) =>
-          approvals.filter((entry) => entry.approval_id !== payload.approval_id)
-        );
-      }
-      const decision = payload.decision;
-      if (decision === 'skipped') {
-        updatePlanStep(payload.step_id, { status: 'Skipped' });
-      } else if (decision === 'approved' || decision === 'auto_approved') {
-        updatePlanStep(payload.step_id, { status: 'Approved' });
-      } else if (decision === 'denied') {
-        updatePlanStep(payload.step_id, { status: 'Failed' });
-      }
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.AGENT_STEP_STARTED) {
@@ -452,17 +421,6 @@ export async function startAgentEvents() {
     if (event.event_type === AGENT_EVENT_TYPES.AGENT_STEP_COMPLETED) {
       const payload = event.payload as AgentStepCompletedPayload;
       updatePlanStep(payload.step_id, { status: payload.success ? 'Completed' : 'Failed' });
-    }
-
-    if (event.event_type === AGENT_EVENT_TYPES.AGENT_NEEDS_HUMAN_INPUT) {
-      const payload = event.payload as AgentNeedsHumanInputPayload;
-      pendingHumanInput.set(payload);
-      isLoading.set(false);
-      isStreaming.set(false);
-      streamingMessage.set('');
-      streamingAssistantMessageId = null;
-      streamingChunkBuffer = '';
-      streamingFlushPending = false;
     }
   });
 }
@@ -715,8 +673,6 @@ export function clearConversation() {
   agentPhase.set(null);
   agentPlan.set(null);
   agentPlanSteps.set([]);
-  pendingStepApprovals.set([]);
-  pendingHumanInput.set(null);
   conversationService.setCurrentConversation(null);
   // Reset branch context
   chatService.resetBranchContext();
@@ -732,35 +688,6 @@ export async function resolveToolApproval(approvalId: string, approved: boolean)
     });
   } catch (error) {
     console.error('Failed to resolve tool approval:', error);
-  }
-}
-
-export async function resolveStepApproval(
-  approvalId: string,
-  decision: 'approved' | 'skipped' | 'modified' | 'denied',
-  feedback?: string
-) {
-  try {
-    await invoke('resolve_step_approval', {
-      approval_id: approvalId,
-      decision,
-      feedback,
-    });
-  } catch (error) {
-    console.error('Failed to resolve step approval:', error);
-  }
-}
-
-export async function submitHumanInput(requestId: string, content: string) {
-  try {
-    await invoke('agent_submit_human_input', {
-      request_id: requestId,
-      content,
-    });
-    isLoading.set(true);
-    pendingHumanInput.set(null);
-  } catch (error) {
-    console.error('Failed to submit human input:', error);
   }
 }
 
