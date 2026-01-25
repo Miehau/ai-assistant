@@ -498,6 +498,122 @@
         "temperature": 1,
         "top_p": 1
       }
+    },
+    {
+      "id": "claude-cli-sonnet-4-5-20250929",
+      "name": "Claude Sonnet 4.5",
+      "provider": "claude_cli",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1
+      }
+    },
+    {
+      "id": "claude-cli-haiku-4-5-20251001",
+      "name": "Claude Haiku 4.5",
+      "provider": "claude_cli",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1
+      }
+    },
+    {
+      "id": "claude-cli-opus-4-1-20250805",
+      "name": "Claude Opus 4.1",
+      "provider": "claude_cli",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1
+      }
+    },
+    {
+      "id": "claude-cli-3-5-sonnet-20241022",
+      "name": "Claude 3.5 Sonnet",
+      "provider": "claude_cli",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1
+      }
+    },
+    {
+      "id": "claude-cli-3-7-sonnet-20250219",
+      "name": "Claude 3.7 Sonnet",
+      "provider": "claude_cli",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true,
+        "reasoning": true
+      },
+      "specs": {
+        "contextWindow": 200000,
+        "tokenization": {
+          "encoding": "claude",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
+        "top_p": 1
+      }
     }
   ]
 }

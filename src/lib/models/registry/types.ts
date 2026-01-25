@@ -53,7 +53,7 @@ export interface ModelConfig {
 export interface ProviderConfig {
   id: string;
   name: string;
-  authType: "api_key" | "oauth";
+  authType: "api_key" | "oauth" | "none";
   baseUrl: string;
   defaultHeaders: Record<string, string>;
 }

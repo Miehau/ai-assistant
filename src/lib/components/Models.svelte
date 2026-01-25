@@ -9,13 +9,17 @@
     type Provider = {
         value: string;
         label: string;
+        authType: "api_key" | "oauth" | "none";
     };
 
     // Get providers from the registry
-    const providers: Provider[] = modelRegistry.getAllProviders().map(p => ({
-        value: p.id,
-        label: p.name
-    }));
+    const providers: Provider[] = modelRegistry.getAllProviders()
+        .filter(p => p.authType === "api_key")
+        .map(p => ({
+            value: p.id,
+            label: p.name,
+            authType: p.authType
+        }));
 
     onMount(async () => {
         // Load API keys

@@ -101,6 +101,7 @@ fn main() {
             commands::get_conversation_usage,
             commands::get_usage_statistics,
             commands::get_message_usage,
+            commands::backfill_message_usage,
             // Branch management commands
             commands::create_branch,
             commands::create_message_tree_node,
@@ -123,6 +124,8 @@ fn main() {
             // User preferences commands
             commands::get_preference,
             commands::set_preference,
+            // Claude CLI commands
+            commands::is_claude_cli_installed,
             // Tool approval commands
             commands::resolve_tool_execution_approval,
             commands::list_tools,

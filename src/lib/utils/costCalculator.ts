@@ -43,8 +43,10 @@ export function calculateCost(
   promptTokens: number,
   completionTokens: number
 ): number {
+  const normalizedModelId = modelId.replace('claude-cli-', 'claude-');
+
   // Get pricing for the model
-  const modelPricing = pricing.pricing[modelId];
+  const modelPricing = pricing.pricing[normalizedModelId];
 
   if (!modelPricing) {
     console.warn(`No pricing information found for model: ${modelId}`);
@@ -105,7 +107,8 @@ export function formatCost(cost: number): string {
  * @returns Pricing info or null if not found
  */
 export function getModelPricing(modelId: string): PricingInfo | null {
-  return pricing.pricing[modelId] || null;
+  const normalizedModelId = modelId.replace('claude-cli-', 'claude-');
+  return pricing.pricing[normalizedModelId] || null;
 }
 
 /**
@@ -114,7 +117,9 @@ export function getModelPricing(modelId: string): PricingInfo | null {
  * @returns Context window size in tokens, or 128000 as default
  */
 export function getModelContextWindow(modelId: string): number {
-  const model = models.models.find(m => m.id === modelId);
+  const normalizedModelId = modelId.replace('claude-cli-', 'claude-');
+  const model = models.models.find(m => m.id === normalizedModelId)
+    ?? models.models.find(m => m.id === modelId);
   return model?.specs.contextWindow || 128000;
 }
 

@@ -36,6 +36,7 @@ export class ChatService {
   private currentController: AbortController | null = null;
   private currentBranchId: string | null = null;
   private lastMessageId: string | null = null;
+  private readonly knownProviders = ['openai', 'anthropic', 'deepseek', 'custom', 'ollama', 'claude_cli'] as const;
 
   private async getApiKeyForProvider(provider: string): Promise<string> {
     const apiKey = await invoke<string | null>('get_api_key', { provider });

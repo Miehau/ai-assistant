@@ -7,6 +7,7 @@ import { modelRegistry } from "./registry";
  */
 export class ApiKeyService {
   apiKeys = $state<Record<string, string>>({});
+  providerAvailability = $state<Record<string, boolean>>({});
 
   /**
    * Load all API keys from storage
@@ -18,6 +19,9 @@ export class ApiKeyService {
     console.log('[ApiKeyService] Loading API keys for providers:', providers.map(p => p.id));
 
     for (const provider of providers) {
+      if (provider.authType !== 'api_key') {
+        continue;
+      }
       try {
         const key = await invoke<string | null>("get_api_key", { provider: provider.id });
         if (key) {
@@ -37,8 +41,11 @@ export class ApiKeyService {
     console.log('[ApiKeyService] Loaded API keys for providers:', Object.keys(this.apiKeys));
     console.log('[ApiKeyService] About to update model registry with keys:', Object.keys(this.apiKeys));
 
-    // Update available models based on API keys
-    modelRegistry.updateAvailableModels(this.apiKeys);
+    // Update provider availability for non-key providers
+    await this.refreshProviderAvailability(providers);
+
+    // Update available models based on API keys + provider availability
+    modelRegistry.updateAvailableModels(this.apiKeys, this.providerAvailability);
 
     return this.apiKeys;
   }
@@ -70,7 +77,7 @@ export class ApiKeyService {
       console.log(`[ApiKeyService] Set API key for ${providerId}, current keys:`, Object.keys(this.apiKeys));
 
       // Update available models after setting a new API key
-      modelRegistry.updateAvailableModels(this.apiKeys);
+      modelRegistry.updateAvailableModels(this.apiKeys, this.providerAvailability);
 
       return true;
     } catch (error) {
@@ -90,7 +97,7 @@ export class ApiKeyService {
       console.log(`[ApiKeyService] Deleted API key for ${providerId}, remaining keys:`, Object.keys(this.apiKeys));
 
       // Update available models after deleting an API key
-      modelRegistry.updateAvailableModels(this.apiKeys);
+      modelRegistry.updateAvailableModels(this.apiKeys, this.providerAvailability);
 
       return true;
     } catch (error) {
@@ -111,5 +118,25 @@ export class ApiKeyService {
    */
   public hasApiKey(providerId: string): boolean {
     return !!this.apiKeys[providerId];
+  }
+
+  private async refreshProviderAvailability(providers = modelRegistry.getAllProviders()): Promise<void> {
+    const availability: Record<string, boolean> = {};
+
+    for (const provider of providers) {
+      if (provider.authType === 'none' && provider.id === 'claude_cli') {
+        try {
+          availability[provider.id] = await invoke<boolean>('is_claude_cli_installed');
+        } catch (error) {
+          console.error(`[ApiKeyService] Error checking Claude CLI availability:`, error);
+          availability[provider.id] = false;
+        }
+        continue;
+      }
+
+      availability[provider.id] = true;
+    }
+
+    this.providerAvailability = availability;
   }
 }

@@ -20,6 +20,13 @@
       }
     },
     {
+      "id": "claude_cli",
+      "name": "Claude CLI",
+      "authType": "none",
+      "baseUrl": "",
+      "defaultHeaders": {}
+    },
+    {
       "id": "deepseek",
       "name": "DeepSeek",
       "authType": "api_key",

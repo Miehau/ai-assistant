@@ -23,19 +23,30 @@ export class ModelRegistryService {
   /**
    * Updates the list of available models based on API key availability
    */
-  public updateAvailableModels(apiKeys: Record<string, string> = {}): void {
+  public updateAvailableModels(
+    apiKeys: Record<string, string> = {},
+    providerAvailability: Record<string, boolean> = {}
+  ): void {
     this.availableModels = {};
 
     console.log('[ModelRegistry] Updating available models with API keys:', Object.keys(apiKeys));
+    console.log('[ModelRegistry] Provider availability:', providerAvailability);
     console.log('[ModelRegistry] Total models to check:', Object.keys(this.models).length);
 
     // Only include models whose provider has an API key
     Object.entries(this.models).forEach(([modelName, modelConfig]) => {
-      if (apiKeys[modelConfig.provider]) {
+      const providerConfig = this.getProvider(modelConfig.provider);
+      const authType = providerConfig?.authType ?? "api_key";
+      const isAvailable = authType === "api_key"
+        ? !!apiKeys[modelConfig.provider]
+        : providerAvailability[modelConfig.provider] ?? false;
+
+      if (isAvailable) {
         this.availableModels[modelName] = modelConfig;
         console.log(`[ModelRegistry] ✓ Added model ${modelName} from provider ${modelConfig.provider}`);
       } else {
-        console.log(`[ModelRegistry] ✗ Skipped model ${modelName} from provider ${modelConfig.provider} (no API key)`);
+        const reason = authType === "api_key" ? "no API key" : "provider unavailable";
+        console.log(`[ModelRegistry] ✗ Skipped model ${modelName} from provider ${modelConfig.provider} (${reason})`);
       }
     });
 

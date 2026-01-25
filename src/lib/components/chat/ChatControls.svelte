@@ -3,6 +3,7 @@
     import { Button } from "$lib/components/ui/button";
     import * as Select from "$lib/components/ui/select";
     import type { Model } from "$lib/types/models";
+    import { modelRegistry } from "$lib/models/registry";
     import { type ModelWithBackend, saveLastUsedModel } from "$lib/stores/chat";
     import type { SystemPrompt } from "$lib/types";
     import { Eye, Headphones, Database, Brain } from "lucide-svelte";
@@ -55,7 +56,7 @@
         if (model.provider === 'custom' && modelWithBackend.backendName) {
             return modelWithBackend.backendName;
         }
-        return model.provider;
+        return modelRegistry.getProvider(model.provider)?.name || model.provider;
     }
 
     // Memoized provider groups - only recalculates when availableModels changes

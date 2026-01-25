@@ -1,6 +1,7 @@
 mod api_keys;
 mod agent;
 mod branches;
+mod claude_cli;
 mod conversations;
 mod custom_backends;
 mod files;
@@ -14,6 +15,7 @@ mod usage;
 pub use api_keys::*;
 pub use agent::*;
 pub use branches::*;
+pub use claude_cli::*;
 pub use conversations::*;
 pub use custom_backends::*;
 pub use files::*;
