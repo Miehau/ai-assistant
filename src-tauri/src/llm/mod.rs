@@ -1,6 +1,7 @@
 use reqwest::blocking::Client;
 use serde::Serialize;
 use serde_json::Value;
+use std::process::Command;
 
 #[derive(Clone, Debug)]
 pub struct Usage {
@@ -220,6 +221,89 @@ pub fn complete_anthropic_with_output_format(
     );
 
     Ok(StreamResult { content, usage })
+}
+
+fn normalize_claude_cli_model(model: &str) -> String {
+    if let Some(rest) = model.strip_prefix("claude-cli-") {
+        return format!("claude-{}", rest);
+    }
+    model.to_string()
+}
+
+fn format_claude_cli_prompt(
+    messages: &[LlmMessage],
+    system: Option<&str>,
+    output_format: Option<&Value>,
+) -> String {
+    let mut prompt = String::new();
+
+    if let Some(format) = output_format {
+        let schema = format.get("schema").unwrap_or(format);
+        let schema_text =
+            serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
+        prompt.push_str("Return ONLY valid JSON. No markdown, no extra text.\n");
+        prompt.push_str("The JSON must conform to this schema:\n");
+        prompt.push_str(&schema_text);
+        prompt.push_str("\n");
+        prompt.push_str("If action is \"complete\" or step.type is \"respond\", include a \"message\" field.\n\n");
+    }
+
+    if let Some(system_prompt) = system {
+        let trimmed = system_prompt.trim();
+        if !trimmed.is_empty() {
+            prompt.push_str("System:\n");
+            prompt.push_str(trimmed);
+            prompt.push_str("\n\n");
+        }
+    }
+
+    for message in messages.iter().filter(|m| m.role != "system") {
+        let role_label = match message.role.as_str() {
+            "user" => "User",
+            "assistant" => "Assistant",
+            "tool" => "Tool",
+            other => other,
+        };
+        prompt.push_str(role_label);
+        prompt.push_str(":\n");
+        prompt.push_str(value_to_string(&message.content).trim());
+        prompt.push_str("\n\n");
+    }
+
+    prompt.push_str("Assistant:\n");
+    prompt
+}
+
+pub fn complete_claude_cli(
+    model: &str,
+    system: Option<&str>,
+    messages: &[LlmMessage],
+    output_format: Option<Value>,
+) -> Result<StreamResult, String> {
+    let prompt = format_claude_cli_prompt(messages, system, output_format.as_ref());
+    let normalized_model = normalize_claude_cli_model(model);
+
+    let mut command = Command::new("claude");
+    command.arg("-p");
+    command.arg(&prompt);
+    if !normalized_model.trim().is_empty() {
+        command.arg("--model").arg(&normalized_model);
+    }
+
+    let output = command.output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let message = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else {
+            stdout.trim().to_string()
+        };
+        return Err(format!("Claude CLI error: {}", message));
+    }
+
+    let content = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(StreamResult { content, usage: None })
 }
 
 fn value_to_string(value: &Value) -> String {

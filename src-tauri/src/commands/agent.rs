@@ -24,6 +24,7 @@ use crate::events::{
 use crate::llm::{
     complete_anthropic,
     complete_anthropic_with_output_format,
+    complete_claude_cli,
     complete_openai,
     complete_openai_compatible,
     LlmMessage,
@@ -65,16 +66,22 @@ fn get_pricing() -> &'static HashMap<String, PricingEntry> {
 
 fn calculate_estimated_cost(model: &str, prompt_tokens: i32, completion_tokens: i32) -> f64 {
     let pricing = get_pricing();
+    let normalized_model = model.replace("claude-cli-", "claude-");
     let entry = pricing
-        .get(model)
+        .get(normalized_model.as_str())
         .or_else(|| {
-            let cleaned = model
+            let cleaned = normalized_model
                 .split(|c| c == ' ' || c == '•' || c == '/' || c == ':')
                 .last()
-                .unwrap_or(model);
+                .unwrap_or(normalized_model.as_str());
             pricing.get(cleaned)
         })
-        .or_else(|| pricing.iter().find(|(key, _)| model.contains(*key)).map(|(_, v)| v));
+        .or_else(|| {
+            pricing
+                .iter()
+                .find(|(key, _)| normalized_model.contains(*key))
+                .map(|(_, v)| v)
+        });
 
     let entry = match entry {
         Some(entry) => entry,
@@ -269,7 +276,7 @@ pub fn agent_send_message(
                 return Err("Custom backend not found".to_string());
             }
         }
-        "ollama" => {}
+        "ollama" | "claude_cli" => {}
         _ => {}
     }
 
@@ -321,7 +328,7 @@ pub fn agent_send_message(
         let mut tool_execution_inputs: Vec<MessageToolExecutionInput> = Vec::new();
         let mut call_llm =
             |messages: &[LlmMessage], system_prompt: Option<&str>, output_format: Option<Value>| {
-                let prepared_messages = if provider == "anthropic" {
+                let prepared_messages = if provider == "anthropic" || provider == "claude_cli" {
                     messages.to_vec()
                 } else {
                     let mut prepared = messages.to_vec();
@@ -392,6 +399,12 @@ pub fn agent_send_message(
                             )
                         }
                     }
+                    "claude_cli" => complete_claude_cli(
+                        &model_for_thread,
+                        system_prompt,
+                        &prepared_messages,
+                        output_format,
+                    ),
                     "custom" | "ollama" => {
                         let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
                         if url.is_empty() {
@@ -653,6 +666,7 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
                 &messages,
             )
         }
+        "claude_cli" => complete_claude_cli(&model, Some(system_prompt), &messages, None),
         "custom" | "ollama" => {
             let (url, api_key) = if provider == "ollama" {
                 ("http://localhost:11434/v1/chat/completions".to_string(), None)
