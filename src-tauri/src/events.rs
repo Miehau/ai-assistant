@@ -8,6 +8,7 @@ pub const EVENT_CONVERSATION_DELETED: &str = "conversation.deleted";
 pub const EVENT_MESSAGE_USAGE_SAVED: &str = "message.usage.saved";
 pub const EVENT_USAGE_UPDATED: &str = "usage.updated";
 pub const EVENT_ASSISTANT_STREAM_STARTED: &str = "assistant.stream.started";
+pub const EVENT_ASSISTANT_STREAM_CHUNK: &str = "assistant.stream.chunk";
 pub const EVENT_ASSISTANT_STREAM_COMPLETED: &str = "assistant.stream.completed";
 pub const EVENT_TOOL_EXECUTION_STARTED: &str = "tool.execution.started";
 pub const EVENT_TOOL_EXECUTION_COMPLETED: &str = "tool.execution.completed";

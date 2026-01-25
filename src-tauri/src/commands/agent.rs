@@ -14,6 +14,7 @@ use crate::agent::DynamicController;
 use crate::events::{
     AgentEvent,
     EventBus,
+    EVENT_ASSISTANT_STREAM_CHUNK,
     EVENT_ASSISTANT_STREAM_COMPLETED,
     EVENT_ASSISTANT_STREAM_STARTED,
     EVENT_CONVERSATION_UPDATED,
@@ -34,6 +35,7 @@ use crate::tools::{ApprovalStore, ToolRegistry};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use std::time::Duration;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -130,6 +132,65 @@ fn estimate_prompt_tokens(messages: &[LlmMessage]) -> i32 {
         .iter()
         .map(|message| estimate_tokens(&value_to_string(&message.content)))
         .sum()
+}
+
+fn stream_response_chunks(
+    bus: &EventBus,
+    conversation_id: &str,
+    message_id: &str,
+    content: &str,
+) {
+    if content.is_empty() {
+        return;
+    }
+
+    let chunk_size = if content.len() > 8000 { 200 } else { 120 };
+    let total_chunks = (content.len() + chunk_size - 1) / chunk_size;
+    let sleep_ms = if total_chunks <= 1 {
+        0
+    } else if total_chunks <= 30 {
+        16
+    } else if total_chunks <= 80 {
+        8
+    } else {
+        4
+    };
+
+    let mut chunk = String::new();
+    for ch in content.chars() {
+        chunk.push(ch);
+        if chunk.len() >= chunk_size {
+            let timestamp_ms = Utc::now().timestamp_millis();
+            bus.publish(AgentEvent::new_with_timestamp(
+                EVENT_ASSISTANT_STREAM_CHUNK,
+                json!({
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "chunk": chunk,
+                    "timestamp_ms": timestamp_ms
+                }),
+                timestamp_ms,
+            ));
+            chunk = String::new();
+            if sleep_ms > 0 {
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+            }
+        }
+    }
+
+    if !chunk.is_empty() {
+        let timestamp_ms = Utc::now().timestamp_millis();
+        bus.publish(AgentEvent::new_with_timestamp(
+            EVENT_ASSISTANT_STREAM_CHUNK,
+            json!({
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "chunk": chunk,
+                "timestamp_ms": timestamp_ms
+            }),
+            timestamp_ms,
+        ));
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,7 +316,7 @@ pub fn agent_send_message(
 
     let provider = provider.to_lowercase();
     let model = model.clone();
-    let _stream_enabled = stream.unwrap_or(true);
+    let stream_enabled = stream.unwrap_or(true);
 
     match provider.as_str() {
         "openai" | "anthropic" | "deepseek" => {
@@ -291,6 +352,7 @@ pub fn agent_send_message(
     let user_message_id_for_thread = user_message_id.clone();
     let tool_registry_for_thread = tool_registry.inner().clone();
     let approvals_for_thread = approvals.inner().clone();
+    let stream_enabled_for_thread = stream_enabled;
 
     std::thread::spawn(move || {
         let stream_timestamp = Utc::now().timestamp_millis();
@@ -467,6 +529,15 @@ pub fn agent_send_message(
 
         if accumulated.trim().is_empty() && !tool_execution_inputs.is_empty() {
             accumulated = "Tool results available below.".to_string();
+        }
+
+        if stream_enabled_for_thread && !accumulated.is_empty() {
+            stream_response_chunks(
+                &bus,
+                &conversation_id_for_thread,
+                &assistant_message_id_for_thread,
+                &accumulated,
+            );
         }
 
         if !accumulated.is_empty() {
