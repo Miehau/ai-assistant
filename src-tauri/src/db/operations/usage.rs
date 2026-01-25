@@ -54,7 +54,7 @@ pub trait UsageOperations: DbOperations {
                     COALESCE(SUM(mu.prompt_tokens), 0),
                     COALESCE(SUM(mu.completion_tokens), 0),
                     COALESCE(SUM(mu.estimated_cost), 0.0),
-                    COUNT(DISTINCT m.id)
+                    COUNT(DISTINCT mu.message_id)
                  FROM messages m
                  LEFT JOIN message_usage mu ON m.id = mu.message_id
                  WHERE m.conversation_id = ?1",

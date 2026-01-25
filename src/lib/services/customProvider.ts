@@ -59,7 +59,7 @@ export class CustomProviderService extends LLMService {
     streamResponse: boolean,
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
-  ): Promise<string> {
+  ): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     const body = JSON.stringify({
       messages,
       model: modelName,
@@ -94,23 +94,49 @@ export class CustomProviderService extends LLMService {
       }
       const data = await response.json();
       const content = data.message?.content || data.choices?.[0]?.message?.content || '';
+      const usage = this.extractUsage(data);
       if (onStreamResponse) {
         onStreamResponse(content);
       }
-      return content;
+      return { content, usage };
     } finally {
       clearTimeout(timeoutId);
     }
   }
 
+  private extractUsage(data: any): { prompt_tokens: number; completion_tokens: number } | undefined {
+    const usage = data?.usage;
+    if (!usage) return undefined;
+
+    const prompt =
+      usage.prompt_tokens ??
+      usage.promptTokens ??
+      usage.input_tokens ??
+      usage.inputTokens ??
+      0;
+    const completion =
+      usage.completion_tokens ??
+      usage.completionTokens ??
+      usage.output_tokens ??
+      usage.outputTokens ??
+      0;
+
+    if (!prompt && !completion) {
+      return undefined;
+    }
+
+    return { prompt_tokens: Number(prompt) || 0, completion_tokens: Number(completion) || 0 };
+  }
+
   private async handleStreamingResponse(
     response: Response, 
     onStreamResponse: (chunk: string) => void
-  ): Promise<string> {
+  ): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let fullResponse = '';
+    let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
 
     try {
       while (true) {
@@ -132,6 +158,10 @@ export class CustomProviderService extends LLMService {
                 fullResponse += content;
                 onStreamResponse(content);
               }
+              const parsedUsage = this.extractUsage(parsed);
+              if (parsedUsage) {
+                usage = parsedUsage;
+              }
             } catch (e) {
               console.error('Error parsing JSON:', e);
             }
@@ -147,12 +177,16 @@ export class CustomProviderService extends LLMService {
             fullResponse += content;
             onStreamResponse(content);
           }
+          const parsedUsage = this.extractUsage(parsed);
+          if (parsedUsage) {
+            usage = parsedUsage;
+          }
         } catch (e) {
           console.error('Error parsing final JSON:', e);
         }
       }
 
-      return fullResponse;
+      return { content: fullResponse, usage };
     } finally {
       reader.releaseLock();
     }

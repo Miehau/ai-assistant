@@ -115,6 +115,14 @@ export interface DailyModelUsage {
     total_cost: number;
 }
 
+export interface UsageBackfillResult {
+    conversations_scanned: number;
+    messages_checked: number;
+    messages_backfilled: number;
+    conversations_updated: number;
+    fallback_model_used: number;
+}
+
 // Branch management types
 export interface Branch {
     id: string;

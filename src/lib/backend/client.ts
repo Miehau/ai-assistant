@@ -16,6 +16,7 @@ import type {
   SystemPrompt,
   ConversationUsageSummary,
   UsageStatistics,
+  UsageBackfillResult,
   Branch,
   MessageTreeNode,
   ConversationTree,
@@ -317,6 +318,14 @@ class BackendClient {
 
   async getMessageUsage(messageId: string): Promise<unknown> {
     return invoke('get_message_usage', { messageId });
+  }
+
+  async backfillMessageUsage(options?: {
+    conversation_id?: string;
+    default_model?: string;
+    dry_run?: boolean;
+  }): Promise<UsageBackfillResult> {
+    return invoke('backfill_message_usage', { ...options });
   }
 
   // ============ Preferences ============

@@ -46,47 +46,99 @@ export class ChatService {
     return apiKey;
   }
 
-  private async getModelInfo(modelName: string): Promise<Model> {
-    // First try to get the model from the database
-    const models = await invoke<Model[]>('get_models');
-    let selectedModel = models.find((m: Model) => m.model_name === modelName);
+  private normalizeModelName(name: string): string {
+    return name.trim().toLowerCase();
+  }
 
-    // If not found in the database, try to get it from the registry
-    if (!selectedModel) {
-      console.log(`Model ${modelName} not found in database, checking registry`);
-      const registryModels = modelService.getAvailableModelsWithCapabilities();
-      const registryModel = registryModels.find((m: Model) => m.model_name === modelName);
+  private findModelByName(models: Model[], modelName: string): Model | undefined {
+    const needle = this.normalizeModelName(modelName);
+    return models.find((m) => {
+      const modelMatch = this.normalizeModelName(m.model_name) === needle;
+      const nameMatch = m.name ? this.normalizeModelName(m.name) === needle : false;
+      return modelMatch || nameMatch;
+    });
+  }
 
-      if (registryModel) {
-        console.log(`Found model ${modelName} in registry`);
-        return registryModel;
-      }
+  private createVirtualModel(provider: string, modelName: string, customBackendId?: string): Model {
+    return {
+      provider,
+      model_name: modelName,
+      name: modelName,
+      enabled: true,
+      custom_backend_id: customBackendId,
+    };
+  }
+
+  private inferModelFromName(
+    modelName: string,
+    registryModels: Model[],
+    backends: CustomBackend[]
+  ): Model | null {
+    const separatorPattern = /[|\/:@-]|\u2022/;
+    const parts = modelName
+      .split(separatorPattern)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    const provider = parts
+      .map((part) => part.toLowerCase())
+      .find((part) => this.knownProviders.includes(part as (typeof this.knownProviders)[number]));
+
+    if (!provider) {
+      return null;
     }
 
-    // If still not found, check custom backends (model_name = backend name)
-    if (!selectedModel) {
-      console.log(`Model ${modelName} not found in registry, checking custom backends`);
-      const backends = await invoke<CustomBackend[]>('get_custom_backends');
-      const backend = backends.find(b => b.name === modelName);
+    const modelPart =
+      parts.find((part) => part.toLowerCase() !== provider) || modelName;
 
+    if (provider === 'custom') {
+      const backend = backends.find((b) => this.normalizeModelName(b.name) === this.normalizeModelName(modelPart));
       if (backend) {
-        console.log(`Found custom backend ${modelName}`);
-        // Create a virtual model from the backend
-        return {
-          provider: 'custom',
-          model_name: backend.name,
-          name: backend.name,
-          enabled: true,
-          custom_backend_id: backend.id,
-        };
+        return this.createVirtualModel('custom', backend.name, backend.id);
       }
     }
 
-    if (!selectedModel) {
-      throw new Error(`Model ${modelName} not found in database or registry`);
+    const registryMatch = this.findModelByName(registryModels, modelPart);
+    if (registryMatch) {
+      return registryMatch;
     }
 
-    return selectedModel;
+    return this.createVirtualModel(provider, modelPart);
+  }
+
+  private async getModelInfo(modelName: string): Promise<Model> {
+    const models = await invoke<Model[]>('get_models');
+    const registryModels = modelService.getAvailableModelsWithCapabilities();
+
+    let selectedModel =
+      this.findModelByName(models, modelName) ||
+      this.findModelByName(registryModels, modelName);
+
+    if (selectedModel) {
+      return selectedModel;
+    }
+
+    console.log(`Model ${modelName} not found in database or registry, checking custom backends`);
+    const backends = await invoke<CustomBackend[]>('get_custom_backends');
+    const backend = backends.find((b) => b.name === modelName);
+    if (backend) {
+      console.log(`Found custom backend ${modelName}`);
+      return this.createVirtualModel('custom', backend.name, backend.id);
+    }
+
+    const inferred = this.inferModelFromName(modelName, registryModels, backends);
+    if (inferred) {
+      console.warn(`Inferred model from name: ${modelName} -> ${inferred.model_name} (${inferred.provider})`);
+      return inferred;
+    }
+
+    const fallback = models.find((m) => m.enabled) || registryModels.find((m) => m.enabled);
+    if (fallback) {
+      console.warn(`Falling back to model ${fallback.model_name} (${fallback.provider}) for missing model: ${modelName}`);
+      return fallback;
+    }
+
+    throw new Error(`Model ${modelName} not found in database, registry, or custom backends`);
   }
 
   /**
@@ -311,24 +363,21 @@ export class ChatService {
               usage.completion_tokens
             );
 
-            // Save usage data and update summary in parallel
-            const [, updatedUsage] = await Promise.all([
-              invoke('save_message_usage', {
-                input: {
-                  message_id: savedAssistantMessageId,
-                  model_name: selectedModel.model_name,
-                  prompt_tokens: usage.prompt_tokens,
-                  completion_tokens: usage.completion_tokens,
-                  total_tokens: usage.prompt_tokens + usage.completion_tokens,
-                  estimated_cost: cost
-                }
-              }),
-              invoke<ConversationUsageSummary>('update_conversation_usage', {
-                conversationId: conversation.id
-              })
-            ]);
+            await invoke('save_message_usage', {
+              input: {
+                message_id: savedAssistantMessageId,
+                model_name: selectedModel.model_name,
+                prompt_tokens: usage.prompt_tokens,
+                completion_tokens: usage.completion_tokens,
+                total_tokens: usage.prompt_tokens + usage.completion_tokens,
+                estimated_cost: cost
+              }
+            });
 
-            // Update the store to refresh the UI
+            const updatedUsage = await invoke<ConversationUsageSummary>('update_conversation_usage', {
+              conversationId: conversation.id
+            });
+
             currentConversationUsage.set(updatedUsage);
           } catch (usageError) {
             // Don't fail the chat if usage tracking fails

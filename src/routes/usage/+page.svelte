@@ -1,8 +1,8 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/tauri';
-  import type { UsageStatistics } from '$lib/types';
+  import type { UsageStatistics, UsageBackfillResult } from '$lib/types';
   import { Button } from '$lib/components/ui/button';
-  import { Download, TrendingUp, DollarSign, Zap } from 'lucide-svelte';
+  import { Download, TrendingUp, DollarSign, Zap, Wrench } from 'lucide-svelte';
   import MainLayout from '$lib/components/MainLayout.svelte';
   import UsageAreaChart from '$lib/components/charts/UsageAreaChart.svelte';
   import UsageLineChart from '$lib/components/charts/UsageLineChart.svelte';
@@ -12,6 +12,9 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let dateRange = $state<'7d' | '30d' | 'all'>('30d');
+  let backfilling = $state(false);
+  let backfillResult = $state<UsageBackfillResult | null>(null);
+  let backfillError = $state<string | null>(null);
 
   async function loadStatistics(range = dateRange) {
     loading = true;
@@ -70,6 +73,28 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  async function backfillUsage() {
+    if (backfilling) return;
+    if (!confirm('Backfill missing usage records for existing conversations? This may take a moment.')) {
+      return;
+    }
+
+    backfilling = true;
+    backfillError = null;
+    backfillResult = null;
+
+    try {
+      const result = await invoke<UsageBackfillResult>('backfill_message_usage', {});
+      backfillResult = result;
+      await loadStatistics(dateRange);
+    } catch (e) {
+      console.error('Failed to backfill usage:', e);
+      backfillError = e instanceof Error ? e.message : 'Failed to backfill usage';
+    } finally {
+      backfilling = false;
+    }
   }
 
   function getMaxCost(): number {
@@ -151,6 +176,16 @@
       </Button>
 
       <div class="ml-auto flex gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          class="border-white/10 hover:bg-white/5"
+          onclick={backfillUsage}
+          disabled={backfilling}
+        >
+          <Wrench class="size-4 mr-2" />
+          {backfilling ? 'Backfilling…' : 'Backfill Usage'}
+        </Button>
         <Button variant="outline" size="sm" class="border-white/10 hover:bg-white/5" onclick={() => exportData('json')}>
           <Download class="size-4 mr-2" />
           Export JSON
@@ -173,6 +208,18 @@
         <Button onclick={loadStatistics} class="mt-4" variant="outline">Retry</Button>
       </div>
     {:else if statistics}
+      {#if backfillError}
+        <div class="surface-card p-4 border-destructive mb-6">
+          <p class="text-destructive text-sm">Backfill failed: {backfillError}</p>
+        </div>
+      {:else if backfillResult}
+        <div class="surface-card p-4 mb-6">
+          <p class="text-sm text-muted-foreground/80">
+            Backfill complete: {backfillResult.messages_backfilled} messages updated
+            across {backfillResult.conversations_updated} conversations.
+          </p>
+        </div>
+      {/if}
       <!-- Summary Cards -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <!-- Total Cost Card -->

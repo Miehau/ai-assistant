@@ -29,7 +29,7 @@ export class DeepSeekService extends LLMService {
     streamResponse: boolean,
     onStreamResponse: (chunk: string) => void,
     signal: AbortSignal
-  ): Promise<string> {
+  ): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     const response = await fetch("https://api.deepseek.com/chat/completions", {
       method: "POST",
       headers: {
@@ -53,8 +53,12 @@ export class DeepSeekService extends LLMService {
     if (!streamResponse) {
       const data = await response.json();
       const content = data.choices[0]?.message?.content || '';
+      const usage = data.usage ? {
+        prompt_tokens: data.usage.prompt_tokens ?? 0,
+        completion_tokens: data.usage.completion_tokens ?? 0
+      } : undefined;
       onStreamResponse(content);
-      return content;
+      return { content, usage };
     }
 
     return this.handleStreamingResponse(response, onStreamResponse);
@@ -63,12 +67,13 @@ export class DeepSeekService extends LLMService {
   private async handleStreamingResponse(
     response: Response, 
     onStreamResponse: (chunk: string) => void
-  ): Promise<string> {
+  ): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body reader available');
     
     let fullResponse = '';
     const decoder = new TextDecoder();
+    let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
 
     try {
       while (true) {
@@ -76,7 +81,7 @@ export class DeepSeekService extends LLMService {
         if (done) break;
 
         const lines = decoder.decode(value).split('\n');
-        const chunks = lines
+        const parsedLines = lines
           .map(line => line.replace(/^data: /, '').trim())
           .filter(line => line && line !== '[DONE]')
           .map(line => {
@@ -86,15 +91,24 @@ export class DeepSeekService extends LLMService {
               return null;
             }
           })
-          .filter(data => data?.choices?.[0]?.delta?.content)
-          .map(data => data.choices[0].delta.content);
+          .filter(data => data);
 
-        for (const chunk of chunks) {
-          fullResponse += chunk;
-          onStreamResponse(chunk);
+        for (const data of parsedLines) {
+          if (data?.choices?.[0]?.delta?.content) {
+            const chunk = data.choices[0].delta.content;
+            fullResponse += chunk;
+            onStreamResponse(chunk);
+          }
+
+          if (data?.usage) {
+            usage = {
+              prompt_tokens: data.usage.prompt_tokens ?? usage?.prompt_tokens ?? 0,
+              completion_tokens: data.usage.completion_tokens ?? usage?.completion_tokens ?? 0
+            };
+          }
         }
       }
-      return fullResponse;
+      return { content: fullResponse, usage };
     } finally {
       reader.releaseLock();
     }

@@ -589,7 +589,15 @@ export async function sendMessage() {
 
   try {
     const models = get(availableModels);
-    const selectedModelObject = models.find(m => m.model_name === selectedModelValue);
+    let selectedModelObject = models.find(m => m.model_name === selectedModelValue);
+    if (!selectedModelObject) {
+      console.warn(`[ChatStore] Selected model missing: ${selectedModelValue}, falling back to first available model`);
+      selectedModelObject = models[0];
+      if (!selectedModelObject) {
+        throw new Error('No available models to send message');
+      }
+      selectedModel.set(selectedModelObject.model_name);
+    }
 
     // Clear input fields
     currentMessage.set('');
