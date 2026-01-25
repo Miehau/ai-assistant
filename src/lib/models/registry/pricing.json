@@ -106,40 +106,27 @@
       "note": "Claude Sonnet 4.5 pricing"
     },
     "claude-haiku-4-5-20251001": {
-      "input": 0.0008,
-      "output": 0.004,
+      "input": 0.001,
+      "output": 0.005,
       "per": 1000,
       "currency": "USD",
       "note": "Claude Haiku 4.5 pricing"
     },
-    "claude-opus-4-1-20250805": {
-      "input": 0.015,
-      "output": 0.075,
+    "claude-opus-4-5-20251101": {
+      "input": 0.005,
+      "output": 0.025,
       "per": 1000,
       "currency": "USD",
-      "note": "Claude Opus 4.1 pricing"
-    },
-    "claude-3-5-sonnet-20241022": {
-      "input": 0.003,
-      "output": 0.015,
-      "per": 1000,
-      "currency": "USD",
-      "note": "Claude 3.5 Sonnet pricing"
-    },
-    "claude-3-7-sonnet-20250219": {
-      "input": 0.003,
-      "output": 0.015,
-      "per": 1000,
-      "currency": "USD",
-      "note": "Claude 3.7 Sonnet pricing"
+      "note": "Claude Opus 4.5 pricing"
     }
   },
   "metadata": {
-    "lastUpdated": "2025-11-11",
-    "source": "OpenAI and Anthropic official pricing as of November 2025",
+    "lastUpdated": "2026-01-25",
+    "source": "OpenAI and Anthropic official pricing as of January 2026",
     "notes": [
       "Prices are per 1000 tokens",
-      "Pricing for unreleased models (GPT-5, GPT-4.1) are estimates"
+      "Pricing for unreleased models (GPT-5, GPT-4.1) are estimates",
+      "Anthropic model list and pricing refreshed from Claude model overview"
     ]
   }
 }
