@@ -11,6 +11,7 @@ use crate::db::{
     UsageOperations,
 };
 use crate::agent::DynamicController;
+use crate::agent::prompts::RESPONDER_PROMPT;
 use crate::events::{
     AgentEvent,
     EventBus,
@@ -28,6 +29,9 @@ use crate::llm::{
     complete_claude_cli,
     complete_openai,
     complete_openai_compatible,
+    stream_anthropic,
+    stream_openai,
+    stream_openai_compatible,
     LlmMessage,
     Usage,
 };
@@ -245,7 +249,7 @@ pub fn agent_send_message(
         user_message_id,
         assistant_message_id,
         custom_backend_id,
-        stream,
+        stream: _stream,
     } = payload;
 
     let conversation_id = conversation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -316,8 +320,6 @@ pub fn agent_send_message(
 
     let provider = provider.to_lowercase();
     let model = model.clone();
-    let stream_enabled = stream.unwrap_or(true);
-
     match provider.as_str() {
         "openai" | "anthropic" | "deepseek" => {
             let api_key = ModelOperations::get_api_key(&*state, &provider)
@@ -352,22 +354,10 @@ pub fn agent_send_message(
     let user_message_id_for_thread = user_message_id.clone();
     let tool_registry_for_thread = tool_registry.inner().clone();
     let approvals_for_thread = approvals.inner().clone();
-    let stream_enabled_for_thread = stream_enabled;
 
     std::thread::spawn(move || {
-        let stream_timestamp = Utc::now().timestamp_millis();
-        bus.publish(AgentEvent::new_with_timestamp(
-            EVENT_ASSISTANT_STREAM_STARTED,
-            json!({
-                "conversation_id": conversation_id_for_thread,
-                "message_id": assistant_message_id_for_thread,
-                "timestamp_ms": stream_timestamp
-            }),
-            stream_timestamp,
-        ));
-
         let client = Client::new();
-        let mut accumulated = String::new();
+        let mut draft = String::new();
         let mut usage_accumulator = Usage {
             prompt_tokens: 0,
             completion_tokens: 0,
@@ -497,6 +487,7 @@ pub fn agent_send_message(
                 result
             };
 
+        let mut controller_ok = false;
         let mut controller = match DynamicController::new(
             db.clone(),
             bus.clone(),
@@ -510,7 +501,7 @@ pub fn agent_send_message(
         ) {
             Ok(controller) => Some(controller),
             Err(error) => {
-                accumulated = format!("Agent setup error: {}", error);
+                draft = format!("Agent setup error: {}", error);
                 None
             }
         };
@@ -518,34 +509,219 @@ pub fn agent_send_message(
         if let Some(ref mut controller) = controller {
             match controller.run(&content, &mut call_llm) {
                 Ok(response) => {
-                    accumulated = response;
+                    draft = response;
+                    controller_ok = true;
                 }
                 Err(error) => {
-                    accumulated = format!("Agent error: {}", error);
+                    draft = format!("Agent error: {}", error);
                 }
             }
             tool_execution_inputs = controller.take_tool_executions();
         }
 
-        if accumulated.trim().is_empty() && !tool_execution_inputs.is_empty() {
-            accumulated = "Tool results available below.".to_string();
+        if draft.trim().is_empty() && !tool_execution_inputs.is_empty() {
+            draft = "Tool results available below.".to_string();
         }
 
-        if stream_enabled_for_thread && !accumulated.is_empty() {
-            stream_response_chunks(
-                &bus,
-                &conversation_id_for_thread,
-                &assistant_message_id_for_thread,
-                &accumulated,
+        let mut final_response = draft.clone();
+        let mut stream_started = false;
+
+        let stream_supported = supports_streaming(&provider);
+        let use_responder = controller_ok && stream_supported;
+
+        if use_responder {
+            let responder_prompt = build_responder_prompt(
+                &content,
+                &messages_for_usage,
+                &tool_execution_inputs,
+                &draft,
             );
+
+            let responder_messages = vec![LlmMessage {
+                role: "user".to_string(),
+                content: json!(responder_prompt),
+            }];
+
+            let responder_system_prompt = system_prompt_for_thread
+                .as_deref()
+                .filter(|prompt| !prompt.trim().is_empty());
+
+            let prepared_responder_messages = if provider == "anthropic" || provider == "claude_cli" {
+                responder_messages.clone()
+            } else {
+                let mut prepared = responder_messages.clone();
+                if let Some(system_prompt) = responder_system_prompt {
+                    prepared.insert(
+                        0,
+                        LlmMessage {
+                            role: "system".to_string(),
+                            content: json!(system_prompt),
+                        },
+                    );
+                }
+                prepared
+            };
+
+            let stream_timestamp = Utc::now().timestamp_millis();
+            bus.publish(AgentEvent::new_with_timestamp(
+                EVENT_ASSISTANT_STREAM_STARTED,
+                json!({
+                    "conversation_id": conversation_id_for_thread,
+                    "message_id": assistant_message_id_for_thread,
+                    "timestamp_ms": stream_timestamp
+                }),
+                stream_timestamp,
+            ));
+            stream_started = true;
+
+            let mut streamed_text = String::new();
+            let mut on_chunk = |chunk: &str| {
+                streamed_text.push_str(chunk);
+                let timestamp_ms = Utc::now().timestamp_millis();
+                bus.publish(AgentEvent::new_with_timestamp(
+                    EVENT_ASSISTANT_STREAM_CHUNK,
+                    json!({
+                        "conversation_id": conversation_id_for_thread,
+                        "message_id": assistant_message_id_for_thread,
+                        "chunk": chunk,
+                        "timestamp_ms": timestamp_ms
+                    }),
+                    timestamp_ms,
+                ));
+            };
+
+            let stream_result = match provider.as_str() {
+                "openai" => {
+                    let api_key = ModelOperations::get_api_key(&db, "openai")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if api_key.is_empty() {
+                        Err("Missing OpenAI API key".to_string())
+                    } else {
+                        stream_openai(
+                            &client,
+                            &api_key,
+                            "https://api.openai.com/v1/chat/completions",
+                            &model_for_thread,
+                            &prepared_responder_messages,
+                            &mut on_chunk,
+                        )
+                    }
+                }
+                "anthropic" => {
+                    let api_key = ModelOperations::get_api_key(&db, "anthropic")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if api_key.is_empty() {
+                        Err("Missing Anthropic API key".to_string())
+                    } else {
+                        stream_anthropic(
+                            &client,
+                            &api_key,
+                            &model_for_thread,
+                            responder_system_prompt,
+                            &responder_messages,
+                            &mut on_chunk,
+                        )
+                    }
+                }
+                "deepseek" => {
+                    let api_key = ModelOperations::get_api_key(&db, "deepseek")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    if api_key.is_empty() {
+                        Err("Missing DeepSeek API key".to_string())
+                    } else {
+                        stream_openai_compatible(
+                            &client,
+                            Some(&api_key),
+                            "https://api.deepseek.com/chat/completions",
+                            &model_for_thread,
+                            &prepared_responder_messages,
+                            false,
+                            &mut on_chunk,
+                        )
+                    }
+                }
+                "custom" | "ollama" => {
+                    let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
+                    if url.is_empty() {
+                        Err("Missing custom backend URL".to_string())
+                    } else {
+                        stream_openai_compatible(
+                            &client,
+                            api_key.as_deref(),
+                            &url,
+                            &model_for_thread,
+                            &prepared_responder_messages,
+                            false,
+                            &mut on_chunk,
+                        )
+                    }
+                }
+                _ => Err(format!("Unsupported provider: {provider}")),
+            };
+
+            let mut responder_usage: Option<Usage> = None;
+            match stream_result {
+                Ok(result) => {
+                    if !result.content.trim().is_empty() {
+                        final_response = result.content;
+                    } else {
+                        final_response = streamed_text;
+                    }
+                    responder_usage = result.usage;
+                }
+                Err(error) => {
+                    eprintln!("[agent] streaming responder failed: {}", error);
+                    final_response = draft.clone();
+                }
+            }
+
+            if responder_usage.is_none() && !final_response.is_empty() {
+                responder_usage = Some(Usage {
+                    prompt_tokens: estimate_prompt_tokens(&prepared_responder_messages),
+                    completion_tokens: estimate_tokens(&final_response),
+                });
+            }
+
+            if let Some(usage) = responder_usage {
+                usage_accumulator.prompt_tokens += usage.prompt_tokens;
+                usage_accumulator.completion_tokens += usage.completion_tokens;
+            }
         }
 
-        if !accumulated.is_empty() {
+        if !stream_started {
+            let stream_timestamp = Utc::now().timestamp_millis();
+            bus.publish(AgentEvent::new_with_timestamp(
+                EVENT_ASSISTANT_STREAM_STARTED,
+                json!({
+                    "conversation_id": conversation_id_for_thread,
+                    "message_id": assistant_message_id_for_thread,
+                    "timestamp_ms": stream_timestamp
+                }),
+                stream_timestamp,
+            ));
+
+            if !final_response.is_empty() {
+                stream_response_chunks(
+                    &bus,
+                    &conversation_id_for_thread,
+                    &assistant_message_id_for_thread,
+                    &final_response,
+                );
+            }
+        }
+
+        if !final_response.is_empty() {
             let _ = MessageOperations::save_message(
                 &db,
                 &conversation_id_for_thread,
                 "assistant",
-                &accumulated,
+                &final_response,
                 &[],
                 Some(assistant_message_id_for_thread.clone()),
             );
@@ -569,7 +745,7 @@ pub fn agent_send_message(
                     "conversation_id": conversation_id_for_thread,
                     "message_id": assistant_message_id_for_thread,
                     "role": "assistant",
-                    "content": accumulated,
+                    "content": final_response,
                     "attachments": [],
                     "timestamp_ms": timestamp_ms
                 }),
@@ -579,12 +755,12 @@ pub fn agent_send_message(
 
         let usage = if usage_accumulator.prompt_tokens > 0 || usage_accumulator.completion_tokens > 0 {
             Some(usage_accumulator)
-        } else if accumulated.is_empty() {
+        } else if final_response.is_empty() {
             None
         } else {
             Some(Usage {
                 prompt_tokens: estimate_prompt_tokens(&messages_for_usage),
-                completion_tokens: estimate_tokens(&accumulated),
+                completion_tokens: estimate_tokens(&final_response),
             })
         };
 
@@ -644,7 +820,7 @@ pub fn agent_send_message(
             json!({
                 "conversation_id": conversation_id_for_thread,
                 "message_id": assistant_message_id_for_thread,
-                "content": accumulated,
+                "content": final_response,
                 "timestamp_ms": timestamp_ms
             }),
             timestamp_ms,
@@ -819,4 +995,68 @@ fn build_user_content(content: &str, attachments: &[IncomingAttachment]) -> serd
     content_array.extend(image_entries);
 
     json!(content_array)
+}
+
+fn supports_streaming(provider: &str) -> bool {
+    matches!(provider, "openai" | "anthropic" | "deepseek" | "custom" | "ollama")
+}
+
+fn build_responder_prompt(
+    user_message: &str,
+    messages: &[LlmMessage],
+    tool_execution_inputs: &[MessageToolExecutionInput],
+    draft: &str,
+) -> String {
+    let recent_messages = render_recent_messages(messages, 8);
+    let tool_outputs = render_tool_outputs(tool_execution_inputs);
+    let draft_text = if draft.trim().is_empty() { "None" } else { draft };
+    let recent_text = if recent_messages.trim().is_empty() {
+        "None"
+    } else {
+        recent_messages.as_str()
+    };
+
+    RESPONDER_PROMPT
+        .replace("{user_message}", user_message)
+        .replace("{recent_messages}", recent_text)
+        .replace("{tool_outputs}", &tool_outputs)
+        .replace("{draft}", draft_text)
+}
+
+fn render_recent_messages(messages: &[LlmMessage], limit: usize) -> String {
+    let start = messages.len().saturating_sub(limit);
+    messages
+        .iter()
+        .skip(start)
+        .map(|message| format!("{}: {}", message.role, value_to_string(&message.content)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_tool_outputs(tool_execution_inputs: &[MessageToolExecutionInput]) -> String {
+    if tool_execution_inputs.is_empty() {
+        return "None".to_string();
+    }
+
+    let start = tool_execution_inputs.len().saturating_sub(6);
+    let mut blocks = Vec::new();
+
+    for input in tool_execution_inputs.iter().skip(start) {
+        let parameters = serde_json::to_string_pretty(&input.parameters)
+            .unwrap_or_else(|_| input.parameters.to_string());
+        let result = serde_json::to_string_pretty(&input.result)
+            .unwrap_or_else(|_| input.result.to_string());
+        let error = input
+            .error
+            .as_ref()
+            .map(|err| format!("\nError: {}", err))
+            .unwrap_or_default();
+
+        blocks.push(format!(
+            "Tool: {}\nSuccess: {}\nArgs: {}\nResult: {}{}",
+            input.tool_name, input.success, parameters, result, error
+        ));
+    }
+
+    blocks.join("\n\n")
 }

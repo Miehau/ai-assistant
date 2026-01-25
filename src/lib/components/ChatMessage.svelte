@@ -136,15 +136,18 @@
 
   // Parse markdown with caching to prevent redundant parsing on remount
   function parseMarkdown(text: string) {
-    // Check cache first
-    const cached = getCachedParse(text);
-    if (cached) {
-      return cached;
+    if (!isStreaming) {
+      const cached = getCachedParse(text);
+      if (cached) {
+        return cached;
+      }
     }
 
     try {
       const result = marked(text);
-      setCachedParse(text, result);
+      if (!isStreaming) {
+        setCachedParse(text, result);
+      }
       return result;
     } catch (error) {
       console.error('Markdown parsing error:', error);
@@ -154,22 +157,25 @@
 
   // Progressive rendering during rapid updates
   $: {
-    if (!isStreaming && content !== lastContent) {
+    if (content !== lastContent) {
       lastContent = content;
 
-      // Clear existing timeout
-      if (parseTimeout !== null) {
-        clearTimeout(parseTimeout);
+      if (!isStreaming) {
+        // Debounce for non-streaming updates
+        if (parseTimeout !== null) {
+          clearTimeout(parseTimeout);
+        }
+        parseTimeout = window.setTimeout(() => {
+          htmlContent = parseMarkdown(content);
+          parseTimeout = null;
+        }, 16) as unknown as number;
+      } else if (parseTimeout === null) {
+        // Throttle for streaming updates (do not reset)
+        parseTimeout = window.setTimeout(() => {
+          htmlContent = parseMarkdown(content);
+          parseTimeout = null;
+        }, 60) as unknown as number;
       }
-
-      // Parse with minimal delay (16ms = 1 frame) for smooth streaming
-      parseTimeout = window.setTimeout(() => {
-        htmlContent = parseMarkdown(content);
-        parseTimeout = null;
-      }, 16) as unknown as number;
-    } else if (isStreaming) {
-      lastContent = content;
-      htmlContent = '';
     }
   }
 
@@ -184,7 +190,7 @@
       // If language isn't loaded yet, fall back to plain text
       let highlightedCode: string;
       try {
-        if (language && Prism.languages[language]) {
+        if (!isStreaming && language && Prism.languages[language]) {
           highlightedCode = Prism.highlight(code, Prism.languages[language], language);
         } else {
           // Use plain text or escaped HTML if language not available

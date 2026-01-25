@@ -1,5 +1,5 @@
 mod orchestrator;
-mod prompts;
+pub mod prompts;
 
 pub use orchestrator::*;
 

@@ -1,6 +1,7 @@
 use reqwest::blocking::Client;
 use serde::Serialize;
 use serde_json::Value;
+use std::io::{BufRead, BufReader};
 use std::process::Command;
 
 #[derive(Clone, Debug)]
@@ -104,6 +105,128 @@ pub fn complete_openai_compatible(
         content.len(),
         usage.as_ref().map(|u| (u.prompt_tokens, u.completion_tokens))
     );
+
+    Ok(StreamResult { content, usage })
+}
+
+pub fn stream_openai<F>(
+    client: &Client,
+    api_key: &str,
+    url: &str,
+    model: &str,
+    messages: &[LlmMessage],
+    on_chunk: &mut F,
+) -> Result<StreamResult, String>
+where
+    F: FnMut(&str),
+{
+    stream_openai_compatible(client, Some(api_key), url, model, messages, true, on_chunk)
+}
+
+pub fn stream_openai_compatible<F>(
+    client: &Client,
+    api_key: Option<&str>,
+    url: &str,
+    model: &str,
+    messages: &[LlmMessage],
+    include_usage: bool,
+    on_chunk: &mut F,
+) -> Result<StreamResult, String>
+where
+    F: FnMut(&str),
+{
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": true
+    });
+
+    if include_usage {
+        body["stream_options"] = serde_json::json!({
+            "include_usage": true
+        });
+    }
+
+    let mut request = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .json(&body);
+
+    if let Some(key) = api_key {
+        request = request.bearer_auth(key);
+    }
+
+    let response = request.send().map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Provider error: {status} - {body}"));
+    }
+
+    let mut reader = BufReader::new(response);
+    let mut line = String::new();
+    let mut content = String::new();
+    let mut usage: Option<Usage> = None;
+
+    while reader.read_line(&mut line).map_err(|e| e.to_string())? > 0 {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            line.clear();
+            continue;
+        }
+
+        if !trimmed.starts_with("data:") {
+            line.clear();
+            continue;
+        }
+
+        let data = trimmed.trim_start_matches("data:").trim();
+        if data == "[DONE]" {
+            break;
+        }
+
+        let value: Value = match serde_json::from_str(data) {
+            Ok(value) => value,
+            Err(_) => {
+                line.clear();
+                continue;
+            }
+        };
+
+        if let Some(delta) = value
+            .get("choices")
+            .and_then(|choices| choices.get(0))
+            .and_then(|choice| choice.get("delta"))
+        {
+            let chunk = delta
+                .get("content")
+                .and_then(|v| v.as_str())
+                .or_else(|| delta.get("text").and_then(|v| v.as_str()));
+            if let Some(text) = chunk {
+                content.push_str(text);
+                on_chunk(text);
+            }
+        }
+
+        if let Some(usage_value) = value.get("usage") {
+            let prompt_tokens = usage_value
+                .get("prompt_tokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as i32;
+            let completion_tokens = usage_value
+                .get("completion_tokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as i32;
+            if prompt_tokens > 0 || completion_tokens > 0 {
+                usage = Some(Usage {
+                    prompt_tokens,
+                    completion_tokens,
+                });
+            }
+        }
+
+        line.clear();
+    }
 
     Ok(StreamResult { content, usage })
 }
@@ -219,6 +342,139 @@ pub fn complete_anthropic_with_output_format(
         content.len(),
         usage.as_ref().map(|u| (u.prompt_tokens, u.completion_tokens))
     );
+
+    Ok(StreamResult { content, usage })
+}
+
+pub fn stream_anthropic<F>(
+    client: &Client,
+    api_key: &str,
+    model: &str,
+    system: Option<&str>,
+    messages: &[LlmMessage],
+    on_chunk: &mut F,
+) -> Result<StreamResult, String>
+where
+    F: FnMut(&str),
+{
+    let formatted_messages = messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .map(|m| serde_json::json!({ "role": m.role, "content": value_to_string(&m.content) }))
+        .collect::<Vec<_>>();
+
+    let body = serde_json::json!({
+        "model": model,
+        "system": system,
+        "messages": formatted_messages,
+        "stream": true,
+        "max_tokens": 4096,
+        "temperature": 0,
+    });
+
+    let response = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("Content-Type", "application/json")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&body)
+        .send()
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Anthropic error: {status} - {body}"));
+    }
+
+    let mut reader = BufReader::new(response);
+    let mut line = String::new();
+    let mut content = String::new();
+    let mut usage: Option<Usage> = None;
+
+    while reader.read_line(&mut line).map_err(|e| e.to_string())? > 0 {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            line.clear();
+            continue;
+        }
+
+        if !trimmed.starts_with("data:") {
+            line.clear();
+            continue;
+        }
+
+        let data = trimmed.trim_start_matches("data:").trim();
+        if data == "[DONE]" {
+            break;
+        }
+
+        let value: Value = match serde_json::from_str(data) {
+            Ok(value) => value,
+            Err(_) => {
+                line.clear();
+                continue;
+            }
+        };
+
+        if let Some(event_type) = value.get("type").and_then(|v| v.as_str()) {
+            if event_type == "content_block_delta" {
+                if let Some(delta) = value.get("delta") {
+                    let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if delta_type == "text_delta" {
+                        if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                            content.push_str(text);
+                            on_chunk(text);
+                        }
+                    }
+                }
+            }
+
+            if event_type == "message_start" {
+                if let Some(message) = value.get("message") {
+                    if let Some(usage_value) = message.get("usage") {
+                        let prompt_tokens = usage_value
+                            .get("input_tokens")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0) as i32;
+                        let completion_tokens = usage_value
+                            .get("output_tokens")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0) as i32;
+                        if prompt_tokens > 0 || completion_tokens > 0 {
+                            usage = Some(Usage {
+                                prompt_tokens,
+                                completion_tokens,
+                            });
+                        }
+                    }
+                }
+            }
+
+            if event_type == "message_delta" {
+                if let Some(usage_value) = value.get("usage") {
+                    let output_tokens = usage_value
+                        .get("output_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as i32;
+                    let prompt_tokens = usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
+                    let completion_tokens = if output_tokens > 0 {
+                        output_tokens
+                    } else {
+                        usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0)
+                    };
+                    if prompt_tokens > 0 || completion_tokens > 0 {
+                        usage = Some(Usage {
+                            prompt_tokens,
+                            completion_tokens,
+                        });
+                    }
+                }
+            }
+        }
+
+        line.clear();
+    }
 
     Ok(StreamResult { content, usage })
 }
