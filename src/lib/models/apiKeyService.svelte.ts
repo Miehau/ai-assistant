@@ -134,6 +134,16 @@ export class ApiKeyService {
         continue;
       }
 
+      if (provider.authType === 'none' && provider.id === 'ollama') {
+        try {
+          availability[provider.id] = await invoke<boolean>('check_ollama_status');
+        } catch (error) {
+          console.error(`[ApiKeyService] Error checking Ollama availability:`, error);
+          availability[provider.id] = false;
+        }
+        continue;
+      }
+
       availability[provider.id] = true;
     }
 
