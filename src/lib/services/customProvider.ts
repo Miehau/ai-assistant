@@ -150,29 +150,12 @@ export class CustomProviderService extends LLMService {
           const line = buffer.slice(0, newlineIndex);
           buffer = buffer.slice(newlineIndex + 1);
 
-          if (line.trim()) {
-            try {
-              const parsed = JSON.parse(line);
-              const content = parsed.message?.content || '';
-              if (content) {
-                fullResponse += content;
-                onStreamResponse(content);
-              }
-              const parsedUsage = this.extractUsage(parsed);
-              if (parsedUsage) {
-                usage = parsedUsage;
-              }
-            } catch (e) {
-              console.error('Error parsing JSON:', e);
-            }
+          const parsed = this.parseStreamLine(line);
+          if (!parsed) {
+            continue;
           }
-        }
-      }
 
-      if (buffer.trim()) {
-        try {
-          const parsed = JSON.parse(buffer);
-          const content = parsed.message?.content || '';
+          const content = this.extractStreamContent(parsed);
           if (content) {
             fullResponse += content;
             onStreamResponse(content);
@@ -181,8 +164,21 @@ export class CustomProviderService extends LLMService {
           if (parsedUsage) {
             usage = parsedUsage;
           }
-        } catch (e) {
-          console.error('Error parsing final JSON:', e);
+        }
+      }
+
+      if (buffer.trim()) {
+        const parsed = this.parseStreamLine(buffer);
+        if (parsed) {
+          const content = this.extractStreamContent(parsed);
+          if (content) {
+            fullResponse += content;
+            onStreamResponse(content);
+          }
+          const parsedUsage = this.extractUsage(parsed);
+          if (parsedUsage) {
+            usage = parsedUsage;
+          }
         }
       }
 
@@ -190,6 +186,41 @@ export class CustomProviderService extends LLMService {
     } finally {
       reader.releaseLock();
     }
+  }
+
+  private parseStreamLine(line: string): any | null {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+
+    if (trimmed.startsWith('data:')) {
+      const data = trimmed.replace(/^data:\s*/, '');
+      if (data === '[DONE]') {
+        return null;
+      }
+      try {
+        return JSON.parse(data);
+      } catch (e) {
+        console.error('Error parsing SSE JSON:', e);
+        return null;
+      }
+    }
+
+    try {
+      return JSON.parse(trimmed);
+    } catch (e) {
+      console.error('Error parsing JSON:', e);
+      return null;
+    }
+  }
+
+  private extractStreamContent(parsed: any): string {
+    return (
+      parsed?.message?.content
+      || parsed?.choices?.[0]?.delta?.content
+      || parsed?.choices?.[0]?.message?.content
+      || parsed?.response
+      || ''
+    );
   }
 
   /**
