@@ -513,7 +513,7 @@ export async function loadModels() {
 
     // Fire-and-forget Ollama discovery and merge into available models
     void ollamaService.discoverModels().then((models) => {
-      mergeOllamaModels(models);
+      mergeOllamaModels(models, lastUsedModel);
       if (lastUsedModel && models.some((model) => model.name === lastUsedModel)) {
         if (modelToSelect && get(selectedModel) === modelToSelect) {
           selectedModel.set(lastUsedModel);
@@ -525,7 +525,7 @@ export async function loadModels() {
   }
 }
 
-function mergeOllamaModels(models: OllamaModel[]) {
+function mergeOllamaModels(models: OllamaModel[], lastUsedModel?: string | null) {
   const currentModels = get(availableModels);
   const nonOllamaModels = currentModels.filter(model => model.provider !== 'ollama');
   const ollamaModels: ModelWithBackend[] = models.map(model => ({
@@ -537,6 +537,16 @@ function mergeOllamaModels(models: OllamaModel[]) {
 
   const nextModels = [...nonOllamaModels, ...ollamaModels].filter(model => model.enabled);
   availableModels.set(nextModels);
+
+  if (!get(selectedModel)) {
+    const nextSelection =
+      (lastUsedModel && ollamaModels.some(model => model.model_name === lastUsedModel))
+        ? lastUsedModel
+        : ollamaModels[0]?.model_name;
+    if (nextSelection) {
+      selectedModel.set(nextSelection);
+    }
+  }
 }
 
 // Get the last used model from preferences
