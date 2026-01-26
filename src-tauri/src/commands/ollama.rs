@@ -1,4 +1,4 @@
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -30,9 +30,9 @@ fn is_soft_error(error: &reqwest::Error) -> bool {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn discover_ollama_models() -> Result<Vec<OllamaModel>, String> {
+pub async fn discover_ollama_models() -> Result<Vec<OllamaModel>, String> {
     let client = build_client()?;
-    let response = client.get(OLLAMA_TAGS_URL).send();
+    let response = client.get(OLLAMA_TAGS_URL).send().await;
 
     let response = match response {
         Ok(response) => response,
@@ -48,14 +48,14 @@ pub fn discover_ollama_models() -> Result<Vec<OllamaModel>, String> {
         return Ok(vec![]);
     }
 
-    let payload: OllamaTagsResponse = response.json().map_err(|e| e.to_string())?;
+    let payload: OllamaTagsResponse = response.json().await.map_err(|e| e.to_string())?;
     Ok(payload.models)
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn check_ollama_status() -> Result<bool, String> {
+pub async fn check_ollama_status() -> Result<bool, String> {
     let client = build_client()?;
-    let response = client.get(OLLAMA_TAGS_URL).send();
+    let response = client.get(OLLAMA_TAGS_URL).send().await;
 
     let response = match response {
         Ok(response) => response,
