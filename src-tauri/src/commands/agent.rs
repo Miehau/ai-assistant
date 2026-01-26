@@ -676,7 +676,14 @@ pub fn agent_send_message(
                     responder_usage = result.usage;
                 }
                 Err(error) => {
-                    eprintln!("[agent] streaming responder failed: {}", error);
+                    log::error!(
+                        "[agent] responder stream failed: provider={} model={} conversation_id={} message_id={} error={}",
+                        provider,
+                        model_for_thread,
+                        conversation_id_for_thread,
+                        assistant_message_id_for_thread,
+                        error
+                    );
                     final_response = draft.clone();
                 }
             }
@@ -758,6 +765,8 @@ pub fn agent_send_message(
             let note_custom_backend = custom_backend_config.clone();
             let note_user_message = content.clone();
             let note_assistant_message = final_response.clone();
+            let note_conversation_id = conversation_id_for_thread.clone();
+            let note_assistant_message_id = assistant_message_id_for_thread.clone();
             std::thread::spawn(move || {
                 if let Err(err) = capture_topic_note(
                     note_db,
@@ -767,7 +776,12 @@ pub fn agent_send_message(
                     note_user_message,
                     note_assistant_message,
                 ) {
-                    eprintln!("[notes] capture failed: {}", err);
+                    log::error!(
+                        "[notes] capture failed: conversation_id={} message_id={} error={}",
+                        note_conversation_id,
+                        note_assistant_message_id,
+                        err
+                    );
                 }
             });
         }

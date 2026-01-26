@@ -66,7 +66,10 @@ pub fn capture_topic_note(
     let root = match get_vault_root(&db) {
         Ok(root) => root,
         Err(err) => {
-            eprintln!("[notes] vault root unavailable: {}", err.message);
+            log::warn!(
+                "[notes] capture skipped: vault root unavailable: {}",
+                err.message
+            );
             return Ok(());
         }
     };
@@ -95,7 +98,12 @@ pub fn capture_topic_note(
     ) {
         Ok(result) => result,
         Err(err) => {
-            eprintln!("[notes] triage failed: {}", err);
+            log::warn!(
+                "[notes] triage failed: provider={} model={} error={}",
+                provider,
+                model,
+                err
+            );
             return Ok(());
         }
     };

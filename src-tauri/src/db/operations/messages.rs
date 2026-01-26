@@ -136,7 +136,7 @@ pub trait MessageOperations: DbOperations {
             .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
         let attachments_dir = app_dir.join("dev.michalmlak.ai_agent").join("attachments");
 
-        println!("📁 Setup time: {:?}", start_time.elapsed());
+        log::debug!("📁 Setup time: {:?}", start_time.elapsed());
         let messages_query_start = Instant::now();
 
         let mut messages_stmt = conn.prepare(
@@ -159,7 +159,7 @@ pub trait MessageOperations: DbOperations {
             })
         })?.collect::<Result<Vec<_>, _>>()?;
 
-        println!("📨 Messages query time: {:?}", messages_query_start.elapsed());
+        log::debug!("📨 Messages query time: {:?}", messages_query_start.elapsed());
         let attachments_start = Instant::now();
 
         let mut attachments_stmt = conn.prepare(
@@ -265,9 +265,15 @@ pub trait MessageOperations: DbOperations {
             }
         }
 
-        println!("🧰 Tool executions processing time: {:?}", tool_executions_start.elapsed());
-        println!("📎 Total attachments processing time: {:?}", attachments_start.elapsed());
-        println!("⏱️  Total get_messages time: {:?}", start_time.elapsed());
+        log::debug!(
+            "🧰 Tool executions processing time: {:?}",
+            tool_executions_start.elapsed()
+        );
+        log::debug!(
+            "📎 Total attachments processing time: {:?}",
+            attachments_start.elapsed()
+        );
+        log::debug!("⏱️  Total get_messages time: {:?}", start_time.elapsed());
 
         Ok(messages)
     }

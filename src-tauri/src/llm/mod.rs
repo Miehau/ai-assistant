@@ -59,7 +59,7 @@ pub fn complete_openai_compatible(
     }
 
     let value: Value = response.json().map_err(|e| e.to_string())?;
-    println!(
+    log::debug!(
         "[llm] provider=openai_compatible model={} raw_response={}",
         model,
         serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
@@ -99,7 +99,7 @@ pub fn complete_openai_compatible(
         }
     });
 
-    println!(
+    log::debug!(
         "[llm] provider=openai_compatible model={} content_len={} usage={:?}",
         model,
         content.len(),
@@ -300,7 +300,7 @@ pub fn complete_anthropic_with_output_format(
 
     let value = send_request(&body, has_output_format)?;
 
-    println!(
+    log::debug!(
         "[llm] provider=anthropic model={} raw_response={}",
         model,
         serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
@@ -336,7 +336,7 @@ pub fn complete_anthropic_with_output_format(
         }
     });
 
-    println!(
+    log::debug!(
         "[llm] provider=anthropic model={} content_len={} usage={:?}",
         model,
         content.len(),

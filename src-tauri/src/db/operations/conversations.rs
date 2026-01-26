@@ -61,7 +61,11 @@ pub trait ConversationOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         
-        println!("Updating conversation name: id={}, name={}", conversation_id, name);
+        log::debug!(
+            "Updating conversation name: id={}, name={}",
+            conversation_id,
+            name
+        );
         
         let result = conn.execute(
             "UPDATE conversations SET name = ?1 WHERE id = ?2",
@@ -69,8 +73,8 @@ pub trait ConversationOperations: DbOperations {
         );
         
         match &result {
-            Ok(rows) => println!("Updated {} rows", rows),
-            Err(e) => println!("Error updating conversation name: {}", e),
+            Ok(rows) => log::debug!("Updated {} rows", rows),
+            Err(e) => log::error!("Error updating conversation name: {}", e),
         }
         
         result?;
@@ -81,7 +85,7 @@ pub trait ConversationOperations: DbOperations {
     fn delete_conversation(&self, conversation_id: &str) -> RusqliteResult<()> {
         let binding = self.conn();
         
-        println!("Deleting conversation: id={}", conversation_id);
+        log::debug!("Deleting conversation: id={}", conversation_id);
         
         // Start a transaction to ensure atomicity
         let mut binding = binding.lock().unwrap();
@@ -108,7 +112,10 @@ pub trait ConversationOperations: DbOperations {
         // Commit the transaction
         tx.commit()?;
         
-        println!("Deleted conversation and related data, affected {} conversation rows", result);
+        log::debug!(
+            "Deleted conversation and related data, affected {} conversation rows",
+            result
+        );
         
         Ok(())
     }

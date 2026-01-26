@@ -361,6 +361,16 @@ impl DynamicController {
                 None => None,
             };
             let (approval_id, approval_rx) = self.approvals.create_request();
+            log::info!(
+                "[tool] approval requested: tool={} execution_id={} approval_id={} iteration={} session_id={} conversation_id={} message_id={}",
+                tool_name,
+                execution_id,
+                approval_id,
+                self.tool_calls_made + 1,
+                self.session.id,
+                self.session.conversation_id,
+                self.assistant_message_id
+            );
             let timestamp_ms = Utc::now().timestamp_millis();
             self.event_bus.publish(AgentEvent::new_with_timestamp(
                 EVENT_TOOL_EXECUTION_PROPOSED,
@@ -385,6 +395,16 @@ impl DynamicController {
             let timestamp_ms = Utc::now().timestamp_millis();
             match decision {
                 ToolApprovalDecision::Approved => {
+                    log::info!(
+                        "[tool] approval approved: tool={} execution_id={} approval_id={} iteration={} session_id={} conversation_id={} message_id={}",
+                        tool_name,
+                        execution_id,
+                        approval_id,
+                        self.tool_calls_made + 1,
+                        self.session.id,
+                        self.session.conversation_id,
+                        self.assistant_message_id
+                    );
                     self.event_bus.publish(AgentEvent::new_with_timestamp(
                         EVENT_TOOL_EXECUTION_APPROVED,
                         json!({
@@ -400,6 +420,16 @@ impl DynamicController {
                     ));
                 }
                 ToolApprovalDecision::Denied => {
+                    log::warn!(
+                        "[tool] approval denied: tool={} execution_id={} approval_id={} iteration={} session_id={} conversation_id={} message_id={}",
+                        tool_name,
+                        execution_id,
+                        approval_id,
+                        self.tool_calls_made + 1,
+                        self.session.id,
+                        self.session.conversation_id,
+                        self.assistant_message_id
+                    );
                     self.event_bus.publish(AgentEvent::new_with_timestamp(
                         EVENT_TOOL_EXECUTION_DENIED,
                         json!({
@@ -417,7 +447,7 @@ impl DynamicController {
                         step_id: step_id.to_string(),
                         success: false,
                         output: None,
-                        error: Some("Tool execution denied".to_string()),
+                        error: Some("Tool execution denied by approval".to_string()),
                         tool_executions,
                         duration_ms: 0,
                         completed_at: Utc::now(),
@@ -427,6 +457,18 @@ impl DynamicController {
         }
 
         self.tool_calls_made += 1;
+        let args_summary = summarize_tool_args(&args, 500);
+        log::info!(
+            "[tool] execution started: tool={} execution_id={} requires_approval={} iteration={} session_id={} conversation_id={} message_id={} args={}",
+            tool_name,
+            execution_id,
+            tool.metadata.requires_approval,
+            self.tool_calls_made,
+            self.session.id,
+            self.session.conversation_id,
+            self.assistant_message_id,
+            args_summary
+        );
         let timestamp_ms = Utc::now().timestamp_millis();
         self.event_bus.publish(AgentEvent::new_with_timestamp(
             EVENT_TOOL_EXECUTION_STARTED,
@@ -452,6 +494,15 @@ impl DynamicController {
         let (success, output, error) = match result {
             Ok(output) => {
                 let result_for_event = output.clone();
+                log::info!(
+                    "[tool] execution completed: tool={} execution_id={} duration_ms={} success=true session_id={} conversation_id={} message_id={}",
+                    tool_name,
+                    execution_id,
+                    duration_ms,
+                    self.session.id,
+                    self.session.conversation_id,
+                    self.assistant_message_id
+                );
                 self.event_bus.publish(AgentEvent::new_with_timestamp(
                     EVENT_TOOL_EXECUTION_COMPLETED,
                     json!({
@@ -471,6 +522,16 @@ impl DynamicController {
             }
             Err(err) => {
                 let error_message = err.message.clone();
+                log::warn!(
+                    "[tool] execution failed: tool={} execution_id={} duration_ms={} error={} session_id={} conversation_id={} message_id={}",
+                    tool_name,
+                    execution_id,
+                    duration_ms,
+                    error_message,
+                    self.session.id,
+                    self.session.conversation_id,
+                    self.assistant_message_id
+                );
                 self.event_bus.publish(AgentEvent::new_with_timestamp(
                     EVENT_TOOL_EXECUTION_COMPLETED,
                     json!({
@@ -790,6 +851,15 @@ fn normalize_tool_args(args: Value) -> Value {
         }
         other => other,
     }
+}
+
+fn summarize_tool_args(args: &Value, max_len: usize) -> String {
+    let raw = serde_json::to_string(args).unwrap_or_else(|_| "<invalid-json>".to_string());
+    if raw.len() <= max_len {
+        return raw;
+    }
+    let truncated: String = raw.chars().take(max_len).collect();
+    format!("{truncated}...")
 }
 
 fn extract_json(raw: &str) -> String {

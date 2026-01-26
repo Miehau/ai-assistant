@@ -15,7 +15,15 @@ use files::FileManager;
 use std::fs;
 use tauri::Manager;
 
+fn init_logging() {
+    let env = env_logger::Env::default().filter_or("RUST_LOG", "info");
+    let _ = env_logger::Builder::from_env(env)
+        .format_timestamp_millis()
+        .try_init();
+}
+
 fn main() {
+    init_logging();
     tauri::Builder::default()
         .setup(|app| {
             let app_dir = app.path_resolver().app_data_dir().expect("Failed to get app data dir");

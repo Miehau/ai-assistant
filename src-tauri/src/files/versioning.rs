@@ -135,7 +135,11 @@ impl VersionManager {
         
         // Create a new version of the current file before restoring
         if let Ok(current_version) = self.create_version(original_path, Some("Auto-backup before restore".to_string())) {
-            println!("Created backup version {} before restore", current_version.version_id);
+            log::debug!(
+                "Created backup version {} before restore (file_id={})",
+                current_version.version_id,
+                file_id
+            );
         }
         
         // Copy the version file to the original location

@@ -74,10 +74,14 @@ pub fn update_conversation_name(
     conversation_id: String,
     name: String,
 ) -> Result<(), String> {
-    println!("Tauri command update_conversation_name called with id={}, name={}", conversation_id, name);
+    log::debug!(
+        "Tauri command update_conversation_name called with id={}, name={}",
+        conversation_id,
+        name
+    );
     ConversationOperations::update_conversation_name(&*state, &conversation_id, &name)
         .map_err(|e| {
-            println!("Error in update_conversation_name command: {}", e);
+            log::error!("Error in update_conversation_name command: {}", e);
             e.to_string()
         })?;
 
@@ -101,10 +105,13 @@ pub fn delete_conversation(
     event_bus: State<'_, EventBus>,
     conversation_id: String,
 ) -> Result<(), String> {
-    println!("Tauri command delete_conversation called with id={}", conversation_id);
+    log::debug!(
+        "Tauri command delete_conversation called with id={}",
+        conversation_id
+    );
     ConversationOperations::delete_conversation(&*state, &conversation_id)
         .map_err(|e| {
-            println!("Error in delete_conversation command: {}", e);
+            log::error!("Error in delete_conversation command: {}", e);
             e.to_string()
         })?;
 

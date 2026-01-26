@@ -56,7 +56,7 @@ impl FileManager {
         let version_manager = match VersionManager::new(&root_dir) {
             Ok(vm) => Some(vm),
             Err(e) => {
-                eprintln!("Failed to initialize version manager: {}", e);
+                log::warn!("Failed to initialize version manager; versioning disabled: {}", e);
                 None
             }
         };
