@@ -10,7 +10,7 @@ use crate::db::{
     SaveMessageUsageInput,
     UsageOperations,
 };
-use crate::agent::DynamicController;
+use crate::agent::{capture_topic_note, DynamicController};
 use crate::agent::prompts::RESPONDER_PROMPT;
 use crate::events::{
     AgentEvent,
@@ -751,6 +751,25 @@ pub fn agent_send_message(
                 }),
                 timestamp_ms,
             ));
+
+            let note_db = db.clone();
+            let note_provider = provider.clone();
+            let note_model = model_for_thread.clone();
+            let note_custom_backend = custom_backend_config.clone();
+            let note_user_message = content.clone();
+            let note_assistant_message = final_response.clone();
+            std::thread::spawn(move || {
+                if let Err(err) = capture_topic_note(
+                    note_db,
+                    note_provider,
+                    note_model,
+                    note_custom_backend,
+                    note_user_message,
+                    note_assistant_message,
+                ) {
+                    eprintln!("[notes] capture failed: {}", err);
+                }
+            });
         }
 
         let usage = if usage_accumulator.prompt_tokens > 0 || usage_accumulator.completion_tokens > 0 {
