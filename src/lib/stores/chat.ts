@@ -8,6 +8,7 @@ import { conversationService } from '$lib/services/conversation';
 import { titleGeneratorService } from '$lib/services/titleGenerator';
 import { modelService, apiKeyService } from '$lib/models';
 import { customBackendService } from '$lib/services/customBackendService.svelte';
+import { ollamaService } from '$lib/services/ollamaService.svelte';
 import { v4 as uuidv4 } from 'uuid';
 import { branchStore } from '$lib/stores/branches';
 import { startAgentEventBridge } from '$lib/services/eventBridge';
@@ -25,6 +26,7 @@ import type {
 } from '$lib/types/events';
 import type { AgentPlan, AgentPlanStep, PhaseKind } from '$lib/types/agent';
 import { currentConversationUsage } from '$lib/stores/tokenUsage';
+import type { OllamaModel } from '$lib/types/ollama';
 
 // Extended model type with backend name for UI display
 export interface ModelWithBackend extends Model {
@@ -496,21 +498,45 @@ export async function loadModels() {
 
     availableModels.set(enabledModels);
 
-    if (enabledModels.length > 0) {
-      // Try to restore last used model
-      const lastUsedModel = await getLastUsedModel();
-      const modelToSelect = lastUsedModel && enabledModels.some(m => m.model_name === lastUsedModel)
-        ? lastUsedModel
-        : enabledModels[0].model_name;
+    // Try to restore last used model
+    const lastUsedModel = await getLastUsedModel();
+    const modelToSelect = lastUsedModel && enabledModels.some(m => m.model_name === lastUsedModel)
+      ? lastUsedModel
+      : enabledModels[0]?.model_name || null;
 
+    if (modelToSelect) {
       selectedModel.set(modelToSelect);
       console.log('[ChatStore] Selected model:', modelToSelect, lastUsedModel ? '(restored from preferences)' : '(default)');
     } else {
       console.warn('[ChatStore] No enabled models available!');
     }
+
+    // Fire-and-forget Ollama discovery and merge into available models
+    void ollamaService.discoverModels().then((models) => {
+      mergeOllamaModels(models);
+      if (lastUsedModel && models.some((model) => model.name === lastUsedModel)) {
+        if (modelToSelect && get(selectedModel) === modelToSelect) {
+          selectedModel.set(lastUsedModel);
+        }
+      }
+    });
   } catch (error) {
     console.error('[ChatStore] Failed to load models:', error);
   }
+}
+
+function mergeOllamaModels(models: OllamaModel[]) {
+  const currentModels = get(availableModels);
+  const nonOllamaModels = currentModels.filter(model => model.provider !== 'ollama');
+  const ollamaModels: ModelWithBackend[] = models.map(model => ({
+    provider: 'ollama',
+    model_name: model.name,
+    name: model.name,
+    enabled: true,
+  }));
+
+  const nextModels = [...nonOllamaModels, ...ollamaModels].filter(model => model.enabled);
+  availableModels.set(nextModels);
 }
 
 // Get the last used model from preferences
