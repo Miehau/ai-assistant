@@ -4,6 +4,7 @@ import { CustomProviderService } from './customProvider';
 import type { Message, Attachment, ConversationUsageSummary, CustomBackend } from '$lib/types';
 import { conversationService } from './conversation';
 import { modelService } from '$lib/models/modelService';
+import { modelRegistry } from '$lib/models/registry';
 import type { Model } from '$lib/types/models';
 import { formatMessages } from './messageFormatting';
 import { AnthropicService } from './anthropic';
@@ -461,6 +462,29 @@ export class ChatService {
       return customService.createChatCompletion(
         model.model_name,
         backend.url,
+        formattedMessages,
+        streamResponse,
+        onStreamResponse,
+        signal
+      );
+    }
+
+    if (model.provider === 'ollama') {
+      const providerBaseUrl =
+        modelRegistry.getProviderUrl('ollama') || 'http://localhost:11434/v1';
+      const normalizedBaseUrl = providerBaseUrl.replace(/\/$/, '');
+      const chatUrl = normalizedBaseUrl.endsWith('/chat/completions')
+        ? normalizedBaseUrl
+        : `${normalizedBaseUrl}/chat/completions`;
+
+      const ollamaService = new CustomProviderService({
+        url: chatUrl,
+        name: 'Ollama'
+      });
+
+      return ollamaService.createChatCompletion(
+        model.model_name,
+        chatUrl,
         formattedMessages,
         streamResponse,
         onStreamResponse,
