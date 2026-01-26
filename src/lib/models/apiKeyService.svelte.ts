@@ -122,6 +122,7 @@ export class ApiKeyService {
 
   private async refreshProviderAvailability(providers = modelRegistry.getAllProviders()): Promise<void> {
     const availability: Record<string, boolean> = {};
+    const ollamaBaseUrl = modelRegistry.getProviderUrl('ollama') || 'http://localhost:11434/v1';
 
     for (const provider of providers) {
       if (provider.authType === 'none' && provider.id === 'claude_cli') {
@@ -136,7 +137,9 @@ export class ApiKeyService {
 
       if (provider.authType === 'none' && provider.id === 'ollama') {
         try {
-          availability[provider.id] = await invoke<boolean>('check_ollama_status');
+          availability[provider.id] = await invoke<boolean>('check_ollama_status', {
+            base_url: ollamaBaseUrl,
+          });
         } catch (error) {
           console.error(`[ApiKeyService] Error checking Ollama availability:`, error);
           availability[provider.id] = false;

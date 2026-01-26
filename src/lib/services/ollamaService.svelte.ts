@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/tauri";
 import type { OllamaModel } from "$lib/types/ollama";
+import { modelRegistry } from "$lib/models/registry";
 
 /**
  * Service for managing Ollama discovery
@@ -18,12 +19,17 @@ export class OllamaService {
   async discoverModels(): Promise<OllamaModel[]> {
     this.loading = true;
     this.error = null;
+    const baseUrl = modelRegistry.getProviderUrl('ollama') || 'http://localhost:11434/v1';
 
     try {
-      const models = await invoke<OllamaModel[]>("discover_ollama_models");
+      const models = await invoke<OllamaModel[]>("discover_ollama_models", {
+        base_url: baseUrl,
+      });
       let available = false;
       try {
-        available = await invoke<boolean>("check_ollama_status");
+        available = await invoke<boolean>("check_ollama_status", {
+          base_url: baseUrl,
+        });
       } catch (error) {
         console.error('[OllamaService] Error checking availability:', error);
         available = false;
