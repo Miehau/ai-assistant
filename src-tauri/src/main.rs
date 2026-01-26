@@ -134,6 +134,9 @@ fn main() {
             commands::set_preference,
             // Claude CLI commands
             commands::is_claude_cli_installed,
+            // Ollama commands
+            commands::discover_ollama_models,
+            commands::check_ollama_status,
             // Tool approval commands
             commands::resolve_tool_execution_approval,
             commands::list_tools,
