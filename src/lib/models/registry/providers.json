@@ -45,6 +45,13 @@
       }
     },
     {
+      "id": "ollama",
+      "name": "Ollama",
+      "authType": "none",
+      "baseUrl": "http://localhost:11434/v1",
+      "defaultHeaders": {}
+    },
+    {
       "id": "custom",
       "name": "Custom Provider",
       "authType": "api_key",
