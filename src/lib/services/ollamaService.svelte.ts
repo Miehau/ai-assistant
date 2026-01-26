@@ -21,8 +21,15 @@ export class OllamaService {
 
     try {
       const models = await invoke<OllamaModel[]>("discover_ollama_models");
+      let available = false;
+      try {
+        available = await invoke<boolean>("check_ollama_status");
+      } catch (error) {
+        console.error('[OllamaService] Error checking availability:', error);
+        available = false;
+      }
       this.models = models;
-      this.available = true;
+      this.available = available;
       return models;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
