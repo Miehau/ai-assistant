@@ -4,3 +4,8 @@ export interface OllamaModel {
   digest: string;
   modified_at: string;
 }
+
+export interface OllamaDiscoveryResult {
+  models: OllamaModel[];
+  available: boolean;
+}

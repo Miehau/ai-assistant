@@ -18,6 +18,12 @@ struct OllamaTagsResponse {
     models: Vec<OllamaModel>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct OllamaDiscoveryResult {
+    pub models: Vec<OllamaModel>,
+    pub available: bool,
+}
+
 fn build_client() -> Result<Client, String> {
     Client::builder()
         .timeout(Duration::from_secs(OLLAMA_TIMEOUT_SECS))
@@ -43,7 +49,7 @@ fn tags_url_from_base(base_url: Option<String>) -> String {
 #[tauri::command(rename_all = "snake_case")]
 pub async fn discover_ollama_models(
     base_url: Option<String>,
-) -> Result<Vec<OllamaModel>, String> {
+) -> Result<OllamaDiscoveryResult, String> {
     let client = build_client()?;
     let tags_url = tags_url_from_base(base_url);
     let response = client.get(tags_url).send().await;
@@ -52,18 +58,27 @@ pub async fn discover_ollama_models(
         Ok(response) => response,
         Err(error) => {
             if is_soft_error(&error) {
-                return Ok(vec![]);
+                return Ok(OllamaDiscoveryResult {
+                    models: vec![],
+                    available: false,
+                });
             }
             return Err(error.to_string());
         }
     };
 
     if !response.status().is_success() {
-        return Ok(vec![]);
+        return Ok(OllamaDiscoveryResult {
+            models: vec![],
+            available: false,
+        });
     }
 
     let payload: OllamaTagsResponse = response.json().await.map_err(|e| e.to_string())?;
-    Ok(payload.models)
+    Ok(OllamaDiscoveryResult {
+        models: payload.models,
+        available: true,
+    })
 }
 
 #[tauri::command(rename_all = "snake_case")]
