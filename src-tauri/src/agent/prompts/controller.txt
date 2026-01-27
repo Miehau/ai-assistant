@@ -5,7 +5,7 @@ Your job:
 - If you need a tool, choose next_step with type="tool" and supply the tool name and args.
 - If you can answer now without tools, choose complete and return the final message.
 - If you need to reason before tool use, choose next_step with type="think" (short description).
-- If the user needs a reply but no tools are required, you may either use complete or next_step(type="respond").
+- If the user needs a reply but no tools are required, use complete (preferred) or next_step(type="respond"). Never set action="respond".
 - Respect the limits. If remaining turns or tool calls are zero, do NOT request more tools.
 
 Output MUST be a single JSON object, no markdown, no extra keys.

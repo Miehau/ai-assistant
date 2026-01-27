@@ -4,7 +4,9 @@ use crate::db::{
     CustomBackendOperations,
     Db,
     IncomingAttachment,
+    MessageAttachment,
     MessageOperations,
+    MessageToolExecution,
     MessageToolExecutionInput,
     ModelOperations,
     SaveMessageUsageInput,
@@ -306,10 +308,23 @@ pub fn agent_send_message(
 
     let mut messages: Vec<LlmMessage> = Vec::new();
     for message in history {
-        let content = if message.id == user_message_id {
-            build_user_content(&message.content, &attachments)
+        let content = if message.role == "user" {
+            let mapped_attachments = map_message_attachments(&message.attachments);
+            if mapped_attachments.is_empty() {
+                json!(message.content)
+            } else {
+                build_user_content(&message.content, &mapped_attachments)
+            }
         } else {
-            json!(message.content)
+            let mut content_text = message.content.clone();
+            if !message.tool_executions.is_empty() {
+                let tool_summary = format_tool_executions(&message.tool_executions);
+                if !tool_summary.is_empty() {
+                    content_text.push_str("\n\n");
+                    content_text.push_str(&tool_summary);
+                }
+            }
+            json!(content_text)
         };
 
         messages.push(LlmMessage {
@@ -1030,6 +1045,69 @@ fn build_user_content(content: &str, attachments: &[IncomingAttachment]) -> serd
     json!(content_array)
 }
 
+const MAX_TOOL_ARGS_CHARS: usize = 4000;
+const MAX_TOOL_RESULT_CHARS: usize = 8000;
+const MAX_TOOL_ERROR_CHARS: usize = 2000;
+
+fn map_message_attachments(attachments: &[MessageAttachment]) -> Vec<IncomingAttachment> {
+    attachments
+        .iter()
+        .map(|attachment| IncomingAttachment {
+            name: attachment.name.clone(),
+            data: attachment.data.clone(),
+            attachment_type: attachment.attachment_type.clone(),
+            description: attachment.description.clone(),
+            transcript: attachment.transcript.clone(),
+        })
+        .collect()
+}
+
+fn truncate_for_prompt(value: &str, max_len: usize) -> String {
+    let mut result = String::new();
+    let mut count = 0usize;
+    for ch in value.chars() {
+        if count >= max_len {
+            result.push_str(" ...(truncated)");
+            return result;
+        }
+        result.push(ch);
+        count += 1;
+    }
+    result
+}
+
+fn format_tool_executions(executions: &[MessageToolExecution]) -> String {
+    if executions.is_empty() {
+        return String::new();
+    }
+
+    let mut blocks = Vec::new();
+    for exec in executions {
+        let params = serde_json::to_string_pretty(&exec.parameters)
+            .unwrap_or_else(|_| exec.parameters.to_string());
+        let result = serde_json::to_string_pretty(&exec.result)
+            .unwrap_or_else(|_| exec.result.to_string());
+        let params = truncate_for_prompt(&params, MAX_TOOL_ARGS_CHARS);
+        let result = truncate_for_prompt(&result, MAX_TOOL_RESULT_CHARS);
+        let error = exec
+            .error
+            .as_deref()
+            .map(|err| truncate_for_prompt(err, MAX_TOOL_ERROR_CHARS));
+
+        let error_line = error
+            .as_ref()
+            .map(|err| format!("\nError: {}", err))
+            .unwrap_or_default();
+
+        blocks.push(format!(
+            "Tool: {}\nSuccess: {}\nArgs: {}\nResult: {}{}",
+            exec.tool_name, exec.success, params, result, error_line
+        ));
+    }
+
+    format!("[Tool executions]\n{}", blocks.join("\n\n"))
+}
+
 fn supports_streaming(provider: &str) -> bool {
     matches!(provider, "openai" | "anthropic" | "deepseek" | "custom" | "ollama")
 }
@@ -1040,7 +1118,7 @@ fn build_responder_prompt(
     tool_execution_inputs: &[MessageToolExecutionInput],
     draft: &str,
 ) -> String {
-    let recent_messages = render_recent_messages(messages, 8);
+    let recent_messages = render_recent_messages(messages, messages.len());
     let tool_outputs = render_tool_outputs(tool_execution_inputs);
     let draft_text = if draft.trim().is_empty() { "None" } else { draft };
     let recent_text = if recent_messages.trim().is_empty() {

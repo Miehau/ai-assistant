@@ -19,7 +19,8 @@
     pendingToolApprovals,
     agentPhase,
     agentPlan,
-    agentPlanSteps
+    agentPlanSteps,
+    toolActivity
   } from "$lib/stores/chat";
   import ChatMessages from "./chat/ChatMessages.svelte";
   import ChatInput from "./chat/ChatInput.svelte";
@@ -93,6 +94,7 @@
     <ChatMessages
       messages={$messages}
       toolApprovals={$pendingToolApprovals}
+      toolActivity={$toolActivity}
       agentPhase={$agentPhase}
       agentPlan={$agentPlan}
       agentPlanSteps={$agentPlanSteps}

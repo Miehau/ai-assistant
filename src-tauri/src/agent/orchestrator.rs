@@ -615,7 +615,7 @@ impl DynamicController {
             .unwrap_or_else(|_| "[]".to_string());
         let prompt = CONTROLLER_PROMPT
             .replace("{user_message}", user_message)
-            .replace("{recent_messages}", &self.render_history(8))
+            .replace("{recent_messages}", &self.render_history(self.messages.len()))
             .replace("{state_summary}", &self.render_state_summary())
             .replace("{last_tool_output}", &self.render_last_tool_output())
             .replace("{limits}", &self.render_limits(turns))
@@ -788,7 +788,39 @@ impl ControllerStep {
 }
 
 fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
-    serde_json::from_value(value.clone()).map_err(|err| format!("Invalid controller output: {err}"))
+    match serde_json::from_value::<ControllerAction>(value.clone()) {
+        Ok(action) => Ok(action),
+        Err(err) => {
+            let action = value.get("action").and_then(|val| val.as_str());
+            if action == Some("respond") {
+                if let Some(step_value) = value.get("step") {
+                    let mut step = step_value.clone();
+                    if step.get("type").is_none() {
+                        if let Value::Object(map) = &mut step {
+                            map.insert("type".to_string(), Value::String("respond".to_string()));
+                        }
+                    }
+                    if let Ok(step) = serde_json::from_value::<ControllerStep>(step) {
+                        return Ok(ControllerAction::NextStep { step });
+                    }
+                }
+
+                if let Some(message) = value.get("message").and_then(|val| val.as_str()) {
+                    return Ok(ControllerAction::Complete {
+                        message: message.to_string(),
+                    });
+                }
+
+                if let Some(message) = value.get("response").and_then(|val| val.as_str()) {
+                    return Ok(ControllerAction::Complete {
+                        message: message.to_string(),
+                    });
+                }
+            }
+
+            Err(format!("Invalid controller output: {err}"))
+        }
+    }
 }
 
 fn controller_output_format() -> Value {

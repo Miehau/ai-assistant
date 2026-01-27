@@ -8,14 +8,17 @@
   import { pageVisible } from "$lib/stores/visibility";
   import ToolApprovalQueue from "./ToolApprovalQueue.svelte";
   import AgentPlanPanel from "./AgentPlanPanel.svelte";
+  import ToolActivityPanel from "./ToolActivityPanel.svelte";
   import type { ToolExecutionProposedPayload } from "$lib/types/events";
   import type { AgentPlan, AgentPlanStep, PhaseKind } from "$lib/types/agent";
+  import type { ToolActivityEntry } from "$lib/stores/chat";
 
   export let messages: Message[] = [];
   export let chatContainer: HTMLElement | null = null;
   export let autoScroll = true;
   export let conversationId: string | undefined = undefined;
   export let toolApprovals: ToolExecutionProposedPayload[] = [];
+  export let toolActivity: ToolActivityEntry[] = [];
   export let agentPhase: PhaseKind | null = null;
   export let agentPlan: AgentPlan | null = null;
   export let agentPlanSteps: AgentPlanStep[] = [];
@@ -209,6 +212,18 @@
       />
     </div>
   {/each}
+
+  {#if toolActivity.length > 0}
+    <div
+      in:fly={{ y: 10, duration: 150, easing: backOut }}
+      class="w-full message-container flex justify-start"
+    >
+      <ToolActivityPanel
+        activities={toolActivity}
+        containerClass="w-full max-w-5xl min-w-0 flex-1"
+      />
+    </div>
+  {/if}
 
   {#if toolApprovals.length > 0}
     <div
