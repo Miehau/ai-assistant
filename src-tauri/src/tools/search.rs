@@ -6,10 +6,13 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+const VAULT_PATH_NOTE: &str =
+    "Paths are relative to the vault root (use \".\" for root; no absolute paths).";
+
 pub fn register_search_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: "search.rg".to_string(),
-        description: "Search the vault using ripgrep".to_string(),
+        description: format!("Search the vault using ripgrep. {VAULT_PATH_NOTE}"),
         args_schema: json!({
             "type": "object",
             "properties": {

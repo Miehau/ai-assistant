@@ -8,6 +8,9 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
+const VAULT_PATH_NOTE: &str =
+    "Paths are relative to the vault root (use \".\" for root; no absolute paths).";
+
 pub fn register_file_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     register_list_tool(registry, db.clone())?;
     register_read_tool(registry, db.clone(), "files.read", "Read file contents")?;
@@ -23,7 +26,9 @@ pub fn register_file_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), St
 fn register_list_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: "files.list".to_string(),
-        description: "List files and folders under a vault path".to_string(),
+        description: format!(
+            "List files and folders under a vault path. {VAULT_PATH_NOTE}"
+        ),
         args_schema: json!({
             "type": "object",
             "properties": {
@@ -107,7 +112,7 @@ fn register_read_tool(
 ) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: name.to_string(),
-        description: description.to_string(),
+        description: format!("{description}. {VAULT_PATH_NOTE}"),
         args_schema: json!({
             "type": "object",
             "properties": {
@@ -149,7 +154,7 @@ fn register_read_tool(
 fn register_write_tool(registry: &mut ToolRegistry, db: Db, name: &str, description: &str) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: name.to_string(),
-        description: description.to_string(),
+        description: format!("{description}. {VAULT_PATH_NOTE}"),
         args_schema: json!({
             "type": "object",
             "properties": {
@@ -202,7 +207,7 @@ fn register_write_tool(registry: &mut ToolRegistry, db: Db, name: &str, descript
 fn register_append_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: "files.append".to_string(),
-        description: "Append content to a file".to_string(),
+        description: format!("Append content to a file. {VAULT_PATH_NOTE}"),
         args_schema: json!({
             "type": "object",
             "properties": {
@@ -251,7 +256,7 @@ fn register_append_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
 fn register_create_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: "files.create".to_string(),
-        description: "Create a new file".to_string(),
+        description: format!("Create a new file. {VAULT_PATH_NOTE}"),
         args_schema: json!({
             "type": "object",
             "properties": {
@@ -319,7 +324,7 @@ fn register_create_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
 fn register_edit_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: "files.edit".to_string(),
-        description: "Edit a file by replacing a line range".to_string(),
+        description: format!("Edit a file by replacing a line range. {VAULT_PATH_NOTE}"),
         args_schema: json!({
             "type": "object",
             "properties": {
