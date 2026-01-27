@@ -8,7 +8,7 @@ use crate::llm::{
     LlmMessage,
     StreamResult,
 };
-use crate::tools::vault::get_vault_root;
+use crate::tools::get_vault_root;
 use chrono::Local;
 use reqwest::blocking::Client;
 use serde::Deserialize;

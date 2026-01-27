@@ -11,6 +11,7 @@ mod vault;
 
 pub use files::register_file_tools;
 pub use search::register_search_tool;
+pub use vault::get_vault_root;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolMetadata {
