@@ -883,15 +883,27 @@ pub fn agent_send_message(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn agent_generate_title(
+pub async fn agent_generate_title(
     state: State<'_, Db>,
     event_bus: State<'_, EventBus>,
+    payload: AgentGenerateTitlePayload,
+) -> Result<AgentGenerateTitleResult, String> {
+    let db = state.inner().clone();
+    let bus = event_bus.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || generate_title_and_update(db, bus, payload))
+        .await
+        .map_err(|err| format!("Title generation task failed: {err}"))?
+}
+
+fn generate_title_and_update(
+    db: Db,
+    event_bus: EventBus,
     payload: AgentGenerateTitlePayload,
 ) -> Result<AgentGenerateTitleResult, String> {
     let provider = payload.provider.to_lowercase();
     let model = payload.model.clone();
 
-    let history = MessageOperations::get_messages(&*state, &payload.conversation_id)
+    let history = MessageOperations::get_messages(&db, &payload.conversation_id)
         .map_err(|e| e.to_string())?;
 
     let first_user_message = history
@@ -923,7 +935,7 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
     let client = Client::new();
     let mut title = match provider.as_str() {
         "openai" => {
-            let api_key = ModelOperations::get_api_key(&*state, "openai")
+            let api_key = ModelOperations::get_api_key(&db, "openai")
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
             if api_key.is_empty() {
@@ -938,7 +950,7 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
             )
         }
         "anthropic" => {
-            let api_key = ModelOperations::get_api_key(&*state, "anthropic")
+            let api_key = ModelOperations::get_api_key(&db, "anthropic")
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
             if api_key.is_empty() {
@@ -947,7 +959,7 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
             complete_anthropic(&client, &api_key, &model, Some(system_prompt), &messages)
         }
         "deepseek" => {
-            let api_key = ModelOperations::get_api_key(&*state, "deepseek")
+            let api_key = ModelOperations::get_api_key(&db, "deepseek")
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
             if api_key.is_empty() {
@@ -969,7 +981,7 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
                 let backend_id = payload.custom_backend_id.clone().ok_or_else(|| {
                     "Custom provider requires custom_backend_id".to_string()
                 })?;
-                let backend = CustomBackendOperations::get_custom_backend_by_id(&*state, &backend_id)
+                let backend = CustomBackendOperations::get_custom_backend_by_id(&db, &backend_id)
                     .map_err(|e| e.to_string())?
                     .ok_or_else(|| "Custom backend not found".to_string())?;
                 (backend.url, backend.api_key)
@@ -987,7 +999,7 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
         title = "New Conversation".to_string();
     }
 
-    ConversationOperations::update_conversation_name(&*state, &payload.conversation_id, &title)
+    ConversationOperations::update_conversation_name(&db, &payload.conversation_id, &title)
         .map_err(|e| e.to_string())?;
 
     let timestamp_ms = Utc::now().timestamp_millis();

@@ -8,10 +8,12 @@ use uuid::Uuid;
 mod files;
 mod search;
 mod vault;
+mod web;
 
 pub use files::register_file_tools;
 pub use search::register_search_tool;
 pub use vault::get_vault_root;
+pub use web::register_web_tools;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolMetadata {

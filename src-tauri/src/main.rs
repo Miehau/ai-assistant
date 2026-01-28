@@ -52,6 +52,8 @@ fn main() {
                 .expect("Failed to register file tools");
             tools::register_search_tool(&mut tool_registry, db.clone())
                 .expect("Failed to register search tool");
+            tools::register_web_tools(&mut tool_registry, db.clone())
+                .expect("Failed to register web tools");
             let approval_store = tools::ApprovalStore::new();
 
             app.manage(db);
