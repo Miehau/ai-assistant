@@ -7,9 +7,9 @@
   import { streamingMessage, isStreaming } from "$lib/stores/chat";
   import { pageVisible } from "$lib/stores/visibility";
   import ToolApprovalQueue from "./ToolApprovalQueue.svelte";
-  import AgentPlanPanel from "./AgentPlanPanel.svelte";
-  import ToolActivityPanel from "./ToolActivityPanel.svelte";
+  import ToolCallBubble from "./ToolCallBubble.svelte";
   import type { ToolExecutionProposedPayload } from "$lib/types/events";
+  import { getPhaseLabel } from "$lib/types/agent";
   import type { AgentPlan, AgentPlanStep, PhaseKind } from "$lib/types/agent";
   import type { ToolActivityEntry } from "$lib/stores/chat";
 
@@ -23,6 +23,11 @@
   export let agentPlan: AgentPlan | null = null;
   export let agentPlanSteps: AgentPlanStep[] = [];
   export let isLoading = false;
+
+  $: phaseLabel = getPhaseLabel(agentPhase);
+  $: showThinkingStatus =
+    (isLoading || $isStreaming) &&
+    !($isStreaming && $streamingMessage && $streamingMessage.length > 0);
 
   let lastScrollHeight = 0;
   let lastScrollTop = 0;
@@ -196,6 +201,16 @@
   onscroll={handleScroll}
 >
   {#each messages as msg, i (msg.id || `${msg.type}-${i}`)}
+    {#if msg.type === "received" && msg.tool_calls && msg.tool_calls.length > 0}
+      {#each msg.tool_calls as call (call.execution_id)}
+        <div
+          in:fly={{ y: 10, duration: 150, easing: backOut }}
+          class="w-full message-container flex justify-start"
+        >
+          <ToolCallBubble {call} />
+        </div>
+      {/each}
+    {/if}
     <div
       in:fly={{ y: 10, duration: 150, delay: i * 10, easing: backOut }}
       out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
@@ -207,23 +222,10 @@
         attachments={msg.attachments}
         messageId={msg.id}
         conversationId={conversationId}
-        tool_calls={msg.tool_calls}
         agentActivity={msg.agentActivity}
       />
     </div>
   {/each}
-
-  {#if toolActivity.length > 0}
-    <div
-      in:fly={{ y: 10, duration: 150, easing: backOut }}
-      class="w-full message-container flex justify-start"
-    >
-      <ToolActivityPanel
-        activities={toolActivity}
-        containerClass="w-full max-w-5xl min-w-0 flex-1"
-      />
-    </div>
-  {/if}
 
   {#if toolApprovals.length > 0}
     <div
@@ -234,28 +236,21 @@
     </div>
   {/if}
 
-  {#if agentPhase || agentPlanSteps.length > 0}
+  {#if showThinkingStatus}
     <div
       in:fly={{ y: 10, duration: 150, easing: backOut }}
       class="w-full message-container flex justify-start"
     >
-      <AgentPlanPanel
-        phase={agentPhase}
-        plan={agentPlan}
-        steps={agentPlanSteps}
-      />
-    </div>
-  {/if}
-
-  {#if isLoading && !$isStreaming}
-    <div
-      in:fly={{ y: 10, duration: 150, easing: backOut }}
-      class="w-full message-container flex justify-start"
-    >
-      <div class="rounded-2xl px-4 py-2 w-full max-w-5xl min-w-0 bg-background/60 border border-border/60">
+      <div class="rounded-2xl px-4 py-2 w-full max-w-5xl min-w-0 bg-background/50 border border-border/60">
         <div class="flex items-center gap-2 text-xs text-muted-foreground">
-          <span class="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-400"></span>
-          <span>Agent is working…</span>
+          <span class="thinking-orb" aria-hidden="true"></span>
+          <span>Thinking</span>
+          <span class="thinking-dots" aria-hidden="true">
+            <span>.</span><span>.</span><span>.</span>
+          </span>
+          {#if agentPhase !== null && phaseLabel !== "Idle"}
+            <span class="text-foreground/80"> {phaseLabel}</span>
+          {/if}
         </div>
       </div>
     </div>
@@ -274,13 +269,6 @@
           conversationId={conversationId}
           isStreaming={true}
         />
-      {:else}
-        <div class="rounded-2xl px-4 py-2 w-full max-w-5xl min-w-0 bg-background/60 border border-border/60">
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            <span class="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-400"></span>
-            <span>Agent is working…</span>
-          </div>
-        </div>
       {/if}
     </div>
   {/if}
@@ -306,6 +294,51 @@
     100% {
       opacity: 0;
       transform: translateX(40px) rotate(10deg) scale(0.9);
+    }
+  }
+
+  .thinking-orb {
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: rgba(16, 185, 129, 0.75);
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.55);
+    animation: orbPulse 1.2s ease-in-out infinite;
+  }
+
+  .thinking-dots span {
+    display: inline-block;
+    margin-left: 2px;
+    animation: dotBlink 1.2s ease-in-out infinite;
+  }
+
+  .thinking-dots span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+
+  .thinking-dots span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  @keyframes orbPulse {
+    0%,
+    100% {
+      transform: scale(0.9);
+      opacity: 0.6;
+    }
+    50% {
+      transform: scale(1.15);
+      opacity: 1;
+    }
+  }
+
+  @keyframes dotBlink {
+    0%,
+    100% {
+      opacity: 0.2;
+    }
+    50% {
+      opacity: 1;
     }
   }
 </style>

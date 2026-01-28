@@ -21,7 +21,7 @@
     Prism.plugins.autoloader.languages_path =
       'https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/components/';
   }
-  import type { Attachment, ToolCallRecord } from "$lib/types";
+  import type { Attachment } from "$lib/types";
   import { fileService } from "$lib/services/fileService";
   import { onDestroy } from "svelte";
   import { getCachedParse, setCachedParse } from "$lib/utils/markdownCache";
@@ -33,7 +33,6 @@
   export let messageId: string | undefined = undefined;
   export let conversationId: string | undefined = undefined;
   export let isStreaming: boolean = false;
-  export let tool_calls: ToolCallRecord[] | undefined = undefined;
 
   // Track loading states for attachments
   let loadingStates: Record<string, boolean> = {};
@@ -320,20 +319,6 @@
     currentImageAlt = "";
   }
 
-  function formatToolPayload(payload: unknown): string {
-    if (payload === undefined) return "";
-    try {
-      return JSON.stringify(payload, null, 2);
-    } catch {
-      return String(payload);
-    }
-  }
-
-  function toolStatusLabel(call: ToolCallRecord): string {
-    if (call.success === true) return "success";
-    if (call.success === false) return "failed";
-    return "running";
-  }
 </script>
 
 <div
@@ -379,59 +364,6 @@
         </div>
       {/if}
 
-      {#if type === 'received' && tool_calls && tool_calls.length > 0}
-        <div class="mt-3 border-t border-border/40 pt-3">
-          <details class="rounded-xl border border-border/40 bg-background/40 px-3 py-2">
-            <summary class="cursor-pointer list-none">
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-xs font-semibold text-foreground">
-                  Tool calls
-                </span>
-                <span class="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {tool_calls.length}
-                </span>
-              </div>
-            </summary>
-
-            <div class="mt-3 space-y-3">
-              {#each tool_calls as call (call.execution_id)}
-                <div class="rounded-lg border border-border/40 bg-muted/30 p-3">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p class="text-xs font-semibold text-foreground">{call.tool_name}</p>
-                      <p class="text-[10px] text-muted-foreground">
-                        {toolStatusLabel(call)}
-                      </p>
-                    </div>
-                    {#if call.duration_ms !== undefined}
-                      <span class="text-[10px] text-muted-foreground">
-                        {call.duration_ms} ms
-                      </span>
-                    {/if}
-                  </div>
-
-                  <div class="mt-2 grid gap-2 md:grid-cols-2">
-                    <div>
-                      <p class="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Args</p>
-                      <pre class="max-h-40 overflow-auto rounded-md bg-background/60 p-2 text-[11px] font-mono text-foreground">
-{formatToolPayload(call.args)}
-                      </pre>
-                    </div>
-                    <div>
-                      <p class="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
-                        {call.success === false ? "Error" : "Result"}
-                      </p>
-                      <pre class="max-h-40 overflow-auto rounded-md bg-background/60 p-2 text-[11px] font-mono text-foreground">
-{formatToolPayload(call.success === false ? call.error : call.result)}
-                      </pre>
-                    </div>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </details>
-        </div>
-      {/if}
     </div>
   </div>
 </div>
