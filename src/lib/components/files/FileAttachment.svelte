@@ -369,8 +369,8 @@
           />
         {/if}
       </div>
-      <div class="text-sm max-h-48 overflow-y-auto">
-        <pre class="whitespace-pre-wrap">{attachment.content || 'No content available'}</pre>
+      <div class="text-sm max-h-48 overflow-y-auto overflow-x-auto max-w-full min-w-0">
+        <pre class="w-full max-w-full whitespace-pre-wrap break-words">{attachment.content || 'No content available'}</pre>
       </div>
     </div>
   {:else}
