@@ -140,6 +140,18 @@ impl ApprovalStore {
             .send(decision)
             .map_err(|_| "Failed to deliver approval decision".to_string())
     }
+
+    pub fn cancel(&self, approval_id: &str) -> Result<(), String> {
+        let removed = {
+            let mut pending = self.pending.lock().unwrap();
+            pending.remove(approval_id)
+        };
+        if removed.is_some() {
+            Ok(())
+        } else {
+            Err(format!("Unknown approval id: {approval_id}"))
+        }
+    }
 }
 
 #[cfg(test)]

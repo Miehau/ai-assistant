@@ -40,7 +40,8 @@ use crate::llm::{
 use crate::tools::{ApprovalStore, ToolRegistry};
 use chrono::Utc;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -61,6 +62,7 @@ struct PricingData {
 }
 
 static PRICING: OnceLock<HashMap<String, PricingEntry>> = OnceLock::new();
+static CANCEL_REGISTRY: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 
 fn get_pricing() -> &'static HashMap<String, PricingEntry> {
     PRICING.get_or_init(|| {
@@ -70,6 +72,35 @@ fn get_pricing() -> &'static HashMap<String, PricingEntry> {
         });
         parsed.pricing
     })
+}
+
+fn cancel_registry() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    CANCEL_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_cancel_token(message_id: &str) -> Arc<AtomicBool> {
+    let token = Arc::new(AtomicBool::new(false));
+    let mut registry = cancel_registry().lock().unwrap();
+    registry.insert(message_id.to_string(), token.clone());
+    token
+}
+
+fn remove_cancel_token(message_id: &str) {
+    let mut registry = cancel_registry().lock().unwrap();
+    registry.remove(message_id);
+}
+
+fn cancel_token(message_id: &str) -> bool {
+    let token = {
+        let registry = cancel_registry().lock().unwrap();
+        registry.get(message_id).cloned()
+    };
+    if let Some(token) = token {
+        token.store(true, Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
 }
 
 fn calculate_estimated_cost(model: &str, prompt_tokens: i32, completion_tokens: i32) -> f64 {
@@ -228,6 +259,11 @@ pub struct AgentGenerateTitlePayload {
     pub custom_backend_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AgentCancelPayload {
+    pub message_id: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AgentGenerateTitleResult {
     pub title: String,
@@ -369,6 +405,7 @@ pub fn agent_send_message(
     let user_message_id_for_thread = user_message_id.clone();
     let tool_registry_for_thread = tool_registry.inner().clone();
     let approvals_for_thread = approvals.inner().clone();
+    let cancel_token_for_thread = register_cancel_token(&assistant_message_id);
 
     std::thread::spawn(move || {
         let client = Client::new();
@@ -508,6 +545,7 @@ pub fn agent_send_message(
             bus.clone(),
             tool_registry_for_thread.clone(),
             approvals_for_thread.clone(),
+            cancel_token_for_thread.clone(),
             messages,
             system_prompt_for_thread.clone(),
             conversation_id_for_thread.clone(),
@@ -528,7 +566,11 @@ pub fn agent_send_message(
                     controller_ok = true;
                 }
                 Err(error) => {
-                    draft = format!("Agent error: {}", error);
+                    if error == "Cancelled" {
+                        draft.clear();
+                    } else {
+                        draft = format!("Agent error: {}", error);
+                    }
                 }
             }
             tool_execution_inputs = controller.take_tool_executions();
@@ -748,8 +790,10 @@ pub fn agent_send_message(
                 Some(assistant_message_id_for_thread.clone()),
             );
 
-            for input in tool_execution_inputs {
-                let _ = MessageOperations::save_tool_execution(&db, input);
+            if !tool_execution_inputs.is_empty() {
+                for input in tool_execution_inputs {
+                    let _ = MessageOperations::save_tool_execution(&db, input);
+                }
             }
 
             let _ = BranchOperations::create_message_tree_node(
@@ -873,6 +917,8 @@ pub fn agent_send_message(
             }),
             timestamp_ms,
         ));
+
+        remove_cancel_token(&assistant_message_id_for_thread);
     });
 
     Ok(AgentSendMessageResult {
@@ -880,6 +926,15 @@ pub fn agent_send_message(
         user_message_id,
         assistant_message_id,
     })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn agent_cancel(payload: AgentCancelPayload) -> Result<(), String> {
+    if cancel_token(&payload.message_id) {
+        Ok(())
+    } else {
+        Err("No active agent request for message_id".to_string())
+    }
 }
 
 #[tauri::command(rename_all = "snake_case")]

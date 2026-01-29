@@ -4,7 +4,7 @@
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Paperclip, Send, Square } from "lucide-svelte";
-  import { chatService } from "$lib/services/chat";
+  import { cancelCurrentAgentRequest } from "$lib/stores/chat";
   import { fileService } from "$lib/services/fileService";
   import type { Attachment, FileMetadata, Message } from "$lib/types";
   import { get } from "svelte/store";
@@ -503,7 +503,7 @@
       type="button"
       size="icon"
       variant={isLoading ? "destructive" : "ghost"}
-      onclick={isLoading ? () => chatService.cancelCurrentRequest() : handleSendMessage}
+      onclick={isLoading ? () => cancelCurrentAgentRequest() : handleSendMessage}
     >
       {#if isLoading}
         <Square class="size-4" />

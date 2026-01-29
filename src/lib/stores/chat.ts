@@ -66,6 +66,7 @@ let stopAgentEventBridge: (() => void) | null = null;
 let streamingAssistantMessageId: string | null = null;
 let streamingChunkBuffer = '';
 let streamingFlushPending = false;
+let pendingAssistantMessageId: string | null = null;
 const TOOL_ACTIVITY_LIMIT = 8;
 const toolCallsByMessageId = new Map<string, Map<string, ToolCallRecord>>();
 
@@ -209,6 +210,7 @@ export async function startAgentEvents() {
       isStreaming.set(false);
       streamingMessage.set('');
       streamingAssistantMessageId = null;
+      pendingAssistantMessageId = null;
       isLoading.set(false);
       pendingToolApprovals.set([]);
       toolActivity.set([]);
@@ -284,6 +286,7 @@ export async function startAgentEvents() {
       }
 
       streamingAssistantMessageId = null;
+      pendingAssistantMessageId = null;
       isStreaming.set(false);
       streamingMessage.set('');
       streamingChunkBuffer = '';
@@ -640,7 +643,8 @@ export async function sendMessage() {
     attachments.set([]);
 
     // Default system prompt
-    const defaultSystemPrompt = 'You are a helpful assistant.';
+    const defaultSystemPrompt =
+      'You are a helpful assistant. Before saying you cannot do something, consider what you can do with the available tools and attempt that first.';
 
     // Get system prompt content safely
     let systemPromptContent = defaultSystemPrompt;
@@ -666,6 +670,7 @@ export async function sendMessage() {
     // Generate assistant message ID before streaming
     const assistantMessageId = generateMessageId();
     const userMessageId = generateMessageId();
+    pendingAssistantMessageId = assistantMessageId;
 
     await invoke('agent_send_message', {
       payload: {
@@ -697,9 +702,32 @@ export async function sendMessage() {
     }
   } catch (error) {
     console.error('Error sending message:', error);
+    pendingAssistantMessageId = null;
     isLoading.set(false);
   } finally {
     // Loading state cleared on stream completion.
+  }
+}
+
+export async function cancelCurrentAgentRequest() {
+  const messageId = streamingAssistantMessageId || pendingAssistantMessageId;
+  if (!messageId) {
+    isLoading.set(false);
+    return;
+  }
+
+  try {
+    await invoke('agent_cancel', { message_id: messageId });
+  } catch (error) {
+    console.error('Failed to cancel agent request:', error);
+  } finally {
+    streamingAssistantMessageId = null;
+    pendingAssistantMessageId = null;
+    isStreaming.set(false);
+    streamingMessage.set('');
+    streamingChunkBuffer = '';
+    streamingFlushPending = false;
+    isLoading.set(false);
   }
 }
 
@@ -711,6 +739,8 @@ export function clearConversation() {
   // Clear streaming state
   isStreaming.set(false);
   streamingMessage.set('');
+  streamingAssistantMessageId = null;
+  pendingAssistantMessageId = null;
   pendingToolApprovals.set([]);
   toolActivity.set([]);
   toolCallsByMessageId.clear();

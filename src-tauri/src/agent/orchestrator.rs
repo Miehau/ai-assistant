@@ -33,7 +33,9 @@ use crate::tools::{ApprovalStore, ToolApprovalDecision, ToolExecutionContext, To
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 pub struct DynamicController {
@@ -41,6 +43,7 @@ pub struct DynamicController {
     event_bus: EventBus,
     tool_registry: ToolRegistry,
     approvals: ApprovalStore,
+    cancel_flag: Arc<AtomicBool>,
     session: AgentSession,
     messages: Vec<LlmMessage>,
     base_system_prompt: Option<String>,
@@ -57,6 +60,7 @@ impl DynamicController {
         event_bus: EventBus,
         tool_registry: ToolRegistry,
         approvals: ApprovalStore,
+        cancel_flag: Arc<AtomicBool>,
         messages: Vec<LlmMessage>,
         base_system_prompt: Option<String>,
         conversation_id: String,
@@ -86,6 +90,7 @@ impl DynamicController {
             event_bus,
             tool_registry,
             approvals,
+            cancel_flag,
             session,
             messages,
             base_system_prompt,
@@ -105,6 +110,9 @@ impl DynamicController {
 
         let mut turns = 0u32;
         loop {
+            if self.is_cancelled() {
+                return Err("Cancelled".to_string());
+            }
             if turns >= self.session.config.max_total_llm_turns {
                 return Err("Exceeded maximum LLM turns".to_string());
             }
@@ -326,9 +334,22 @@ impl DynamicController {
             Utc::now().timestamp_millis(),
         ));
 
+        let result_error = result.error.clone();
         self.last_step_result = Some(result.clone());
         self.session.step_results.push(result);
         self.set_phase(PhaseKind::Controller)?;
+
+        if let Some(error) = result_error.as_deref() {
+            if error == "Tool execution denied by approval"
+                || error == "Tool approval timed out"
+                || error == "Tool execution cancelled"
+            {
+                return Ok(Some(
+                    "Okay, stopping since the tool request wasn't approved. Let me know how you'd like to continue."
+                        .to_string(),
+                ));
+            }
+        }
 
         Ok(respond_message)
     }
@@ -388,9 +409,29 @@ impl DynamicController {
                 timestamp_ms,
             ));
 
-            let decision = approval_rx
-                .recv()
-                .map_err(|_| "Approval channel closed".to_string())?;
+            let approval_start = Instant::now();
+            let mut forced_denial_reason: Option<&'static str> = None;
+            let decision = loop {
+                if self.is_cancelled() {
+                    let _ = self.approvals.cancel(&approval_id);
+                    forced_denial_reason = Some("Tool execution cancelled");
+                    break ToolApprovalDecision::Denied;
+                }
+
+                match approval_rx.recv_timeout(Duration::from_millis(200)) {
+                    Ok(decision) => break decision,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if approval_start.elapsed().as_millis() as u64
+                            >= self.session.config.approval_timeout_ms
+                        {
+                            let _ = self.approvals.cancel(&approval_id);
+                            forced_denial_reason = Some("Tool approval timed out");
+                            break ToolApprovalDecision::Denied;
+                        }
+                    }
+                    Err(_) => return Err("Approval channel closed".to_string()),
+                }
+            };
 
             let timestamp_ms = Utc::now().timestamp_millis();
             match decision {
@@ -420,6 +461,9 @@ impl DynamicController {
                     ));
                 }
                 ToolApprovalDecision::Denied => {
+                    let denied_error = forced_denial_reason
+                        .unwrap_or("Tool execution denied by approval")
+                        .to_string();
                     log::warn!(
                         "[tool] approval denied: tool={} execution_id={} approval_id={} iteration={} session_id={} conversation_id={} message_id={}",
                         tool_name,
@@ -443,17 +487,44 @@ impl DynamicController {
                         }),
                         timestamp_ms,
                     ));
+                    tool_executions.push(ToolExecutionRecord {
+                        execution_id: execution_id.clone(),
+                        tool_name: tool_name.to_string(),
+                        args: args.clone(),
+                        result: None,
+                        success: false,
+                        error: Some(denied_error.clone()),
+                        duration_ms: 0,
+                        iteration: (self.tool_calls_made + 1) as usize,
+                        timestamp_ms,
+                    });
+                    self.pending_tool_executions.push(MessageToolExecutionInput {
+                        id: execution_id,
+                        message_id: self.assistant_message_id.clone(),
+                        tool_name: tool_name.to_string(),
+                        parameters: args,
+                        result: json!(null),
+                        success: false,
+                        duration_ms: 0,
+                        timestamp_ms,
+                        error: Some(denied_error.clone()),
+                        iteration_number: (self.tool_calls_made + 1) as i64,
+                    });
                     return Ok(StepResult {
                         step_id: step_id.to_string(),
                         success: false,
                         output: None,
-                        error: Some("Tool execution denied by approval".to_string()),
+                        error: Some(denied_error),
                         tool_executions,
                         duration_ms: 0,
                         completed_at: Utc::now(),
                     });
                 }
             }
+        }
+
+        if self.is_cancelled() {
+            return Err("Cancelled".to_string());
         }
 
         self.tool_calls_made += 1;
@@ -719,6 +790,10 @@ impl DynamicController {
             "Remaining turns: {}. Remaining tool calls: {}.",
             remaining_turns, remaining_tools
         )
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel_flag.load(Ordering::Relaxed)
     }
 
     fn update_step_status(&self, step_id: &str, status: StepStatus) -> Result<(), String> {
