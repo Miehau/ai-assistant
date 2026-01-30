@@ -102,15 +102,13 @@
               <div class="mt-3 max-h-64 overflow-auto rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
                 {#each lines as line}
                   <div
-                    class="whitespace-pre px-1"
+                    class={`whitespace-pre px-1 ${isAddedLine(line) ? 'bg-primary/10' : ''} ${isRemovedLine(line) ? 'bg-destructive/10' : ''}`}
                     class:text-muted-foreground={isDiffHeader(line)}
                     class:text-accent-amber={isFileHeader(line)}
                     class:text-accent-cyan={isHunkHeader(line)}
                     class:font-semibold={isHunkHeader(line)}
                     class:text-primary={isAddedLine(line)}
-                    class:bg-primary/10={isAddedLine(line)}
                     class:text-destructive={isRemovedLine(line)}
-                    class:bg-destructive/10={isRemovedLine(line)}
                   >{line}</div>
                 {/each}
               </div>

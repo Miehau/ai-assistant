@@ -105,7 +105,6 @@ impl DynamicController {
     where
         F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
-        self.ensure_plan(user_message)?;
         self.set_phase(PhaseKind::Controller)?;
 
         let mut turns = 0u32;
@@ -121,6 +120,7 @@ impl DynamicController {
             let decision = self.call_controller(call_llm, user_message, turns)?;
             match decision {
                 ControllerAction::NextStep { step } => {
+                    self.ensure_plan(user_message)?;
                     if let Some(response) = self.execute_step(call_llm, step)? {
                         return self.finish(response);
                     }

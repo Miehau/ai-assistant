@@ -414,6 +414,18 @@ pub fn agent_send_message(
             prompt_tokens: 0,
             completion_tokens: 0,
         };
+        let openai_api_key = ModelOperations::get_api_key(&db, "openai")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let anthropic_api_key = ModelOperations::get_api_key(&db, "anthropic")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let deepseek_api_key = ModelOperations::get_api_key(&db, "deepseek")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
 
         let custom_backend_config = if provider == "custom" {
             custom_backend_id
@@ -452,16 +464,12 @@ pub fn agent_send_message(
 
                 let result = match provider.as_str() {
                     "openai" => {
-                        let api_key = ModelOperations::get_api_key(&db, "openai")
-                            .ok()
-                            .flatten()
-                            .unwrap_or_default();
-                        if api_key.is_empty() {
+                        if openai_api_key.is_empty() {
                             Err("Missing OpenAI API key".to_string())
                         } else {
                             complete_openai(
                                 &client,
-                                &api_key,
+                                &openai_api_key,
                                 "https://api.openai.com/v1/chat/completions",
                                 &model_for_thread,
                                 &prepared_messages,
@@ -469,16 +477,12 @@ pub fn agent_send_message(
                         }
                     }
                     "anthropic" => {
-                        let api_key = ModelOperations::get_api_key(&db, "anthropic")
-                            .ok()
-                            .flatten()
-                            .unwrap_or_default();
-                        if api_key.is_empty() {
+                        if anthropic_api_key.is_empty() {
                             Err("Missing Anthropic API key".to_string())
                         } else {
                             complete_anthropic_with_output_format(
                                 &client,
-                                &api_key,
+                                &anthropic_api_key,
                                 &model_for_thread,
                                 system_prompt,
                                 &prepared_messages,
@@ -487,16 +491,12 @@ pub fn agent_send_message(
                         }
                     }
                     "deepseek" => {
-                        let api_key = ModelOperations::get_api_key(&db, "deepseek")
-                            .ok()
-                            .flatten()
-                            .unwrap_or_default();
-                        if api_key.is_empty() {
+                        if deepseek_api_key.is_empty() {
                             Err("Missing DeepSeek API key".to_string())
                         } else {
                             complete_openai_compatible(
                                 &client,
-                                Some(&api_key),
+                                Some(&deepseek_api_key),
                                 "https://api.deepseek.com/chat/completions",
                                 &model_for_thread,
                                 &prepared_messages,
@@ -584,7 +584,7 @@ pub fn agent_send_message(
         let mut stream_started = false;
 
         let stream_supported = supports_streaming(&provider);
-        let use_responder = controller_ok && stream_supported;
+        let use_responder = controller_ok && stream_supported && !tool_execution_inputs.is_empty();
 
         if use_responder {
             let responder_prompt = build_responder_prompt(
@@ -649,16 +649,12 @@ pub fn agent_send_message(
 
             let stream_result = match provider.as_str() {
                 "openai" => {
-                    let api_key = ModelOperations::get_api_key(&db, "openai")
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default();
-                    if api_key.is_empty() {
+                    if openai_api_key.is_empty() {
                         Err("Missing OpenAI API key".to_string())
                     } else {
                         stream_openai(
                             &client,
-                            &api_key,
+                            &openai_api_key,
                             "https://api.openai.com/v1/chat/completions",
                             &model_for_thread,
                             &prepared_responder_messages,
@@ -667,16 +663,12 @@ pub fn agent_send_message(
                     }
                 }
                 "anthropic" => {
-                    let api_key = ModelOperations::get_api_key(&db, "anthropic")
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default();
-                    if api_key.is_empty() {
+                    if anthropic_api_key.is_empty() {
                         Err("Missing Anthropic API key".to_string())
                     } else {
                         stream_anthropic(
                             &client,
-                            &api_key,
+                            &anthropic_api_key,
                             &model_for_thread,
                             responder_system_prompt,
                             &responder_messages,
@@ -685,16 +677,12 @@ pub fn agent_send_message(
                     }
                 }
                 "deepseek" => {
-                    let api_key = ModelOperations::get_api_key(&db, "deepseek")
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default();
-                    if api_key.is_empty() {
+                    if deepseek_api_key.is_empty() {
                         Err("Missing DeepSeek API key".to_string())
                     } else {
                         stream_openai_compatible(
                             &client,
-                            Some(&api_key),
+                            Some(&deepseek_api_key),
                             "https://api.deepseek.com/chat/completions",
                             &model_for_thread,
                             &prepared_responder_messages,
