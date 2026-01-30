@@ -22,6 +22,35 @@
     }
   }
 
+  function looksLikeDiff(text: string): boolean {
+    return text.startsWith("--- a/") || text.includes("\n@@") || text.includes("\ndiff --git ");
+  }
+
+  function splitDiffLines(diff: string): string[] {
+    const lines = diff.replace(/\n$/, "").split("\n");
+    return lines.length === 1 && lines[0] === "" ? [] : lines;
+  }
+
+  function diffLines(preview: ToolExecutionProposedPayload["preview"]): string[] | null {
+    if (!preview) return null;
+    if (typeof preview === "string") {
+      return looksLikeDiff(preview) ? splitDiffLines(preview) : null;
+    }
+    if (typeof preview === "object" && preview && "diff" in preview) {
+      const diff = (preview as { diff?: unknown }).diff;
+      if (typeof diff === "string") {
+        return splitDiffLines(diff);
+      }
+    }
+    return null;
+  }
+
+  const isDiffHeader = (line: string) => line.startsWith("diff --git ");
+  const isFileHeader = (line: string) => line.startsWith("--- ") || line.startsWith("+++ ");
+  const isHunkHeader = (line: string) => line.startsWith("@@");
+  const isAddedLine = (line: string) => line.startsWith("+") && !line.startsWith("+++");
+  const isRemovedLine = (line: string) => line.startsWith("-") && !line.startsWith("---");
+
   function previewTitle(preview: ToolExecutionProposedPayload["preview"]): string | null {
     if (!preview || typeof preview !== "object") return null;
     if ("path" in preview && typeof (preview as { path?: unknown }).path === "string") {
@@ -68,13 +97,28 @@
           </div>
 
           {#if approval.preview}
-            <pre class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
-{formatPreview(approval.preview)}
-            </pre>
+            {@const lines = diffLines(approval.preview)}
+            {#if lines && lines.length > 0}
+              <div class="mt-3 max-h-64 overflow-auto rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
+                {#each lines as line}
+                  <div
+                    class="whitespace-pre px-1"
+                    class:text-muted-foreground={isDiffHeader(line)}
+                    class:text-accent-amber={isFileHeader(line)}
+                    class:text-accent-cyan={isHunkHeader(line)}
+                    class:font-semibold={isHunkHeader(line)}
+                    class:text-primary={isAddedLine(line)}
+                    class:bg-primary/10={isAddedLine(line)}
+                    class:text-destructive={isRemovedLine(line)}
+                    class:bg-destructive/10={isRemovedLine(line)}
+                  >{line}</div>
+                {/each}
+              </div>
+            {:else}
+              <pre class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">{formatPreview(approval.preview)}</pre>
+            {/if}
           {:else}
-            <pre class="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
-{JSON.stringify(approval.args, null, 2)}
-            </pre>
+            <pre class="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">{JSON.stringify(approval.args, null, 2)}</pre>
           {/if}
         </div>
       {/each}
