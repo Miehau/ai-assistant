@@ -248,6 +248,17 @@ mod tests {
         assert!(updated_content.contains("Universe"));
         assert!(updated_content.contains("Append"));
 
+        let read_range = call_tool(
+            &registry,
+            "files.read_range",
+            json!({ "path": "notes/test.md", "start_line": 2, "max_lines": 1 }),
+        );
+        let range_content = read_range
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(range_content.contains("Universe"));
+
         if rg_available() {
             let search = call_tool(
                 &registry,
@@ -264,5 +275,66 @@ mod tests {
                 .unwrap_or(0);
             assert!(results_len > 0);
         }
+    }
+
+    #[test]
+    fn read_range_defaults_and_limits() {
+        let vault_root = std::env::temp_dir().join(format!("vault-root-{}", Uuid::new_v4()));
+        fs::create_dir_all(&vault_root).expect("vault root create failed");
+
+        let db = setup_db(vault_root.to_str().unwrap());
+        let mut registry = ToolRegistry::new();
+        register_file_tools(&mut registry, db.clone()).expect("file tools registration failed");
+
+        call_tool(
+            &registry,
+            "files.create",
+            json!({
+                "path": "notes/range.md",
+                "content": "Line1\nLine2\nLine3\nLine4\nLine5\n"
+            }),
+        );
+
+        let read_default = call_tool(
+            &registry,
+            "files.read_range",
+            json!({ "path": "notes/range.md" }),
+        );
+        let default_content = read_default
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(default_content.contains("Line1"));
+        assert!(default_content.contains("Line5"));
+
+        let read_window = call_tool(
+            &registry,
+            "files.read_range",
+            json!({ "path": "notes/range.md", "start_line": 2, "end_line": 3 }),
+        );
+        let window_content = read_window
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(!window_content.contains("Line1"));
+        assert!(window_content.contains("Line2"));
+        assert!(window_content.contains("Line3"));
+        assert!(!window_content.contains("Line4"));
+
+        let read_truncated = call_tool(
+            &registry,
+            "files.read_range",
+            json!({ "path": "notes/range.md", "max_chars": 6 }),
+        );
+        let truncated = read_truncated
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let truncated_content = read_truncated
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(truncated);
+        assert!(truncated_content.len() <= 6);
     }
 }

@@ -8,6 +8,7 @@ Your job:
 - If the user needs a reply but no tools are required, use complete (preferred) or next_step(type="respond"). Never set action="respond".
 - Respect the limits. If remaining turns or tool calls are zero, do NOT request more tools.
 - Before choosing complete, scan AVAILABLE TOOLS and prefer using them to satisfy the user request, especially for current/live info (weather, prices, news, schedules). If a tool requires approval, request it rather than refusing. Only decline after tools are unavailable or fail.
+- For file access, prefer targeted tools: use search to locate relevant lines and files.read_range to fetch a small window. Avoid files.read on large files unless truly necessary.
 
 Output MUST be a single JSON object, no markdown, no extra keys.
 
