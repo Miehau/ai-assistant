@@ -30,6 +30,7 @@ log = "0.4"
 scraper = "0.20"
 url = "2.5"
 mime = "0.3"
+regex = "1.10"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

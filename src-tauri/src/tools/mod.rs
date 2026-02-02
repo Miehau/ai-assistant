@@ -337,4 +337,77 @@ mod tests {
         assert!(truncated);
         assert!(truncated_content.len() <= 6);
     }
+
+    #[test]
+    fn search_replace_updates_content() {
+        let vault_root = std::env::temp_dir().join(format!("vault-root-{}", Uuid::new_v4()));
+        fs::create_dir_all(&vault_root).expect("vault root create failed");
+
+        let db = setup_db(vault_root.to_str().unwrap());
+        let mut registry = ToolRegistry::new();
+        register_file_tools(&mut registry, db.clone()).expect("file tools registration failed");
+
+        call_tool(
+            &registry,
+            "files.create",
+            json!({
+                "path": "notes/replace.md",
+                "content": "Alpha\nbeta\nAlpha\n"
+            }),
+        );
+
+        let replace_result = call_tool(
+            &registry,
+            "files.search_replace",
+            json!({
+                "path": "notes/replace.md",
+                "query": "Alpha",
+                "replace": "Gamma"
+            }),
+        );
+        let replacements = replace_result
+            .get("replacements")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        assert_eq!(replacements, 2);
+
+        let read_back = call_tool(
+            &registry,
+            "files.read",
+            json!({ "path": "notes/replace.md" }),
+        );
+        let content = read_back
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(content.contains("Gamma"));
+        assert!(content.contains("beta"));
+
+        let replace_case_insensitive = call_tool(
+            &registry,
+            "files.search_replace",
+            json!({
+                "path": "notes/replace.md",
+                "query": "BETA",
+                "replace": "Delta",
+                "case_sensitive": false
+            }),
+        );
+        let replacements = replace_case_insensitive
+            .get("replacements")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        assert_eq!(replacements, 1);
+
+        let read_back = call_tool(
+            &registry,
+            "files.read",
+            json!({ "path": "notes/replace.md" }),
+        );
+        let content = read_back
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(content.contains("Delta"));
+    }
 }

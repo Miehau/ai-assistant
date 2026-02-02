@@ -1,6 +1,7 @@
 use crate::db::Db;
 use crate::tools::vault::{ensure_parent_dirs, resolve_vault_path};
 use crate::tools::{ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry};
+use regex::{Regex, RegexBuilder};
 use serde_json::{json, Value};
 use std::fs;
 use std::fs::OpenOptions;
@@ -18,6 +19,7 @@ pub fn register_file_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), St
     register_read_tool(registry, db.clone(), "files.read", "Read file contents")?;
     register_read_tool(registry, db.clone(), "files.open", "Open file contents")?;
     register_read_range_tool(registry, db.clone())?;
+    register_search_replace_tool(registry, db.clone())?;
     register_write_tool(registry, db.clone(), "files.write", "Write/replace file contents")?;
     register_write_tool(registry, db.clone(), "files.replace", "Replace file contents")?;
     register_append_tool(registry, db.clone())?;
@@ -288,6 +290,80 @@ fn register_read_range_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
     })
 }
 
+fn register_search_replace_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
+    let metadata = ToolMetadata {
+        name: "files.search_replace".to_string(),
+        description: format!(
+            "Search and replace within a file (defaults: literal=true, case_sensitive=true). {VAULT_PATH_NOTE}"
+        ),
+        args_schema: json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "query": { "type": "string" },
+                "replace": { "type": "string" },
+                "literal": { "type": "boolean" },
+                "case_sensitive": { "type": "boolean" },
+                "max_replacements": { "type": "integer", "minimum": 1 }
+            },
+            "required": ["path", "query", "replace"],
+            "additionalProperties": false
+        }),
+        result_schema: json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "updated": { "type": "boolean" },
+                "replacements": { "type": "integer" }
+            },
+            "required": ["path", "updated", "replacements"],
+            "additionalProperties": false
+        }),
+        requires_approval: true,
+    };
+
+    let handler_db = db.clone();
+    let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let edit = parse_search_replace_args(&args)?;
+        let vault_path = resolve_vault_path(&handler_db, &edit.path)?;
+        let original = fs::read_to_string(&vault_path.full_path)
+            .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))?;
+        let (updated, replacements) = apply_search_replace(&original, &edit)?;
+        if replacements > 0 {
+            fs::write(&vault_path.full_path, updated.as_bytes())
+                .map_err(|err| ToolError::new(format!("Failed to write file: {err}")))?;
+        }
+        Ok(json!({
+            "path": vault_path.display_path,
+            "updated": replacements > 0,
+            "replacements": replacements as i64
+        }))
+    });
+
+    let preview_db = db;
+    let preview = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let edit = parse_search_replace_args(&args)?;
+        let vault_path = resolve_vault_path(&preview_db, &edit.path)?;
+        let original = fs::read_to_string(&vault_path.full_path)
+            .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))?;
+        let (updated, replacements) = apply_search_replace(&original, &edit)?;
+        let mut preview = build_diff_preview(&vault_path.display_path, &original, &updated);
+        if let Some(obj) = preview.as_object_mut() {
+            obj.insert("replacements".to_string(), json!(replacements as i64));
+            if replacements == 0 {
+                obj.insert("note".to_string(), json!("No matches found"));
+            }
+        }
+        Ok(preview)
+    });
+
+    registry.register(ToolDefinition {
+        metadata,
+        handler,
+        preview: Some(preview),
+    })
+}
+
 fn register_write_tool(registry: &mut ToolRegistry, db: Db, name: &str, description: &str) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: name.to_string(),
@@ -524,6 +600,15 @@ struct EditArgs {
     content: String,
 }
 
+struct SearchReplaceArgs {
+    path: String,
+    query: String,
+    replace: String,
+    literal: bool,
+    case_sensitive: bool,
+    max_replacements: Option<usize>,
+}
+
 fn require_string_arg(args: &Value, key: &str) -> Result<String, ToolError> {
     args.get(key)
         .and_then(|value| value.as_str())
@@ -562,6 +647,34 @@ fn parse_edit_args(args: &Value) -> Result<EditArgs, ToolError> {
     })
 }
 
+fn parse_search_replace_args(args: &Value) -> Result<SearchReplaceArgs, ToolError> {
+    let path = require_string_arg(args, "path")?;
+    let query = require_string_arg(args, "query")?;
+    let replace = require_string_arg(args, "replace")?;
+    let literal = args.get("literal").and_then(|v| v.as_bool()).unwrap_or(true);
+    let case_sensitive = args
+        .get("case_sensitive")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let max_replacements = args
+        .get("max_replacements")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+
+    if query.is_empty() {
+        return Err(ToolError::new("Query cannot be empty"));
+    }
+
+    Ok(SearchReplaceArgs {
+        path,
+        query,
+        replace,
+        literal,
+        case_sensitive,
+        max_replacements,
+    })
+}
+
 fn apply_line_edit(
     original: &str,
     start_line: usize,
@@ -594,6 +707,45 @@ fn apply_line_edit(
         updated.push('\n');
     }
     Ok(updated)
+}
+
+fn build_search_replace_regex(edit: &SearchReplaceArgs) -> Result<Regex, ToolError> {
+    let pattern = if edit.literal {
+        regex::escape(&edit.query)
+    } else {
+        edit.query.clone()
+    };
+    let mut builder = RegexBuilder::new(&pattern);
+    builder.case_insensitive(!edit.case_sensitive);
+    builder
+        .build()
+        .map_err(|err| ToolError::new(format!("Invalid search pattern: {err}")))
+}
+
+fn apply_search_replace(
+    original: &str,
+    edit: &SearchReplaceArgs,
+) -> Result<(String, usize), ToolError> {
+    let regex = build_search_replace_regex(edit)?;
+    if !edit.literal && regex.is_match("") {
+        return Err(ToolError::new(
+            "Regex matches empty string; refusing to replace",
+        ));
+    }
+
+    let replacements = match edit.max_replacements {
+        Some(limit) => regex.find_iter(original).take(limit).count(),
+        None => regex.find_iter(original).count(),
+    };
+    if replacements == 0 {
+        return Ok((original.to_string(), 0));
+    }
+
+    let updated = match edit.max_replacements {
+        Some(limit) => regex.replacen(original, limit, edit.replace.as_str()).into_owned(),
+        None => regex.replace_all(original, edit.replace.as_str()).into_owned(),
+    };
+    Ok((updated, replacements))
 }
 
 fn read_optional_file(path: &Path) -> Result<String, ToolError> {
