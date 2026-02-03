@@ -16,12 +16,14 @@
   import { page } from "$app/stores";
   import ConversationDrawer from "$lib/components/conversation/ConversationDrawer.svelte";
   import BranchDrawer from "$lib/components/branch/BranchDrawer.svelte";
+  import SettingsDrawer from "$lib/components/SettingsDrawer.svelte";
   import { currentConversation } from "$lib/services/conversation";
 
   $: currentPath = $page.url.pathname;
 
   let isConversationDrawerOpen = false;
   let isBranchDrawerOpen = false;
+  let isSettingsDrawerOpen = false;
 
   function toggleConversationDrawer() {
     isConversationDrawerOpen = !isConversationDrawerOpen;
@@ -29,6 +31,10 @@
 
   function toggleBranchDrawer() {
     isBranchDrawerOpen = !isBranchDrawerOpen;
+  }
+
+  function toggleSettingsDrawer() {
+    isSettingsDrawerOpen = !isSettingsDrawerOpen;
   }
 
   function handleBranchDrawerClose() {
@@ -127,16 +133,16 @@
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         {#snippet child({ props })}
-          <a href="/settings" {...props}>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-9 w-9 rounded-lg transition-all {currentPath === '/settings' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
-              aria-label="Settings"
-            >
-              <Settings2 class="size-5" />
-            </Button>
-          </a>
+          <Button
+            {...props}
+            variant="ghost"
+            size="icon"
+            class="h-9 w-9 rounded-lg transition-all {isSettingsDrawerOpen ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
+            aria-label="Settings"
+            onclick={toggleSettingsDrawer}
+          >
+            <Settings2 class="size-5" />
+          </Button>
         {/snippet}
       </Tooltip.Trigger>
       <Tooltip.Content side="right" sideOffset={5}>Settings</Tooltip.Content>
@@ -181,6 +187,7 @@
 </Tooltip.Provider>
 
 <ConversationDrawer bind:isOpen={isConversationDrawerOpen} />
+<SettingsDrawer bind:isOpen={isSettingsDrawerOpen} />
 {#if $currentConversation?.id}
   <BranchDrawer
     conversationId={$currentConversation.id}

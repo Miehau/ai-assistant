@@ -1,0 +1,307 @@
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use rand::{distributions::Alphanumeric, Rng};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use specta::Type;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use url::Url;
+use uuid::Uuid;
+
+#[derive(Clone, Debug)]
+pub struct GoogleOAuthConfig {
+    pub client_id: String,
+    pub client_secret: Option<String>,
+}
+
+const GOOGLE_OAUTH_CLIENT_ID_DEFAULT: &str =
+    "645520844276-kdq09e1e1kkdjcd181caehri0avcku79.apps.googleusercontent.com";
+
+pub fn google_oauth_config_with_override(
+    client_id: Option<String>,
+    client_secret: Option<String>,
+) -> Result<GoogleOAuthConfig, String> {
+    if let Some(client_id) = client_id {
+        let secret = client_secret.and_then(|value| {
+            if value.trim().is_empty() {
+                None
+            } else {
+                Some(value)
+            }
+        });
+        return Ok(GoogleOAuthConfig {
+            client_id,
+            client_secret: secret,
+        });
+    }
+    google_oauth_config()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GoogleTokenResponse {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub expires_in: Option<i64>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub token_type: Option<String>,
+}
+
+pub fn google_oauth_config() -> Result<GoogleOAuthConfig, String> {
+    let client_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID")
+        .ok()
+        .or_else(|| option_env!("GOOGLE_OAUTH_CLIENT_ID").map(|value| value.to_string()))
+        .unwrap_or_else(|| GOOGLE_OAUTH_CLIENT_ID_DEFAULT.to_string());
+
+    let client_secret = std::env::var("GOOGLE_OAUTH_CLIENT_SECRET")
+        .ok()
+        .or_else(|| option_env!("GOOGLE_OAUTH_CLIENT_SECRET").map(|value| value.to_string()));
+
+    Ok(GoogleOAuthConfig {
+        client_id,
+        client_secret,
+    })
+}
+
+pub fn generate_pkce() -> (String, String) {
+    let verifier: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(64)
+        .map(char::from)
+        .collect();
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+    (verifier, challenge)
+}
+
+pub fn build_google_auth_url(
+    config: &GoogleOAuthConfig,
+    redirect_uri: &str,
+    scopes: &[String],
+    state: &str,
+    code_challenge: &str,
+) -> Result<String, String> {
+    let mut url = Url::parse("https://accounts.google.com/o/oauth2/v2/auth")
+        .map_err(|err| format!("Failed to build auth URL: {err}"))?;
+    url.query_pairs_mut()
+        .append_pair("client_id", &config.client_id)
+        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("response_type", "code")
+        .append_pair("scope", &scopes.join(" "))
+        .append_pair("access_type", "offline")
+        .append_pair("prompt", "consent")
+        .append_pair("state", state)
+        .append_pair("code_challenge", code_challenge)
+        .append_pair("code_challenge_method", "S256");
+    Ok(url.to_string())
+}
+
+pub fn exchange_google_code(
+    config: &GoogleOAuthConfig,
+    code: &str,
+    code_verifier: &str,
+    redirect_uri: &str,
+) -> Result<GoogleTokenResponse, String> {
+    let client = reqwest::blocking::Client::new();
+    let mut params: Vec<(&str, String)> = vec![
+        ("client_id", config.client_id.clone()),
+        ("code", code.to_string()),
+        ("code_verifier", code_verifier.to_string()),
+        ("redirect_uri", redirect_uri.to_string()),
+        ("grant_type", "authorization_code".to_string()),
+    ];
+    if let Some(secret) = config.client_secret.as_ref() {
+        params.push(("client_secret", secret.clone()));
+    }
+
+    let response = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&params)
+        .send()
+        .map_err(|err| format!("Token exchange failed: {err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Token exchange error: HTTP {}", response.status()));
+    }
+
+    response
+        .json::<GoogleTokenResponse>()
+        .map_err(|err| format!("Failed to parse token response: {err}"))
+}
+
+pub fn refresh_google_token(
+    config: &GoogleOAuthConfig,
+    refresh_token: &str,
+) -> Result<GoogleTokenResponse, String> {
+    let client = reqwest::blocking::Client::new();
+    let mut params: Vec<(&str, String)> = vec![
+        ("client_id", config.client_id.clone()),
+        ("refresh_token", refresh_token.to_string()),
+        ("grant_type", "refresh_token".to_string()),
+    ];
+    if let Some(secret) = config.client_secret.as_ref() {
+        params.push(("client_secret", secret.clone()));
+    }
+
+    let response = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&params)
+        .send()
+        .map_err(|err| format!("Token refresh failed: {err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Token refresh error: HTTP {}", response.status()));
+    }
+
+    response
+        .json::<GoogleTokenResponse>()
+        .map_err(|err| format!("Failed to parse refresh response: {err}"))
+}
+
+#[derive(Clone, Debug)]
+struct OAuthSession {
+    status: OAuthStatus,
+    created_at: i64,
+}
+
+#[derive(Clone, Debug)]
+enum OAuthStatus {
+    Pending,
+    Completed { connection_id: String },
+    Error { message: String },
+    Cancelled,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct OAuthSessionStatus {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct OAuthSessionStore {
+    sessions: Arc<Mutex<HashMap<String, OAuthSession>>>,
+}
+
+impl OAuthSessionStore {
+    pub fn new() -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn create_session(&self) -> String {
+        let id = Uuid::new_v4().to_string();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let session = OAuthSession {
+            status: OAuthStatus::Pending,
+            created_at: now,
+        };
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.insert(id.clone(), session);
+        id
+    }
+
+    pub fn set_completed(&self, id: &str, connection_id: String) {
+        let mut sessions = self.sessions.lock().unwrap();
+        if let Some(session) = sessions.get_mut(id) {
+            session.status = OAuthStatus::Completed { connection_id };
+        }
+    }
+
+    pub fn set_error(&self, id: &str, message: String) {
+        let mut sessions = self.sessions.lock().unwrap();
+        if let Some(session) = sessions.get_mut(id) {
+            session.status = OAuthStatus::Error { message };
+        }
+    }
+
+    pub fn set_cancelled(&self, id: &str) {
+        let mut sessions = self.sessions.lock().unwrap();
+        if let Some(session) = sessions.get_mut(id) {
+            session.status = OAuthStatus::Cancelled;
+        }
+    }
+
+    pub fn is_cancelled(&self, id: &str) -> bool {
+        let sessions = self.sessions.lock().unwrap();
+        matches!(
+            sessions.get(id).map(|session| &session.status),
+            Some(OAuthStatus::Cancelled)
+        )
+    }
+
+    pub fn get_status(&self, id: &str) -> Option<OAuthSessionStatus> {
+        let sessions = self.sessions.lock().unwrap();
+        sessions.get(id).map(|session| match &session.status {
+            OAuthStatus::Pending => OAuthSessionStatus {
+                status: "pending".to_string(),
+                connection_id: None,
+                error: None,
+            },
+            OAuthStatus::Completed { connection_id } => OAuthSessionStatus {
+                status: "completed".to_string(),
+                connection_id: Some(connection_id.clone()),
+                error: None,
+            },
+            OAuthStatus::Error { message } => OAuthSessionStatus {
+                status: "error".to_string(),
+                connection_id: None,
+                error: Some(message.clone()),
+            },
+            OAuthStatus::Cancelled => OAuthSessionStatus {
+                status: "cancelled".to_string(),
+                connection_id: None,
+                error: None,
+            },
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_google_auth_url, generate_pkce, google_oauth_config_with_override, GoogleOAuthConfig};
+
+    #[test]
+    fn pkce_generation_is_deterministic_length() {
+        let (verifier, challenge) = generate_pkce();
+        assert!(verifier.len() >= 43);
+        assert!(!challenge.contains('='));
+    }
+
+    #[test]
+    fn build_auth_url_contains_params() {
+        let config = GoogleOAuthConfig {
+            client_id: "client-id".to_string(),
+            client_secret: None,
+        };
+        let scopes = vec!["scope-a".to_string(), "scope-b".to_string()];
+        let url = build_google_auth_url(&config, "http://127.0.0.1:8000/callback", &scopes, "state", "challenge")
+            .expect("url");
+        let parsed = url::Url::parse(&url).expect("parse url");
+        let params: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(params.get("client_id"), Some(&"client-id".to_string()));
+        assert_eq!(params.get("redirect_uri"), Some(&"http://127.0.0.1:8000/callback".to_string()));
+        assert_eq!(params.get("scope"), Some(&"scope-a scope-b".to_string()));
+        assert_eq!(params.get("code_challenge"), Some(&"challenge".to_string()));
+    }
+
+    #[test]
+    fn oauth_override_prefers_custom_id() {
+        let config = google_oauth_config_with_override(Some("custom-id".to_string()), None)
+            .expect("config");
+        assert_eq!(config.client_id, "custom-id");
+    }
+}

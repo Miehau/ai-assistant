@@ -46,6 +46,13 @@ bun run build
    - Anthropic API key
 3. Optionally configure custom OpenAI-compatible endpoints
 
+### Gmail OAuth Tokens (Production)
+
+For production distribution, OAuth tokens should be stored in the OS keychain
+instead of the SQLite database. This prevents access/refresh tokens from being
+read if the database is copied. This is a recommended follow-up before shipping
+public builds.
+
 ### Claude CLI (Optional)
 
 If you have [Claude Code](https://github.com/anthropics/claude-code) installed, the app can use it as a provider:

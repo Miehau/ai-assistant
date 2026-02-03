@@ -1,6 +1,7 @@
 use super::{
     BranchOperations, ConversationOperations, Db, DbOperations, IncomingAttachment, MessageOperations,
-    Model, ModelOperations, PreferenceOperations,
+    Model, ModelOperations, PreferenceOperations, McpServerOperations, IntegrationConnectionOperations,
+    CreateMcpServerInput, UpdateMcpServerInput, CreateIntegrationConnectionInput, UpdateIntegrationConnectionInput,
 };
 use rusqlite::params;
 use uuid::Uuid;
@@ -230,6 +231,80 @@ fn create_branch_from_message_copies_path_and_marks_branch_point() {
             .collect();
         assert_eq!(branch_ids, expected);
     }
+}
+
+#[test]
+fn mcp_servers_crud() {
+    let db = setup_db();
+
+    let server = db
+        .create_mcp_server(&CreateMcpServerInput {
+            name: "Local MCP".to_string(),
+            url: "http://localhost:3000".to_string(),
+            auth_type: "api_key".to_string(),
+            api_key: Some("secret".to_string()),
+        })
+        .unwrap();
+
+    let servers = db.get_mcp_servers().unwrap();
+    assert_eq!(servers.len(), 1);
+    assert_eq!(servers[0].name, "Local MCP");
+
+    let updated = db
+        .update_mcp_server(&UpdateMcpServerInput {
+            id: server.id.clone(),
+            name: Some("Updated MCP".to_string()),
+            url: None,
+            auth_type: None,
+            api_key: None,
+        })
+        .unwrap()
+        .expect("updated server");
+    assert_eq!(updated.name, "Updated MCP");
+
+    let deleted = db.delete_mcp_server(&server.id).unwrap();
+    assert!(deleted);
+}
+
+#[test]
+fn integration_connections_crud() {
+    let db = setup_db();
+
+    let connection = db
+        .create_integration_connection(&CreateIntegrationConnectionInput {
+            integration_id: "gmail".to_string(),
+            account_label: Some("Work Gmail".to_string()),
+            auth_type: "oauth2".to_string(),
+            access_token: Some("access-token".to_string()),
+            refresh_token: Some("refresh-token".to_string()),
+            scopes: Some("scope-a scope-b".to_string()),
+            expires_at: Some(1234567890),
+        })
+        .unwrap();
+
+    assert_eq!(connection.status, "connected");
+
+    let updated = db
+        .update_integration_connection(&UpdateIntegrationConnectionInput {
+            id: connection.id.clone(),
+            account_label: Some("Personal Gmail".to_string()),
+            status: Some("error".to_string()),
+            auth_type: None,
+            access_token: None,
+            refresh_token: None,
+            scopes: None,
+            expires_at: None,
+            last_error: Some("HTTP 401".to_string()),
+            last_sync_at: Some(999999),
+        })
+        .unwrap()
+        .expect("updated connection");
+
+    assert_eq!(updated.account_label.as_deref(), Some("Personal Gmail"));
+    assert_eq!(updated.status, "error");
+
+    let deleted = db.delete_integration_connection(&connection.id).unwrap();
+    assert!(deleted);
 }
 
 #[test]

@@ -5,6 +5,8 @@ mod commands;
 mod setup_default_values;
 mod files;
 mod events;
+mod integrations;
+mod oauth;
 mod llm;
 mod tools;
 mod agent;
@@ -56,13 +58,17 @@ fn main() {
                 .expect("Failed to register web tools");
             tools::register_pref_tools(&mut tool_registry, db.clone())
                 .expect("Failed to register preference tools");
+            tools::register_integration_tools(&mut tool_registry, db.clone())
+                .expect("Failed to register integration tools");
             let approval_store = tools::ApprovalStore::new();
+            let oauth_store = oauth::OAuthSessionStore::new();
 
             app.manage(db);
             app.manage(file_manager);
             app.manage(event_bus);
             app.manage(tool_registry);
             app.manage(approval_store);
+            app.manage(oauth_store);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -134,6 +140,23 @@ fn main() {
             commands::create_custom_backend,
             commands::update_custom_backend,
             commands::delete_custom_backend,
+            // Integration registry
+            commands::list_integrations,
+            commands::get_integration_connections,
+            commands::create_integration_connection,
+            commands::update_integration_connection,
+            commands::delete_integration_connection,
+            commands::test_integration_connection,
+            commands::start_google_oauth,
+            commands::get_oauth_session,
+            commands::cancel_oauth_session,
+            // MCP server commands
+            commands::get_mcp_servers,
+            commands::get_mcp_server,
+            commands::create_mcp_server,
+            commands::update_mcp_server,
+            commands::delete_mcp_server,
+            commands::test_mcp_server,
             // User preferences commands
             commands::get_preference,
             commands::set_preference,

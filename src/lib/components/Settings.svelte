@@ -1,11 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/api/dialog";
+  import { X } from "lucide-svelte";
   import { backend } from "$lib/backend";
   import type { ToolMetadata } from "$lib/types/tools";
-  import * as Card from "$lib/components/ui/card";
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";
+  import Integrations from "$lib/components/Integrations.svelte";
+
+  let { showClose = false, onClose }: { showClose?: boolean; onClose?: () => void } = $props();
 
   const VAULT_ROOT_KEY = "plugins.files.vault_root";
   let vaultRoot = $state("");
@@ -14,9 +17,13 @@
   let isSaving = $state(false);
   let statusMessage = $state("");
   let statusTone = $state<"idle" | "success" | "error">("idle");
+
   let tools = $state<ToolMetadata[]>([]);
   let toolsLoading = $state(true);
   let toolsError = $state("");
+  let toolQuery = $state("");
+  let selectedToolName = $state<string | null>(null);
+  let activeTab = $state<"tools" | "vault" | "integrations">("tools");
 
   onMount(() => {
     loadVaultRoot();
@@ -84,6 +91,30 @@
     }
   }
 
+  let filteredTools = $derived(() => {
+    const query = toolQuery.trim().toLowerCase();
+    if (!query) return tools;
+    return tools.filter((tool) => {
+      const nameMatch = tool.name.toLowerCase().includes(query);
+      const descMatch = tool.description?.toLowerCase().includes(query);
+      return nameMatch || descMatch;
+    });
+  });
+
+  let selectedTool = $derived(
+    () => filteredTools.find((tool) => tool.name === selectedToolName) ?? null
+  );
+
+  $effect(() => {
+    if (!filteredTools.length) {
+      selectedToolName = null;
+      return;
+    }
+    if (!selectedToolName || !filteredTools.some((tool) => tool.name === selectedToolName)) {
+      selectedToolName = filteredTools[0].name;
+    }
+  });
+
   function formatSchema(schema: ToolMetadata["args_schema"] | ToolMetadata["result_schema"]): string {
     try {
       return JSON.stringify(schema, null, 2);
@@ -91,112 +122,230 @@
       return "";
     }
   }
+
+  function selectTool(name: string) {
+    selectedToolName = name;
+  }
+
+  function closePanel() {
+    onClose?.();
+  }
 </script>
 
-<div class="container max-w-3xl mx-auto py-8">
-  <div class="mb-6">
-    <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Settings</p>
-    <h2 class="text-2xl font-semibold">Vault configuration</h2>
-    <p class="text-sm text-muted-foreground/70 mt-1">
-      File and search tools operate inside your Obsidian vault root.
-    </p>
+<div class="h-full flex flex-col gap-4 p-6">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Settings</p>
+      <h2 class="text-xl font-semibold">Configuration</h2>
+      <p class="text-xs text-muted-foreground/70 mt-1">
+        Manage vault preferences, integrations, and tool behavior.
+      </p>
+    </div>
+    {#if showClose}
+      <Button variant="ghost" size="icon" class="rounded-lg" onclick={closePanel}>
+        <X class="h-4 w-4" />
+      </Button>
+    {/if}
   </div>
 
-  <Card.Root class="surface-card border-0 overflow-hidden">
-    <Card.Content class="p-6 space-y-4">
-      <div class="space-y-2">
-        <label class="text-xs font-medium text-muted-foreground">Vault root path</label>
-        <div class="flex flex-wrap gap-2 items-center">
-          <Input
-            placeholder={isLoading ? "Loading..." : "/path/to/your/vault"}
-            bind:value={vaultRoot}
-            class="flex-1 min-w-[240px]"
-            readonly={isLoading}
-          />
-          <Button variant="outline" size="sm" onclick={browseVaultRoot} disabled={isLoading}>
-            Browse
-          </Button>
-          <Button size="sm" onclick={saveVaultRoot} disabled={isLoading || isSaving}>
-            {isSaving ? "Saving..." : "Save"}
-          </Button>
-        </div>
-        <p class="text-xs text-muted-foreground">
-          Current value:
-          <span class="font-mono">{savedRoot || "Not set"}</span>
-        </p>
-        {#if statusMessage}
-          <p
-            class={`text-xs ${
-              statusTone === "success"
-                ? "text-emerald-400"
-                : statusTone === "error"
-                  ? "text-red-400"
-                  : "text-muted-foreground"
-            }`}
-          >
-            {statusMessage}
-          </p>
-        {/if}
-      </div>
-    </Card.Content>
-  </Card.Root>
-
-  <div class="mt-8 mb-4">
-    <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Tooling</p>
-    <h3 class="text-xl font-semibold">Tool catalog</h3>
-    <p class="text-sm text-muted-foreground/70 mt-1">
-      Available tools and their approval requirements.
-    </p>
+  <div class="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 p-1 text-[11px]">
+    <button
+      class={`px-3 py-1 rounded-lg transition-all ${
+        activeTab === "tools"
+          ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
+          : "text-muted-foreground/70 hover:text-foreground"
+      }`}
+      onclick={() => (activeTab = "tools")}
+    >
+      Tools
+    </button>
+    <button
+      class={`px-3 py-1 rounded-lg transition-all ${
+        activeTab === "vault"
+          ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
+          : "text-muted-foreground/70 hover:text-foreground"
+      }`}
+      onclick={() => (activeTab = "vault")}
+    >
+      Vault
+    </button>
+    <button
+      class={`px-3 py-1 rounded-lg transition-all ${
+        activeTab === "integrations"
+          ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
+          : "text-muted-foreground/70 hover:text-foreground"
+      }`}
+      onclick={() => (activeTab = "integrations")}
+    >
+      Integrations
+    </button>
   </div>
 
-  <Card.Root class="surface-card border-0 overflow-hidden">
-    <Card.Content class="p-6 space-y-4">
-      {#if toolsLoading}
-        <p class="text-sm text-muted-foreground">Loading tools...</p>
-      {:else if toolsError}
-        <p class="text-sm text-red-400">{toolsError}</p>
-      {:else if tools.length === 0}
-        <p class="text-sm text-muted-foreground">No tools registered.</p>
-      {:else}
-        <div class="space-y-4">
-          {#each tools as tool (tool.name)}
-            <details class="rounded-xl border border-border/40 bg-background/40 px-4 py-3">
-              <summary class="cursor-pointer list-none">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p class="text-sm font-semibold text-foreground">{tool.name}</p>
-                    <p class="text-xs text-muted-foreground">{tool.description}</p>
+  <div class="flex-1 min-h-0 rounded-2xl border border-white/10 bg-white/5 p-3">
+    {#if activeTab === "tools"}
+      <div class="grid h-full min-h-0 grid-cols-[minmax(220px,0.38fr)_minmax(0,0.62fr)] gap-3">
+        <div class="flex min-h-0 flex-col">
+          <div class="flex items-center gap-2">
+            <Input
+              placeholder="Search tools..."
+              bind:value={toolQuery}
+              class="h-8 text-xs bg-white/5 border-white/10"
+            />
+            <span class="glass-badge-sm text-[10px] text-muted-foreground/70">
+              {filteredTools.length}
+            </span>
+          </div>
+
+          <div class="mt-2 flex-1 min-h-0 overflow-y-auto space-y-1 pr-1">
+            {#if toolsLoading}
+              <p class="text-xs text-muted-foreground">Loading tools...</p>
+            {:else if toolsError}
+              <p class="text-xs text-red-400">{toolsError}</p>
+            {:else if filteredTools.length === 0}
+              <p class="text-xs text-muted-foreground">No tools found.</p>
+            {:else}
+              {#each filteredTools as tool (tool.name)}
+                <button
+                  class={`w-full text-left rounded-lg border px-2 py-1.5 transition-all ${
+                    tool.name === selectedToolName
+                      ? "border-emerald-400/40 bg-emerald-500/10"
+                      : "border-white/10 bg-white/5 hover:bg-white/10"
+                  }`}
+                  onclick={() => selectTool(tool.name)}
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-xs font-medium truncate">{tool.name}</span>
+                    {#if tool.requires_approval}
+                      <span class="text-[10px] uppercase tracking-wide rounded-full px-2 py-0.5 bg-amber-500/15 text-amber-300">
+                        Approval
+                      </span>
+                    {/if}
                   </div>
-                  <span
-                    class={`text-[10px] uppercase tracking-wide rounded-full px-2 py-1 ${
-                      tool.requires_approval
-                        ? "bg-amber-500/15 text-amber-300"
-                        : "bg-emerald-500/15 text-emerald-300"
-                    }`}
-                  >
-                    {tool.requires_approval ? "Approval" : "No approval"}
+                  <p class="text-[11px] text-muted-foreground/70 truncate">
+                    {tool.description || "No description"}
+                  </p>
+                </button>
+              {/each}
+            {/if}
+          </div>
+        </div>
+
+        <div class="min-h-0 overflow-y-auto border-l border-white/10 pl-3">
+          {#if toolsLoading}
+            <p class="text-xs text-muted-foreground">Loading tools...</p>
+          {:else if toolsError}
+            <p class="text-xs text-red-400">{toolsError}</p>
+          {:else if !selectedTool}
+            <p class="text-xs text-muted-foreground">Select a tool to view settings.</p>
+          {:else}
+            <div class="space-y-3">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <h3 class="text-sm font-semibold">{selectedTool.name}</h3>
+                  <p class="text-xs text-muted-foreground/70 mt-1">
+                    {selectedTool.description || "No description available."}
+                  </p>
+                </div>
+                <span
+                  class={`text-[10px] uppercase tracking-wide rounded-full px-2 py-1 ${
+                    selectedTool.requires_approval
+                      ? "bg-amber-500/15 text-amber-300"
+                      : "bg-emerald-500/15 text-emerald-300"
+                  }`}
+                >
+                  {selectedTool.requires_approval ? "Approval" : "Auto"}
+                </span>
+              </div>
+
+              <div class="grid gap-2 text-xs">
+                <div class="grid grid-cols-[120px_1fr] items-center gap-2">
+                  <span class="text-muted-foreground/70">Approval</span>
+                  <span>
+                    {selectedTool.requires_approval ? "Ask each time" : "Auto-approved"}
                   </span>
                 </div>
-              </summary>
-
-              <div class="mt-3 grid gap-3 md:grid-cols-2">
-                <div>
-                  <p class="text-xs font-medium text-muted-foreground mb-1">Args schema</p>
-                  <pre class="max-h-64 overflow-auto rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
-{formatSchema(tool.args_schema)}
-                  </pre>
-                </div>
-                <div>
-                  <p class="text-xs font-medium text-muted-foreground mb-1">Result schema</p>
-                  <pre class="max-h-64 overflow-auto rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">
-{formatSchema(tool.result_schema)}
-                  </pre>
+                <div class="grid grid-cols-[120px_1fr] items-center gap-2">
+                  <span class="text-muted-foreground/70">Schemas</span>
+                  <span>Args + Result</span>
                 </div>
               </div>
-            </details>
-          {/each}
+
+              <details class="rounded-lg border border-white/10 bg-white/5 p-2">
+                <summary class="cursor-pointer text-xs font-medium text-muted-foreground/80">
+                  Args schema
+                </summary>
+                <pre class="mt-2 max-h-64 overflow-auto rounded-md bg-muted/40 p-2 text-[11px] font-mono text-foreground">
+{formatSchema(selectedTool.args_schema)}
+                </pre>
+              </details>
+
+              <details class="rounded-lg border border-white/10 bg-white/5 p-2">
+                <summary class="cursor-pointer text-xs font-medium text-muted-foreground/80">
+                  Result schema
+                </summary>
+                <pre class="mt-2 max-h-64 overflow-auto rounded-md bg-muted/40 p-2 text-[11px] font-mono text-foreground">
+{formatSchema(selectedTool.result_schema)}
+                </pre>
+              </details>
+            </div>
+          {/if}
         </div>
-      {/if}
-    </Card.Content>
-  </Card.Root>
+      </div>
+    {:else if activeTab === "vault"}
+      <div class="grid gap-4 text-xs">
+        <div class="grid grid-cols-[160px_1fr] gap-4 items-start">
+          <div>
+            <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Vault root</p>
+            <p class="text-[11px] text-muted-foreground/70 mt-1">
+              Base directory for file tooling.
+            </p>
+          </div>
+          <div class="space-y-2">
+            <div class="flex flex-wrap gap-2 items-center">
+              <Input
+                placeholder={isLoading ? "Loading..." : "/path/to/your/vault"}
+                bind:value={vaultRoot}
+                class="h-8 text-xs flex-1 min-w-[240px] bg-white/5 border-white/10"
+                readonly={isLoading}
+              />
+              <Button variant="outline" size="sm" onclick={browseVaultRoot} disabled={isLoading}>
+                Browse
+              </Button>
+              <Button size="sm" onclick={saveVaultRoot} disabled={isLoading || isSaving}>
+                {isSaving ? "Saving..." : "Save"}
+              </Button>
+            </div>
+            <p class="text-[11px] text-muted-foreground">
+              Current value:
+              <span class="font-mono">{savedRoot || "Not set"}</span>
+            </p>
+            {#if statusMessage}
+              <p
+                class={`text-[11px] ${
+                  statusTone === "success"
+                    ? "text-emerald-400"
+                    : statusTone === "error"
+                      ? "text-red-400"
+                      : "text-muted-foreground"
+                }`}
+              >
+                {statusMessage}
+              </p>
+            {/if}
+          </div>
+        </div>
+      </div>
+    {:else if activeTab === "integrations"}
+      <div class="h-full min-h-0 overflow-y-auto pr-1">
+        <div class="mb-3">
+          <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Integrations</p>
+          <h3 class="text-sm font-semibold">Connections and MCP</h3>
+          <p class="text-[11px] text-muted-foreground/70 mt-1">
+            Manage OAuth connections, tokens, and MCP servers.
+          </p>
+        </div>
+        <Integrations embedded />
+      </div>
+    {/if}
+  </div>
 </div>

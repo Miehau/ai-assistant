@@ -22,7 +22,16 @@ import type {
   ConversationTree,
   BranchPath,
   BranchStats,
-  DBMessage
+  DBMessage,
+  IntegrationMetadata,
+  McpServer,
+  CreateMcpServerInput,
+  UpdateMcpServerInput,
+  IntegrationConnection,
+  CreateIntegrationConnectionInput,
+  UpdateIntegrationConnectionInput,
+  OAuthStartResponse,
+  OAuthSessionStatus
 } from '$lib/types';
 import type {
   CustomBackend,
@@ -336,6 +345,74 @@ class BackendClient {
 
   async setPreference(key: string, value: string): Promise<void> {
     return invoke('set_preference', { key, value });
+  }
+
+  // ============ Integrations ============
+
+  async listIntegrations(): Promise<IntegrationMetadata[]> {
+    return invoke('list_integrations', {});
+  }
+
+  async getIntegrationConnections(): Promise<IntegrationConnection[]> {
+    return invoke('get_integration_connections', {});
+  }
+
+  async createIntegrationConnection(
+    input: CreateIntegrationConnectionInput
+  ): Promise<IntegrationConnection> {
+    return invoke('create_integration_connection', { input });
+  }
+
+  async updateIntegrationConnection(
+    input: UpdateIntegrationConnectionInput
+  ): Promise<IntegrationConnection | null> {
+    return invoke('update_integration_connection', { input });
+  }
+
+  async deleteIntegrationConnection(id: string): Promise<boolean> {
+    return invoke('delete_integration_connection', { id });
+  }
+
+  async testIntegrationConnection(id: string): Promise<{ ok: boolean; status: number }> {
+    return invoke('test_integration_connection', { id });
+  }
+
+  async startGoogleOAuth(integrationId: string): Promise<OAuthStartResponse> {
+    return invoke('start_google_oauth', { integrationId });
+  }
+
+  async getOauthSession(sessionId: string): Promise<OAuthSessionStatus> {
+    return invoke('get_oauth_session', { sessionId });
+  }
+
+  async cancelOauthSession(sessionId: string): Promise<boolean> {
+    return invoke('cancel_oauth_session', { sessionId });
+  }
+
+  // ============ MCP Servers ============
+
+  async getMcpServers(): Promise<McpServer[]> {
+    return invoke('get_mcp_servers', {});
+  }
+
+  async getMcpServer(id: string): Promise<McpServer | null> {
+    return invoke('get_mcp_server', { id });
+  }
+
+  async createMcpServer(input: CreateMcpServerInput): Promise<McpServer> {
+    return invoke('create_mcp_server', { input });
+  }
+
+  async updateMcpServer(input: UpdateMcpServerInput): Promise<McpServer | null> {
+    return invoke('update_mcp_server', { input });
+  }
+
+  async deleteMcpServer(id: string): Promise<boolean> {
+    return invoke('delete_mcp_server', { id });
+  }
+
+  async testMcpServer(id: string): Promise<{ ok: boolean; status: number }> {
+    return invoke('test_mcp_server', { id });
   }
 
   // ============ Tools ============

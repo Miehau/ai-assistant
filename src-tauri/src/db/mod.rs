@@ -33,6 +33,8 @@ impl BranchOperations for Db {}
 impl CustomBackendOperations for Db {}
 impl PreferenceOperations for Db {}
 impl AgentSessionOperations for Db {}
+impl McpServerOperations for Db {}
+impl IntegrationConnectionOperations for Db {}
 
 impl Db {
     pub fn new(db_path: &str) -> Result<Self, DatabaseError> {
@@ -337,6 +339,31 @@ impl Db {
                 FOREIGN KEY (step_id) REFERENCES agent_plan_steps(id) ON DELETE CASCADE
             );"),
             M::up("CREATE INDEX IF NOT EXISTS idx_agent_step_approvals_step ON agent_step_approvals(step_id);"),
+            M::up("CREATE TABLE IF NOT EXISTS mcp_servers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL,
+                auth_type TEXT NOT NULL,
+                api_key TEXT,
+                created_at INTEGER NOT NULL
+            );"),
+            M::up("CREATE INDEX IF NOT EXISTS idx_mcp_servers_name ON mcp_servers(name);"),
+            M::up("CREATE TABLE IF NOT EXISTS integration_connections (
+                id TEXT PRIMARY KEY,
+                integration_id TEXT NOT NULL,
+                account_label TEXT,
+                status TEXT NOT NULL,
+                auth_type TEXT NOT NULL,
+                access_token TEXT,
+                refresh_token TEXT,
+                scopes TEXT,
+                expires_at INTEGER,
+                last_error TEXT,
+                last_sync_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );"),
+            M::up("CREATE INDEX IF NOT EXISTS idx_integration_connections_integration ON integration_connections(integration_id);"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();

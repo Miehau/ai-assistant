@@ -10,6 +10,8 @@ mod agent_sessions;
 mod preferences;
 mod system_prompts;
 mod usage;
+mod mcp_servers;
+mod integration_connections;
 
 pub use branches::*;
 pub use conversations::*;
@@ -20,6 +22,8 @@ pub use agent_sessions::*;
 pub use preferences::*;
 pub use system_prompts::*;
 pub use usage::*;
+pub use mcp_servers::*;
+pub use integration_connections::*;
 
 pub trait DbOperations {
     fn conn(&self) -> Arc<Mutex<Connection>>;

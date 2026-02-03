@@ -1,6 +1,8 @@
 mod branch;
 mod conversation;
 mod custom_backend;
+mod integration_connection;
+mod mcp_server;
 mod agent;
 mod message;
 mod model;
@@ -10,6 +12,8 @@ mod usage;
 pub use branch::*;
 pub use conversation::*;
 pub use custom_backend::*;
+pub use integration_connection::*;
+pub use mcp_server::*;
 pub use agent::*;
 pub use message::*;
 pub use model::*;

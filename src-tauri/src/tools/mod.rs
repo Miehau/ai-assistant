@@ -10,12 +10,14 @@ mod prefs;
 mod search;
 mod vault;
 mod web;
+mod integrations;
 
 pub use files::register_file_tools;
 pub use prefs::register_pref_tools;
 pub use search::register_search_tool;
 pub use vault::get_vault_root;
 pub use web::register_web_tools;
+pub use integrations::register_integration_tools;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolMetadata {

@@ -21,6 +21,14 @@ import type {
 import type { Attachment, FileMetadata } from './types/attachments';
 import type { AgentEvent, AgentEventType } from './types/events';
 import type { ToolMetadata } from './types/tools';
+import type { IntegrationMetadata } from './types/integrations';
+import type { McpServer, CreateMcpServerInput, UpdateMcpServerInput } from './types/mcpServer';
+import type {
+    IntegrationConnection,
+    CreateIntegrationConnectionInput,
+    UpdateIntegrationConnectionInput
+} from './types/integrationConnection';
+import type { OAuthStartResponse, OAuthSessionStatus } from './types/oauth';
 
 // Re-export everything
 export type {
@@ -34,7 +42,16 @@ export type {
     AgentEventType,
     ToolCallRecord,
     ToolExecutionDbRecord,
-    ToolMetadata
+    ToolMetadata,
+    IntegrationMetadata,
+    McpServer,
+    CreateMcpServerInput,
+    UpdateMcpServerInput,
+    IntegrationConnection,
+    CreateIntegrationConnectionInput,
+    UpdateIntegrationConnectionInput,
+    OAuthStartResponse,
+    OAuthSessionStatus
 };
 
 // Re-export with original names
