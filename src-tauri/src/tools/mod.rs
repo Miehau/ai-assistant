@@ -6,11 +6,13 @@ use std::sync::{mpsc, Arc, Mutex};
 use uuid::Uuid;
 
 mod files;
+mod prefs;
 mod search;
 mod vault;
 mod web;
 
 pub use files::register_file_tools;
+pub use prefs::register_pref_tools;
 pub use search::register_search_tool;
 pub use vault::get_vault_root;
 pub use web::register_web_tools;
