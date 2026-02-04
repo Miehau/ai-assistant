@@ -24,16 +24,11 @@
   let selectedToolName = $state<string | null>(null);
   let activeTab = $state<"tools" | "vault" | "integrations">("tools");
 
-  let toolsLoaded = $state(false);
-  let vaultLoaded = $state(false);
-
   $effect(() => {
-    if (activeTab === "tools" && !toolsLoaded) {
-      toolsLoaded = true;
+    if (activeTab === "tools") {
       loadTools();
     }
-    if (activeTab === "vault" && !vaultLoaded) {
-      vaultLoaded = true;
+    if (activeTab === "vault") {
       loadVaultRoot();
     }
   });
@@ -93,7 +88,8 @@
     try {
       tools = await backend.listTools();
     } catch (error) {
-      toolsError = "Failed to load tools.";
+      const message = error instanceof Error ? error.message : String(error);
+      toolsError = message ? `Failed to load tools: ${message}` : "Failed to load tools.";
     } finally {
       toolsLoading = false;
     }
@@ -208,7 +204,18 @@
             {#if toolsLoading}
               <p class="text-xs text-muted-foreground">Loading tools...</p>
             {:else if toolsError}
-              <p class="text-xs text-red-400">{toolsError}</p>
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-xs text-red-400">{toolsError}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="h-7 text-[10px] border-white/10"
+                  onclick={loadTools}
+                  disabled={toolsLoading}
+                >
+                  Retry
+                </Button>
+              </div>
             {:else if filteredTools.length === 0}
               <p class="text-xs text-muted-foreground">No tools found.</p>
             {:else}
