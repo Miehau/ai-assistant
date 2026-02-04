@@ -12,6 +12,7 @@
     attachments,
     loadModels,
     loadSystemPrompts,
+    loadConversationHistory,
     toggleStreaming,
     sendMessage,
     clearConversation,
@@ -34,10 +35,10 @@
   let autoScroll = true;
   let isClearing = false;
 
-  onMount(async () => {
+  onMount(() => {
     startAgentEvents();
-    await loadModels();
-    loadSystemPrompts();
+    void loadModels();
+    void loadSystemPrompts();
 
     // Debug models after loading
     setTimeout(() => {
@@ -47,11 +48,7 @@
     // Initial load of messages if there's a current conversation
     const conversation = conversationService.getCurrentConversation();
     if (conversation) {
-      // Load all messages directly
-      const loadedMessages = await conversationService.getDisplayHistory(
-        conversation.id
-      );
-      $messages = loadedMessages;
+      void loadConversationHistory(conversation.id);
     }
   });
 

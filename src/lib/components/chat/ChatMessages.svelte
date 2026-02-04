@@ -24,6 +24,11 @@
   export let agentPlanSteps: AgentPlanStep[] = [];
   export let isLoading = false;
 
+  const INITIAL_VISIBLE_MESSAGES = 60;
+  const LOAD_MORE_CHUNK = 40;
+  const LOAD_MORE_THRESHOLD = 120;
+  const ANIMATED_MESSAGE_LIMIT = 12;
+
   $: phaseLabel = getPhaseLabel(agentPhase);
   $: showThinkingStatus =
     (isLoading || $isStreaming) &&
@@ -36,6 +41,11 @@
   let scrollThrottleTimeout: number | null = null;
   let resizeThrottleTimeout: number | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  let visibleCount = INITIAL_VISIBLE_MESSAGES;
+  let visibleMessages: Message[] = [];
+  let hasMoreMessages = false;
+  let loadingMore = false;
+  let lastTotalCount = 0;
 
   function preserveScrollFromBottom() {
     if (!chatContainer) return;
@@ -89,6 +99,14 @@
       scrollTimeout = setTimeout(() => {
         autoScroll = true;
       }, 150); // 150ms delay before re-enabling auto-scroll
+    }
+
+    if (
+      chatContainer.scrollTop <= LOAD_MORE_THRESHOLD &&
+      hasMoreMessages &&
+      !loadingMore
+    ) {
+      loadMoreMessages();
     }
   }
 
@@ -163,6 +181,42 @@
   // Track last streaming message length to avoid triggering on every chunk
   let lastStreamingLength = 0;
 
+  function loadMoreMessages() {
+    if (!chatContainer || loadingMore) return;
+    loadingMore = true;
+
+    const prevScrollHeight = chatContainer.scrollHeight;
+    const prevScrollTop = chatContainer.scrollTop;
+
+    visibleCount = Math.min(messages.length, visibleCount + LOAD_MORE_CHUNK);
+
+    requestAnimationFrame(() => {
+      if (!chatContainer) {
+        loadingMore = false;
+        return;
+      }
+      const newScrollHeight = chatContainer.scrollHeight;
+      chatContainer.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop;
+      lastScrollHeight = chatContainer.scrollHeight;
+      lastScrollTop = chatContainer.scrollTop;
+      loadingMore = false;
+    });
+  }
+
+  $: {
+    const total = messages.length;
+    if (total < lastTotalCount) {
+      visibleCount = INITIAL_VISIBLE_MESSAGES;
+    } else if (total > lastTotalCount) {
+      visibleCount = Math.min(total, Math.max(visibleCount, INITIAL_VISIBLE_MESSAGES));
+    }
+    lastTotalCount = total;
+
+    const startIndex = Math.max(0, total - visibleCount);
+    visibleMessages = messages.slice(startIndex);
+    hasMoreMessages = startIndex > 0;
+  }
+
   // Only scroll when messages actually change or streaming updates
   $: if (messages.length !== lastMessageCount || ($streamingMessage && $streamingMessage.length !== lastStreamingLength)) {
     lastMessageCount = messages.length;
@@ -198,33 +252,63 @@
 <div
   bind:this={chatContainer}
   class="h-full overflow-y-auto pr-4 space-y-4 w-full px-2 md:px-4 lg:px-6"
-  onscroll={handleScroll}
 >
-  {#each messages as msg, i (msg.id || `${msg.type}-${i}`)}
+  {#if hasMoreMessages}
+    <div class="flex justify-center">
+      <button
+        class="text-xs text-muted-foreground/80 px-3 py-1 rounded-full border border-white/10 hover:bg-white/5 transition-all"
+        onclick={loadMoreMessages}
+        disabled={loadingMore}
+      >
+        {loadingMore ? "Loading..." : "Load earlier messages"}
+      </button>
+    </div>
+  {/if}
+
+  {#each visibleMessages as msg, i (msg.id || `${msg.type}-${i}`)}
     {#if msg.type === "received" && msg.tool_calls && msg.tool_calls.length > 0}
       {#each msg.tool_calls as call (call.execution_id)}
-        <div
-          in:fly={{ y: 10, duration: 150, easing: backOut }}
-          class="w-full message-container flex justify-start"
-        >
-          <ToolCallBubble {call} />
-        </div>
+        {#if i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
+          <div
+            in:fly={{ y: 10, duration: 150, easing: backOut }}
+            class="w-full message-container flex justify-start"
+          >
+            <ToolCallBubble {call} />
+          </div>
+        {:else}
+          <div class="w-full message-container flex justify-start">
+            <ToolCallBubble {call} />
+          </div>
+        {/if}
       {/each}
     {/if}
-    <div
-      in:fly={{ y: 10, duration: 150, delay: i * 10, easing: backOut }}
-      out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
-      class="w-full message-container"
-    >
-      <ChatMessage
-        type={msg.type}
-        content={msg.content}
-        attachments={msg.attachments}
-        messageId={msg.id}
-        conversationId={conversationId}
-        agentActivity={msg.agentActivity}
-      />
-    </div>
+    {#if i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
+      <div
+        in:fly={{ y: 10, duration: 150, easing: backOut }}
+        out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
+        class="w-full message-container"
+      >
+        <ChatMessage
+          type={msg.type}
+          content={msg.content}
+          attachments={msg.attachments}
+          messageId={msg.id}
+          conversationId={conversationId}
+          agentActivity={msg.agentActivity}
+        />
+      </div>
+    {:else}
+      <div class="w-full message-container">
+        <ChatMessage
+          type={msg.type}
+          content={msg.content}
+          attachments={msg.attachments}
+          messageId={msg.id}
+          conversationId={conversationId}
+          agentActivity={msg.agentActivity}
+        />
+      </div>
+    {/if}
   {/each}
 
   {#if toolApprovals.length > 0}

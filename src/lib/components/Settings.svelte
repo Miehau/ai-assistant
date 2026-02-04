@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { open } from "@tauri-apps/api/dialog";
   import { X } from "lucide-svelte";
   import { backend } from "$lib/backend";
@@ -25,9 +24,18 @@
   let selectedToolName = $state<string | null>(null);
   let activeTab = $state<"tools" | "vault" | "integrations">("tools");
 
-  onMount(() => {
-    loadVaultRoot();
-    loadTools();
+  let toolsLoaded = $state(false);
+  let vaultLoaded = $state(false);
+
+  $effect(() => {
+    if (activeTab === "tools" && !toolsLoaded) {
+      toolsLoaded = true;
+      loadTools();
+    }
+    if (activeTab === "vault" && !vaultLoaded) {
+      vaultLoaded = true;
+      loadVaultRoot();
+    }
   });
 
   async function loadVaultRoot() {

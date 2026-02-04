@@ -6,6 +6,7 @@
     import { onMount } from "svelte";
     import { Trash2, Plus, Edit2, Check, X, Eye, EyeOff } from "lucide-svelte";
     import { customBackendService } from "$lib/services/customBackendService.svelte";
+    import { loadModels } from "$lib/stores/chat";
     import type { CustomBackend, CreateCustomBackendInput } from "$lib/types/customBackend";
 
     // Form state for adding new backend
@@ -42,6 +43,7 @@
 
             const backend = await customBackendService.createBackend(input);
             if (backend) {
+                await loadModels({ force: true });
                 // Reset form
                 newName = "";
                 newUrl = "";
@@ -80,6 +82,7 @@
                 url: editUrl.trim(),
                 api_key: editApiKey.trim() || undefined
             });
+            await loadModels({ force: true });
             cancelEdit();
         } finally {
             isLoading = false;
@@ -92,6 +95,7 @@
         isLoading = true;
         try {
             await customBackendService.deleteBackend(id);
+            await loadModels({ force: true });
         } finally {
             isLoading = false;
         }

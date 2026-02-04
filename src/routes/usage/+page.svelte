@@ -3,7 +3,6 @@
   import type { UsageStatistics, UsageBackfillResult } from '$lib/types';
   import { Button } from '$lib/components/ui/button';
   import { Download, TrendingUp, DollarSign, Zap, Wrench } from 'lucide-svelte';
-  import MainLayout from '$lib/components/MainLayout.svelte';
   import UsageAreaChart from '$lib/components/charts/UsageAreaChart.svelte';
   import UsageLineChart from '$lib/components/charts/UsageLineChart.svelte';
   import ModelStackedBarChart from '$lib/components/charts/ModelStackedBarChart.svelte';
@@ -135,8 +134,7 @@
   <title>Usage Statistics</title>
 </svelte:head>
 
-<MainLayout>
-  <div class="container mx-auto p-6 max-w-6xl">
+<div class="container mx-auto p-6 max-w-6xl">
     <!-- Header -->
     <div class="mb-6">
       <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Usage</p>
@@ -366,7 +364,7 @@
       </div>
     {/if}
   </div>
-</MainLayout>
+</div>
 
 <style>
   .loading-spinner {
