@@ -7,7 +7,7 @@
   import { Button } from "$lib/components/ui/button";
   import * as Select from "$lib/components/ui/select";
   import { Plus, Edit2, Check, X, Eye, EyeOff, Trash2 } from "lucide-svelte";
-  import type { IntegrationMetadata } from "$lib/types/integrations";
+  import type { IntegrationMetadata, GoogleCalendarListItem } from "$lib/types/integrations";
   import type { McpServer } from "$lib/types/mcpServer";
   import type { IntegrationConnection } from "$lib/types/integrationConnection";
   import { mcpServerService } from "$lib/services/mcpServerService.svelte";
@@ -21,11 +21,19 @@
   let connections = $derived(integrationConnectionService.connections);
   let gmailIntegration = $derived(integrations.find((item) => item.id === "gmail"));
   let gmailConnection = $derived(connections.find((item) => item.integration_id === "gmail"));
+  let gcalIntegration = $derived(integrations.find((item) => item.id === "google_calendar"));
+  let gcalConnection = $derived(connections.find((item) => item.integration_id === "google_calendar"));
 
   let oauthSessionId = $state<string | null>(null);
+  let oauthIntegrationId = $state<string | null>(null);
   let oauthStatus = $state<"idle" | "pending" | "completed" | "error" | "cancelled">("idle");
   let oauthError = $state("");
   let oauthLoading = $state(false);
+
+  let gcalCalendars = $state<GoogleCalendarListItem[]>([]);
+  let gcalSelectedCalendarIds = $state<string[]>([]);
+  let gcalCalendarsLoading = $state(false);
+  let gcalCalendarsError = $state("");
 
   let isAddingConnection = $state(false);
   let newConnectionIntegrationId = $state("google_calendar");
@@ -73,6 +81,18 @@
     await loadIntegrations();
     await integrationConnectionService.loadConnections();
     await mcpServerService.loadServers();
+  });
+
+  $effect(() => {
+    if (!gcalConnection) {
+      gcalCalendars = [];
+      gcalSelectedCalendarIds = [];
+      gcalCalendarsError = "";
+      gcalCalendarsLoading = false;
+      return;
+    }
+
+    void refreshGoogleCalendarData(gcalConnection);
   });
 
   async function loadIntegrations() {
@@ -127,11 +147,12 @@
     return connections.filter((item) => item.integration_id === id).length;
   }
 
-  async function connectGmail() {
+  async function startGoogleOAuth(integrationId: "gmail" | "google_calendar") {
     oauthError = "";
     oauthLoading = true;
+    oauthIntegrationId = integrationId;
     try {
-      const response = await backend.startGoogleOAuth("gmail");
+      const response = await backend.startGoogleOAuth(integrationId);
       oauthSessionId = response.session_id;
       oauthStatus = "pending";
       await openExternal(response.auth_url);
@@ -142,6 +163,14 @@
     } finally {
       oauthLoading = false;
     }
+  }
+
+  async function connectGmail() {
+    await startGoogleOAuth("gmail");
+  }
+
+  async function connectGoogleCalendar() {
+    await startGoogleOAuth("google_calendar");
   }
 
   async function pollOAuth(sessionId: string) {
@@ -159,11 +188,13 @@
       if (nextStatus === "completed") {
         await integrationConnectionService.loadConnections();
         oauthSessionId = null;
+        oauthIntegrationId = null;
         return;
       }
       if (nextStatus === "error" || nextStatus === "cancelled") {
         oauthError = status.error || (nextStatus === "cancelled" ? "OAuth cancelled." : "");
         oauthSessionId = null;
+        oauthIntegrationId = null;
         return;
       }
 
@@ -172,6 +203,7 @@
       oauthError = error instanceof Error ? error.message : String(error);
       oauthStatus = "error";
       oauthSessionId = null;
+      oauthIntegrationId = null;
     }
   }
 
@@ -181,6 +213,7 @@
       await backend.cancelOauthSession(oauthSessionId);
       oauthStatus = "cancelled";
       oauthSessionId = null;
+      oauthIntegrationId = null;
     } catch (error) {
       oauthError = error instanceof Error ? error.message : String(error);
       oauthStatus = "error";
@@ -289,6 +322,88 @@
     } finally {
       isLoading = false;
     }
+  }
+
+  async function disconnectGoogleCalendar() {
+    if (!gcalConnection) return;
+    if (!confirm("Disconnect Google Calendar and delete stored tokens?")) return;
+
+    isLoading = true;
+    try {
+      await integrationConnectionService.deleteConnection(gcalConnection.id);
+      await integrationConnectionService.loadConnections();
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  function googleCalendarSettingsKey(connectionId: string) {
+    return `integration_settings.google_calendar.${connectionId}`;
+  }
+
+  async function refreshGoogleCalendarData(connection: IntegrationConnection) {
+    if (connection.status !== "connected") {
+      gcalCalendars = [];
+      gcalSelectedCalendarIds = [];
+      gcalCalendarsError = "Google Calendar connection is not active.";
+      return;
+    }
+
+    gcalCalendarsLoading = true;
+    gcalCalendarsError = "";
+    try {
+      const stored = await backend.getPreference(googleCalendarSettingsKey(connection.id));
+      let selectedIds: string[] = [];
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored) as { calendar_ids?: string[] };
+          if (Array.isArray(parsed.calendar_ids)) {
+            selectedIds = parsed.calendar_ids.filter((value) => typeof value === "string");
+          }
+        } catch (error) {
+          // Ignore malformed settings and continue.
+          selectedIds = [];
+        }
+      }
+
+      const calendars = await backend.listGoogleCalendars(connection.id);
+      gcalCalendars = calendars;
+
+      const available = new Set(calendars.map((item) => item.id));
+      let filtered = selectedIds.filter((id) => available.has(id));
+      if (filtered.length === 0) {
+        const primary = calendars.find((item) => item.primary);
+        if (primary) {
+          filtered = [primary.id];
+        }
+      }
+
+      gcalSelectedCalendarIds = filtered;
+      if (filtered.join("|") !== selectedIds.join("|")) {
+        await backend.setPreference(
+          googleCalendarSettingsKey(connection.id),
+          JSON.stringify({ calendar_ids: filtered })
+        );
+      }
+    } catch (error) {
+      gcalCalendarsError = error instanceof Error ? error.message : String(error);
+    } finally {
+      gcalCalendarsLoading = false;
+    }
+  }
+
+  async function toggleGoogleCalendar(calendarId: string) {
+    if (!gcalConnection) return;
+
+    const next = gcalSelectedCalendarIds.includes(calendarId)
+      ? gcalSelectedCalendarIds.filter((id) => id !== calendarId)
+      : [...gcalSelectedCalendarIds, calendarId];
+
+    gcalSelectedCalendarIds = next;
+    await backend.setPreference(
+      googleCalendarSettingsKey(gcalConnection.id),
+      JSON.stringify({ calendar_ids: next })
+    );
   }
 
   async function testConnection(id: string) {
@@ -490,7 +605,7 @@
                 </p>
               </div>
               <div class="flex items-center gap-2">
-                {#if oauthStatus === "pending"}
+                {#if oauthStatus === "pending" && oauthIntegrationId === "gmail"}
                   <span class="text-[10px] uppercase tracking-wide rounded-full px-2 py-1 bg-amber-500/15 text-amber-300">
                     Waiting for approval
                   </span>
@@ -507,13 +622,13 @@
                   size="sm"
                   class="glass-badge hover:glass-light"
                   onclick={connectGmail}
-                  disabled={oauthLoading || oauthStatus === "pending"}
+                  disabled={oauthLoading || (oauthStatus === "pending" && oauthIntegrationId === "gmail")}
                 >
                   {gmailConnection ? "Reconnect Gmail" : "Connect Gmail"}
                 </Button>
               </div>
             </div>
-            {#if oauthError}
+            {#if oauthError && oauthIntegrationId === "gmail"}
               <p class="text-xs text-red-400 mt-2">{oauthError}</p>
             {/if}
           </div>
@@ -526,6 +641,108 @@
             <p class="text-sm font-semibold text-foreground">Gmail OAuth</p>
             <p class="text-xs text-muted-foreground mt-1">
               Gmail is disabled. Set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in your `.env` to enable it.
+            </p>
+          </div>
+        {/if}
+
+        {#if gcalIntegration}
+          <div
+            class={`rounded-xl border px-4 py-4 ${
+              embedded ? "border-white/10 bg-white/5" : "border-border/40 bg-background/40"
+            }`}
+          >
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-foreground">Google Calendar OAuth</p>
+                <p class="text-xs text-muted-foreground">
+                  {#if gcalConnection}
+                    {gcalConnection.account_label
+                      ? `Connected as ${gcalConnection.account_label}.`
+                      : "Connected to Google Calendar."}
+                  {:else}
+                    Connect Google Calendar via OAuth to enable calendar tools.
+                  {/if}
+                </p>
+              </div>
+              <div class="flex items-center gap-2">
+                {#if oauthStatus === "pending" && oauthIntegrationId === "google_calendar"}
+                  <span class="text-[10px] uppercase tracking-wide rounded-full px-2 py-1 bg-amber-500/15 text-amber-300">
+                    Waiting for approval
+                  </span>
+                  <Button size="sm" variant="ghost" onclick={cancelOAuth}>
+                    Cancel
+                  </Button>
+                {/if}
+                {#if gcalConnection}
+                  <Button size="sm" variant="ghost" onclick={disconnectGoogleCalendar} disabled={isLoading}>
+                    Disconnect
+                  </Button>
+                {/if}
+                <Button
+                  size="sm"
+                  class="glass-badge hover:glass-light"
+                  onclick={connectGoogleCalendar}
+                  disabled={oauthLoading || (oauthStatus === "pending" && oauthIntegrationId === "google_calendar")}
+                >
+                  {gcalConnection ? "Reconnect Google Calendar" : "Connect Google Calendar"}
+                </Button>
+              </div>
+            </div>
+            {#if oauthError && oauthIntegrationId === "google_calendar"}
+              <p class="text-xs text-red-400 mt-2">{oauthError}</p>
+            {/if}
+            {#if gcalConnection}
+              <div class="mt-4 border-t border-white/10 pt-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <p class="text-xs font-medium text-muted-foreground">Calendars</p>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onclick={() => refreshGoogleCalendarData(gcalConnection)}
+                    disabled={gcalCalendarsLoading}
+                  >
+                    Refresh
+                  </Button>
+                </div>
+                {#if gcalCalendarsLoading}
+                  <p class="text-xs text-muted-foreground mt-2">Loading calendars...</p>
+                {:else if gcalCalendarsError}
+                  <p class="text-xs text-red-400 mt-2">{gcalCalendarsError}</p>
+                {:else if gcalCalendars.length === 0}
+                  <p class="text-xs text-muted-foreground mt-2">No calendars found.</p>
+                {:else}
+                  <div class="mt-2 space-y-2">
+                    {#each gcalCalendars as calendar}
+                      <label class="flex items-center gap-2 text-xs text-foreground">
+                        <input
+                          type="checkbox"
+                          class="h-4 w-4 rounded border border-white/20 bg-transparent text-emerald-400 accent-emerald-400"
+                          checked={gcalSelectedCalendarIds.includes(calendar.id)}
+                          onchange={() => toggleGoogleCalendar(calendar.id)}
+                        />
+                        <span>
+                          {calendar.summary}
+                          {calendar.primary ? " (primary)" : ""}
+                        </span>
+                        {#if calendar.time_zone}
+                          <span class="text-[10px] text-muted-foreground">{calendar.time_zone}</span>
+                        {/if}
+                      </label>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <div
+            class={`rounded-xl border px-4 py-4 ${
+              embedded ? "border-white/10 bg-white/5" : "border-border/40 bg-background/40"
+            }`}
+          >
+            <p class="text-sm font-semibold text-foreground">Google Calendar OAuth</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              Google Calendar is disabled. Set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in your `.env` to enable it.
             </p>
           </div>
         {/if}

@@ -552,41 +552,35 @@ struct GmailAttachmentSummary {
 
 fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let db_for_list = db.clone();
+    let db_for_list_calendars = db.clone();
     let db_for_create = db.clone();
-    let list_events = ToolDefinition {
+    let list_calendars = ToolDefinition {
         metadata: ToolMetadata {
-            name: "gcal.list_events".to_string(),
-            description: "List Google Calendar events.".to_string(),
+            name: "gcal.list_calendars".to_string(),
+            description: "List Google Calendar calendars for the connected account.".to_string(),
             args_schema: json!({
                 "type": "object",
                 "properties": {
                     "connection_id": { "type": "string" },
-                    "calendar_id": { "type": "string" },
-                    "time_min": { "type": "string" },
-                    "time_max": { "type": "string" },
-                    "max_results": { "type": "integer", "minimum": 1, "maximum": 2500 }
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 250 }
                 },
                 "required": ["connection_id"]
             }),
-            result_schema: json!({ "type": "object" }),
+            result_schema: json!({
+                "type": "object",
+                "properties": {
+                    "calendars": { "type": "array" }
+                }
+            }),
             requires_approval: true,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
             let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
-            let connection = get_connection(&db_for_list, connection_id, "google_calendar")?;
-            let token = get_google_access_token(&db_for_list, &connection)?;
-
-            let calendar_id = args.get("calendar_id").and_then(|v| v.as_str()).unwrap_or("primary");
-            let url = format!("https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events");
+            let connection = get_connection(&db_for_list_calendars, connection_id, "google_calendar")?;
+            let token = get_google_access_token(&db_for_list_calendars, &connection)?;
 
             let client = Client::new();
-            let mut request = client.get(url);
-            if let Some(time_min) = args.get("time_min").and_then(|v| v.as_str()) {
-                request = request.query(&[("timeMin", time_min)]);
-            }
-            if let Some(time_max) = args.get("time_max").and_then(|v| v.as_str()) {
-                request = request.query(&[("timeMax", time_max)]);
-            }
+            let mut request = client.get("https://www.googleapis.com/calendar/v3/users/me/calendarList");
             if let Some(max_results) = args.get("max_results").and_then(|v| v.as_u64()) {
                 request = request.query(&[("maxResults", max_results.to_string())]);
             }
@@ -600,9 +594,149 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
                 return Err(ToolError::new(format!("Google Calendar API error: HTTP {status}")));
             }
 
-            response
+            let json = response
                 .json::<Value>()
-                .map_err(|err| ToolError::new(format!("Failed to parse Calendar response: {err}")))
+                .map_err(|err| ToolError::new(format!("Failed to parse Calendar response: {err}")))?;
+
+            let items = json
+                .get("items")
+                .and_then(|value| value.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|item| {
+                            let id = item.get("id")?.as_str()?.to_string();
+                            let summary = item
+                                .get("summary")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or(&id)
+                                .to_string();
+                            let primary = item
+                                .get("primary")
+                                .and_then(|value| value.as_bool())
+                                .unwrap_or(false);
+                            let time_zone = item
+                                .get("timeZone")
+                                .and_then(|value| value.as_str())
+                                .map(|value| value.to_string());
+                            let access_role = item
+                                .get("accessRole")
+                                .and_then(|value| value.as_str())
+                                .map(|value| value.to_string());
+
+                            Some(json!({
+                                "id": id,
+                                "summary": summary,
+                                "primary": primary,
+                                "time_zone": time_zone,
+                                "access_role": access_role
+                            }))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            Ok(json!({ "calendars": items }))
+        }),
+        preview: None,
+    };
+
+    let list_events = ToolDefinition {
+        metadata: ToolMetadata {
+            name: "gcal.list_events".to_string(),
+            description: "List or search Google Calendar events, grouped by calendar.".to_string(),
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "connection_id": { "type": "string" },
+                    "calendar_id": { "type": "string" },
+                    "calendar_ids": { "type": "array", "items": { "type": "string" } },
+                    "time_min": { "type": "string" },
+                    "time_max": { "type": "string" },
+                    "query": { "type": "string" },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 2500 }
+                },
+                "required": ["connection_id"]
+            }),
+            result_schema: json!({
+                "type": "object",
+                "properties": {
+                    "calendars": { "type": "array" }
+                }
+            }),
+            requires_approval: true,
+        },
+        handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
+            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let connection = get_connection(&db_for_list, connection_id, "google_calendar")?;
+            let token = get_google_access_token(&db_for_list, &connection)?;
+
+            let client = Client::new();
+            let calendar_ids = args
+                .get("calendar_ids")
+                .and_then(|v| v.as_array())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|item| item.as_str().map(|value| value.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|values| !values.is_empty())
+                .unwrap_or_else(|| {
+                    vec![args
+                        .get("calendar_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("primary")
+                        .to_string()]
+                });
+
+            let mut grouped: Vec<Value> = Vec::new();
+            for calendar_id in calendar_ids {
+                let url = format!("https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events");
+                let mut request = client.get(url);
+                if let Some(time_min) = args.get("time_min").and_then(|v| v.as_str()) {
+                    request = request.query(&[("timeMin", time_min)]);
+                }
+                if let Some(time_max) = args.get("time_max").and_then(|v| v.as_str()) {
+                    request = request.query(&[("timeMax", time_max)]);
+                }
+                if let Some(query) = args.get("query").and_then(|v| v.as_str()) {
+                    request = request.query(&[("q", query)]);
+                }
+                if let Some(max_results) = args.get("max_results").and_then(|v| v.as_u64()) {
+                    request = request.query(&[("maxResults", max_results.to_string())]);
+                }
+
+                let response = request
+                    .bearer_auth(&token)
+                    .send()
+                    .map_err(|err| ToolError::new(format!("Failed to call Google Calendar API: {err}")))?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(ToolError::new(format!("Google Calendar API error: HTTP {status}")));
+                }
+
+                let json = response
+                    .json::<Value>()
+                    .map_err(|err| ToolError::new(format!("Failed to parse Calendar response: {err}")))?;
+
+                let events = json.get("items").cloned().unwrap_or_else(|| json!([]));
+                let mut entry = serde_json::Map::new();
+                entry.insert("calendar_id".to_string(), json!(calendar_id));
+                entry.insert("events".to_string(), events);
+                if let Some(token) = json.get("nextPageToken").and_then(|value| value.as_str()) {
+                    entry.insert("next_page_token".to_string(), json!(token));
+                }
+                if let Some(summary) = json.get("summary").and_then(|value| value.as_str()) {
+                    entry.insert("summary".to_string(), json!(summary));
+                }
+                if let Some(time_zone) = json.get("timeZone").and_then(|value| value.as_str()) {
+                    entry.insert("time_zone".to_string(), json!(time_zone));
+                }
+                grouped.push(Value::Object(entry));
+            }
+
+            Ok(json!({ "calendars": grouped }))
         }),
         preview: None,
     };
@@ -681,6 +815,7 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
         preview: None,
     };
 
+    registry.register(list_calendars)?;
     registry.register(list_events)?;
     registry.register(create_event)?;
     Ok(())

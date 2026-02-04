@@ -7,3 +7,11 @@ export interface IntegrationMetadata {
     category: string;
     capabilities: string[];
 }
+
+export interface GoogleCalendarListItem {
+    id: string;
+    summary: string;
+    primary: boolean;
+    time_zone?: string;
+    access_role?: string;
+}

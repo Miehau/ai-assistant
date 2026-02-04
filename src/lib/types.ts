@@ -21,7 +21,7 @@ import type {
 import type { Attachment, FileMetadata } from './types/attachments';
 import type { AgentEvent, AgentEventType } from './types/events';
 import type { ToolMetadata } from './types/tools';
-import type { IntegrationMetadata } from './types/integrations';
+import type { IntegrationMetadata, GoogleCalendarListItem } from './types/integrations';
 import type { McpServer, CreateMcpServerInput, UpdateMcpServerInput } from './types/mcpServer';
 import type {
     IntegrationConnection,
@@ -44,6 +44,7 @@ export type {
     ToolExecutionDbRecord,
     ToolMetadata,
     IntegrationMetadata,
+    GoogleCalendarListItem,
     McpServer,
     CreateMcpServerInput,
     UpdateMcpServerInput,

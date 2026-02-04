@@ -30,6 +30,7 @@ import type {
   IntegrationConnection,
   CreateIntegrationConnectionInput,
   UpdateIntegrationConnectionInput,
+  GoogleCalendarListItem,
   OAuthStartResponse,
   OAuthSessionStatus
 } from '$lib/types';
@@ -379,6 +380,10 @@ class BackendClient {
 
   async startGoogleOAuth(integrationId: string): Promise<OAuthStartResponse> {
     return invoke('start_google_oauth', { integrationId });
+  }
+
+  async listGoogleCalendars(connectionId: string): Promise<GoogleCalendarListItem[]> {
+    return invoke('list_google_calendars', { connectionId });
   }
 
   async getOauthSession(sessionId: string): Promise<OAuthSessionStatus> {

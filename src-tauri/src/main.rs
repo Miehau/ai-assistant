@@ -154,6 +154,7 @@ fn main() {
             commands::start_google_oauth,
             commands::get_oauth_session,
             commands::cancel_oauth_session,
+            commands::list_google_calendars,
             // MCP server commands
             commands::get_mcp_servers,
             commands::get_mcp_server,
