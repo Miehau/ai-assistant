@@ -5,7 +5,8 @@ use crate::db::{
 use crate::integrations::{default_integrations, IntegrationMetadata};
 use crate::oauth::{
     build_google_auth_url, exchange_google_code, generate_pkce, google_oauth_config,
-    google_oauth_env_configured, GoogleOAuthConfig, OAuthSessionStatus, OAuthSessionStore,
+    google_oauth_env_configured, refresh_google_token, GoogleOAuthConfig, OAuthSessionStatus,
+    OAuthSessionStore,
 };
 use reqwest::blocking::Client;
 use serde_json::Value;
@@ -233,6 +234,84 @@ pub fn test_integration_connection(state: State<'_, Db>, id: String) -> Result<V
     }
 }
 
+#[derive(Debug, serde::Serialize)]
+struct GoogleCalendarListItem {
+    id: String,
+    summary: String,
+    primary: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_zone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    access_role: Option<String>,
+}
+
+#[tauri::command]
+pub fn list_google_calendars(state: State<'_, Db>, connection_id: String) -> Result<Vec<GoogleCalendarListItem>, String> {
+    let connection = IntegrationConnectionOperations::get_integration_connection_by_id(&*state, &connection_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Integration connection not found".to_string())?;
+
+    if connection.integration_id != "google_calendar" {
+        return Err("Connection is not a Google Calendar integration.".to_string());
+    }
+
+    let token = get_google_access_token(&*state, &connection)?;
+    let client = Client::new();
+    let response = client
+        .get("https://www.googleapis.com/calendar/v3/users/me/calendarList")
+        .bearer_auth(token)
+        .send()
+        .map_err(|e| format!("Calendar list request failed: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Calendar list request failed: HTTP {status}"));
+    }
+
+    let json = response
+        .json::<Value>()
+        .map_err(|e| format!("Failed to parse calendar list: {e}"))?;
+    let items = json
+        .get("items")
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|item| {
+                    let id = item.get("id")?.as_str()?.to_string();
+                    let summary = item
+                        .get("summary")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(&id)
+                        .to_string();
+                    let primary = item
+                        .get("primary")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false);
+                    let time_zone = item
+                        .get("timeZone")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value.to_string());
+                    let access_role = item
+                        .get("accessRole")
+                        .and_then(|value| value.as_str())
+                        .map(|value| value.to_string());
+
+                    Some(GoogleCalendarListItem {
+                        id,
+                        summary,
+                        primary,
+                        time_zone,
+                        access_role,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(items)
+}
+
 
 
 fn handle_oauth_callback(
@@ -404,4 +483,58 @@ fn fetch_gmail_profile_email(token: &str) -> Option<String> {
     json.get("emailAddress")
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
+}
+
+fn get_google_access_token(db: &Db, connection: &IntegrationConnection) -> Result<String, String> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("Time error: {err}"))?
+        .as_millis() as i64;
+
+    let token = connection.access_token.clone().unwrap_or_default();
+    let expires_at = connection.expires_at.unwrap_or(0);
+    let has_refresh = connection
+        .refresh_token
+        .as_ref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+
+    let needs_refresh = token.trim().is_empty()
+        || (expires_at > 0 && expires_at <= now + 60_000);
+
+    if needs_refresh {
+        let refresh_token = connection
+            .refresh_token
+            .clone()
+            .ok_or_else(|| "Missing refresh token for Google integration.".to_string())?;
+        let config = google_oauth_config()?;
+        let refreshed = refresh_google_token(&config, &refresh_token)?;
+        let new_access_token = refreshed.access_token.clone();
+        let new_refresh_token = refreshed.refresh_token.clone().unwrap_or(refresh_token);
+        let new_expires_at = refreshed.expires_in.map(|seconds| now + seconds * 1000);
+
+        let _ = IntegrationConnectionOperations::update_integration_connection(
+            db,
+            &UpdateIntegrationConnectionInput {
+                id: connection.id.clone(),
+                account_label: None,
+                status: Some("connected".to_string()),
+                auth_type: None,
+                access_token: Some(new_access_token.clone()),
+                refresh_token: Some(new_refresh_token),
+                scopes: None,
+                expires_at: new_expires_at,
+                last_error: Some(String::new()),
+                last_sync_at: None,
+            },
+        );
+
+        return Ok(new_access_token);
+    }
+
+    if token.trim().is_empty() && !has_refresh {
+        return Err("Integration connection is missing access and refresh tokens.".to_string());
+    }
+
+    Ok(token)
 }
