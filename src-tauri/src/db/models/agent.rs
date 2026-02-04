@@ -74,56 +74,6 @@ impl PhaseKind {
         }
     }
 
-    pub fn is_valid_transition(&self, next: &PhaseKind) -> bool {
-        match (self, next) {
-            (PhaseKind::Controller, PhaseKind::Controller) => true,
-            (PhaseKind::Controller, PhaseKind::Executing { .. }) => true,
-            (PhaseKind::Controller, PhaseKind::Complete { .. }) => true,
-            (PhaseKind::Controller, PhaseKind::GuardrailStop { .. }) => true,
-            (PhaseKind::Controller, PhaseKind::NeedsHumanInput { .. }) => true,
-            (PhaseKind::Executing { .. }, PhaseKind::Controller) => true,
-
-            (PhaseKind::Triage, PhaseKind::Complete { .. }) => true,
-            (PhaseKind::Triage, PhaseKind::Clarifying { .. }) => true,
-            (PhaseKind::Triage, PhaseKind::Planning { revision: 0 }) => true,
-
-            (PhaseKind::Clarifying { .. }, PhaseKind::Planning { .. }) => true,
-            (PhaseKind::Clarifying { .. }, PhaseKind::NeedsHumanInput { .. }) => true,
-            (PhaseKind::Clarifying { .. }, PhaseKind::GuardrailStop { .. }) => true,
-
-            (PhaseKind::Planning { .. }, PhaseKind::ProposingStep { .. }) => true,
-            (PhaseKind::Planning { .. }, PhaseKind::NeedsHumanInput { .. }) => true,
-            (PhaseKind::Planning { .. }, PhaseKind::GuardrailStop { .. }) => true,
-
-            (PhaseKind::ProposingStep { .. }, PhaseKind::Executing { .. }) => true,
-            (PhaseKind::ProposingStep { .. }, PhaseKind::ProposingStep { .. }) => true,
-            (PhaseKind::ProposingStep { .. }, PhaseKind::Planning { .. }) => true,
-            (PhaseKind::ProposingStep { .. }, PhaseKind::NeedsHumanInput { .. }) => true,
-            (PhaseKind::ProposingStep { .. }, PhaseKind::Complete { .. }) => true,
-            (PhaseKind::ProposingStep { .. }, PhaseKind::GuardrailStop { .. }) => true,
-
-            (PhaseKind::Executing { .. }, PhaseKind::Reflecting) => true,
-            (PhaseKind::Executing { .. }, PhaseKind::NeedsHumanInput { .. }) => true,
-            (PhaseKind::Executing { .. }, PhaseKind::GuardrailStop { .. }) => true,
-
-            (PhaseKind::Reflecting, PhaseKind::ProposingStep { .. }) => true,
-            (PhaseKind::Reflecting, PhaseKind::Planning { .. }) => true,
-            (PhaseKind::Reflecting, PhaseKind::Clarifying { .. }) => true,
-            (PhaseKind::Reflecting, PhaseKind::Complete { .. }) => true,
-            (PhaseKind::Reflecting, PhaseKind::NeedsHumanInput { .. }) => true,
-
-            (PhaseKind::NeedsHumanInput { resume_to, .. }, next) => match (resume_to, next) {
-                (ResumeTarget::Clarifying, PhaseKind::Clarifying { .. }) => true,
-                (ResumeTarget::Planning { .. }, PhaseKind::Planning { .. }) => true,
-                (ResumeTarget::ProposingStep { .. }, PhaseKind::ProposingStep { .. }) => true,
-                (ResumeTarget::Executing { .. }, PhaseKind::Executing { .. }) => true,
-                (ResumeTarget::Reflecting, PhaseKind::Reflecting) => true,
-                _ => false,
-            },
-
-            _ => false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

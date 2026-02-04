@@ -29,6 +29,13 @@
   const LOAD_MORE_THRESHOLD = 120;
   const ANIMATED_MESSAGE_LIMIT = 12;
 
+  $: {
+    // Keep optional props referenced to avoid unused export warnings.
+    void toolActivity;
+    void agentPlan;
+    void agentPlanSteps;
+  }
+
   $: phaseLabel = getPhaseLabel(agentPhase);
   $: showThinkingStatus =
     (isLoading || $isStreaming) &&

@@ -364,7 +364,6 @@
       </div>
     {/if}
   </div>
-</div>
 
 <style>
   .loading-spinner {

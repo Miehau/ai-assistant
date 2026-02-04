@@ -759,21 +759,33 @@
               {#if editingConnectionId === connection.id}
                 <div class="space-y-3">
                   <div>
-                    <label class="text-xs font-medium text-muted-foreground mb-1 block">Integration</label>
+                    <p class="text-xs font-medium text-muted-foreground mb-1">Integration</p>
                     <p class="text-sm font-medium">{integrationLabel(connection.integration_id)}</p>
                   </div>
                   <div>
-                    <label class="text-xs font-medium text-muted-foreground mb-1 block">Account label</label>
+                    <label
+                      class="text-xs font-medium text-muted-foreground mb-1 block"
+                      for={`edit-connection-account-label-${connection.id}`}
+                    >
+                      Account label
+                    </label>
                     <Input
+                      id={`edit-connection-account-label-${connection.id}`}
                       bind:value={editConnectionAccountLabel}
                       placeholder="Work Gmail"
                       class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                     />
                   </div>
                   <div>
-                    <label class="text-xs font-medium text-muted-foreground mb-1 block">Access token</label>
+                    <label
+                      class="text-xs font-medium text-muted-foreground mb-1 block"
+                      for={`edit-connection-access-token-${connection.id}`}
+                    >
+                      Access token
+                    </label>
                     <div class="relative">
                       <Input
+                        id={`edit-connection-access-token-${connection.id}`}
                         type={showEditConnectionAccessToken ? "text" : "password"}
                         bind:value={editConnectionAccessToken}
                         placeholder="Access token"
@@ -793,9 +805,15 @@
                     </div>
                   </div>
                   <div>
-                    <label class="text-xs font-medium text-muted-foreground mb-1 block">Refresh token (optional)</label>
+                    <label
+                      class="text-xs font-medium text-muted-foreground mb-1 block"
+                      for={`edit-connection-refresh-token-${connection.id}`}
+                    >
+                      Refresh token (optional)
+                    </label>
                     <div class="relative">
                       <Input
+                        id={`edit-connection-refresh-token-${connection.id}`}
                         type={showEditConnectionRefreshToken ? "text" : "password"}
                         bind:value={editConnectionRefreshToken}
                         placeholder="Refresh token"
@@ -815,16 +833,28 @@
                     </div>
                   </div>
                   <div>
-                    <label class="text-xs font-medium text-muted-foreground mb-1 block">Scopes</label>
+                    <label
+                      class="text-xs font-medium text-muted-foreground mb-1 block"
+                      for={`edit-connection-scopes-${connection.id}`}
+                    >
+                      Scopes
+                    </label>
                     <Input
+                      id={`edit-connection-scopes-${connection.id}`}
                       bind:value={editConnectionScopes}
                       placeholder="https://www.googleapis.com/auth/gmail.send"
                       class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                     />
                   </div>
                   <div>
-                    <label class="text-xs font-medium text-muted-foreground mb-1 block">Expires at (unix ms)</label>
+                    <label
+                      class="text-xs font-medium text-muted-foreground mb-1 block"
+                      for={`edit-connection-expires-at-${connection.id}`}
+                    >
+                      Expires at (unix ms)
+                    </label>
                     <Input
+                      id={`edit-connection-expires-at-${connection.id}`}
                       bind:value={editConnectionExpiresAt}
                       placeholder="1700000000000"
                       class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
@@ -903,14 +933,19 @@
           <div class="pt-6 border-t surface-divider space-y-3">
             <h3 class="text-xs font-medium text-muted-foreground">Add integration connection</h3>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">Integration</label>
+              <p id="new-connection-integration-label" class="text-xs font-medium text-muted-foreground mb-1">
+                Integration
+              </p>
               <Select.Root
                 selected={{ value: newConnectionIntegrationId, label: integrationLabel(newConnectionIntegrationId) }}
                 onSelectedChange={(v) => {
                   if (v) newConnectionIntegrationId = v.value;
                 }}
               >
-                <Select.Trigger class="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm">
+                <Select.Trigger
+                  class="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                  aria-labelledby="new-connection-integration-label"
+                >
                   <span>{integrationLabel(newConnectionIntegrationId)}</span>
                 </Select.Trigger>
                 <Select.Portal>
@@ -929,17 +964,29 @@
               </Select.Root>
             </div>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">Account label</label>
+              <label
+                class="text-xs font-medium text-muted-foreground mb-1 block"
+                for="new-connection-account-label"
+              >
+                Account label
+              </label>
               <Input
+                id="new-connection-account-label"
                 bind:value={newConnectionAccountLabel}
                 placeholder="Work Gmail"
                 class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
               />
             </div>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">Access token</label>
+              <label
+                class="text-xs font-medium text-muted-foreground mb-1 block"
+                for="new-connection-access-token"
+              >
+                Access token
+              </label>
               <div class="relative">
                 <Input
+                  id="new-connection-access-token"
                   type={showNewConnectionAccessToken ? "text" : "password"}
                   bind:value={newConnectionAccessToken}
                   placeholder="Access token"
@@ -959,9 +1006,15 @@
               </div>
             </div>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">Refresh token (optional)</label>
+              <label
+                class="text-xs font-medium text-muted-foreground mb-1 block"
+                for="new-connection-refresh-token"
+              >
+                Refresh token (optional)
+              </label>
               <div class="relative">
                 <Input
+                  id="new-connection-refresh-token"
                   type={showNewConnectionRefreshToken ? "text" : "password"}
                   bind:value={newConnectionRefreshToken}
                   placeholder="Refresh token"
@@ -981,16 +1034,25 @@
               </div>
             </div>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">Scopes</label>
+              <label class="text-xs font-medium text-muted-foreground mb-1 block" for="new-connection-scopes">
+                Scopes
+              </label>
               <Input
+                id="new-connection-scopes"
                 bind:value={newConnectionScopes}
                 placeholder="https://www.googleapis.com/auth/gmail.send"
                 class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
               />
             </div>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">Expires at (unix ms)</label>
+              <label
+                class="text-xs font-medium text-muted-foreground mb-1 block"
+                for="new-connection-expires-at"
+              >
+                Expires at (unix ms)
+              </label>
               <Input
+                id="new-connection-expires-at"
                 bind:value={newConnectionExpiresAt}
                 placeholder="1700000000000"
                 class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
@@ -1069,30 +1131,50 @@
             {#if editingId === server.id}
               <div class="space-y-3">
                 <div>
-                  <label class="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
+                  <label
+                    class="text-xs font-medium text-muted-foreground mb-1 block"
+                    for={`edit-mcp-name-${server.id}`}
+                  >
+                    Name
+                  </label>
                   <Input
+                    id={`edit-mcp-name-${server.id}`}
                     bind:value={editName}
                     placeholder="My MCP Server"
                     class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                   />
                 </div>
                 <div>
-                  <label class="text-xs font-medium text-muted-foreground mb-1 block">URL</label>
+                  <label
+                    class="text-xs font-medium text-muted-foreground mb-1 block"
+                    for={`edit-mcp-url-${server.id}`}
+                  >
+                    URL
+                  </label>
                   <Input
+                    id={`edit-mcp-url-${server.id}`}
                     bind:value={editUrl}
                     placeholder="http://localhost:3000"
                     class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                   />
                 </div>
                 <div>
-                  <label class="text-xs font-medium text-muted-foreground mb-1 block">Auth type</label>
+                  <p
+                    id={`edit-mcp-auth-type-${server.id}`}
+                    class="text-xs font-medium text-muted-foreground mb-1"
+                  >
+                    Auth type
+                  </p>
                   <Select.Root
                     selected={{ value: editAuthType, label: authLabel(editAuthType) }}
                     onSelectedChange={(v) => {
                       if (v) editAuthType = v.value;
                     }}
                   >
-                    <Select.Trigger class="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm">
+                    <Select.Trigger
+                      class="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                      aria-labelledby={`edit-mcp-auth-type-${server.id}`}
+                    >
                       <span>{authLabel(editAuthType)}</span>
                     </Select.Trigger>
                     <Select.Portal>
@@ -1111,9 +1193,15 @@
                   </Select.Root>
                 </div>
                 <div>
-                  <label class="text-xs font-medium text-muted-foreground mb-1 block">API Key (optional)</label>
+                  <label
+                    class="text-xs font-medium text-muted-foreground mb-1 block"
+                    for={`edit-mcp-api-key-${server.id}`}
+                  >
+                    API Key (optional)
+                  </label>
                   <div class="relative">
                     <Input
+                      id={`edit-mcp-api-key-${server.id}`}
                       type={showEditApiKey ? "text" : "password"}
                       bind:value={editApiKey}
                       placeholder="API key"
@@ -1199,30 +1287,41 @@
           <div class="pt-6 border-t surface-divider space-y-3">
             <h3 class="text-xs font-medium text-muted-foreground">Add MCP Server</h3>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
+              <label class="text-xs font-medium text-muted-foreground mb-1 block" for="new-mcp-name">
+                Name
+              </label>
               <Input
+                id="new-mcp-name"
                 bind:value={newName}
                 placeholder="My MCP Server"
                 class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
               />
             </div>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">URL</label>
+              <label class="text-xs font-medium text-muted-foreground mb-1 block" for="new-mcp-url">
+                URL
+              </label>
               <Input
+                id="new-mcp-url"
                 bind:value={newUrl}
                 placeholder="http://localhost:3000"
                 class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
               />
             </div>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">Auth type</label>
+              <p id="new-mcp-auth-type" class="text-xs font-medium text-muted-foreground mb-1">
+                Auth type
+              </p>
               <Select.Root
                 selected={{ value: newAuthType, label: authLabel(newAuthType) }}
                 onSelectedChange={(v) => {
                   if (v) newAuthType = v.value;
                 }}
               >
-                <Select.Trigger class="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm">
+                <Select.Trigger
+                  class="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                  aria-labelledby="new-mcp-auth-type"
+                >
                   <span>{authLabel(newAuthType)}</span>
                 </Select.Trigger>
                 <Select.Portal>
@@ -1241,9 +1340,12 @@
               </Select.Root>
             </div>
             <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block">API Key (optional)</label>
+              <label class="text-xs font-medium text-muted-foreground mb-1 block" for="new-mcp-api-key">
+                API Key (optional)
+              </label>
               <div class="relative">
                 <Input
+                  id="new-mcp-api-key"
                   type={showNewApiKey ? "text" : "password"}
                   bind:value={newApiKey}
                   placeholder="API key"

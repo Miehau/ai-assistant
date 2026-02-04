@@ -29,7 +29,14 @@ use crate::events::{
     EVENT_TOOL_EXECUTION_STARTED,
 };
 use crate::llm::{json_schema_output_format, LlmMessage, StreamResult};
-use crate::tools::{ApprovalStore, ToolApprovalDecision, ToolExecutionContext, ToolRegistry};
+use crate::tools::{
+    get_tool_approval_override,
+    load_tool_approval_overrides,
+    ApprovalStore,
+    ToolApprovalDecision,
+    ToolExecutionContext,
+    ToolRegistry,
+};
 use crate::tool_outputs::{store_tool_output, ToolOutputRecord};
 use chrono::Utc;
 use serde::Deserialize;
@@ -375,8 +382,20 @@ impl DynamicController {
 
         let execution_id = Uuid::new_v4().to_string();
         let mut tool_executions = Vec::new();
+        let requires_approval = match get_tool_approval_override(&self.db, tool_name) {
+            Ok(Some(value)) => value,
+            Ok(None) => tool.metadata.requires_approval,
+            Err(err) => {
+                log::warn!(
+                    "Failed to load tool approval override for {}: {}",
+                    tool_name,
+                    err
+                );
+                tool.metadata.requires_approval
+            }
+        };
 
-        if tool.metadata.requires_approval {
+        if requires_approval {
             let preview = match tool.preview.as_ref() {
                 Some(preview_fn) => Some(preview_fn(args.clone(), ToolExecutionContext)
                     .map_err(|err| err.message)?),
@@ -530,30 +549,30 @@ impl DynamicController {
 
         self.tool_calls_made += 1;
         let args_summary = summarize_tool_args(&args, 500);
-        log::info!(
-            "[tool] execution started: tool={} execution_id={} requires_approval={} iteration={} session_id={} conversation_id={} message_id={} args={}",
-            tool_name,
-            execution_id,
-            tool.metadata.requires_approval,
-            self.tool_calls_made,
-            self.session.id,
-            self.session.conversation_id,
-            self.assistant_message_id,
-            args_summary
+            log::info!(
+                "[tool] execution started: tool={} execution_id={} requires_approval={} iteration={} session_id={} conversation_id={} message_id={} args={}",
+                tool_name,
+                execution_id,
+                requires_approval,
+                self.tool_calls_made,
+                self.session.id,
+                self.session.conversation_id,
+                self.assistant_message_id,
+                args_summary
         );
         let timestamp_ms = Utc::now().timestamp_millis();
         self.event_bus.publish(AgentEvent::new_with_timestamp(
             EVENT_TOOL_EXECUTION_STARTED,
             json!({
                 "execution_id": execution_id.clone(),
-                "tool_name": tool_name,
-                "args": args.clone(),
-                "requires_approval": tool.metadata.requires_approval,
-                "iteration": self.tool_calls_made,
-                "conversation_id": self.session.conversation_id,
-                "message_id": self.assistant_message_id,
-                "timestamp_ms": timestamp_ms,
-            }),
+                    "tool_name": tool_name,
+                    "args": args.clone(),
+                    "requires_approval": requires_approval,
+                    "iteration": self.tool_calls_made,
+                    "conversation_id": self.session.conversation_id,
+                    "message_id": self.assistant_message_id,
+                    "timestamp_ms": timestamp_ms,
+                }),
             timestamp_ms,
         ));
 
@@ -727,8 +746,16 @@ impl DynamicController {
     where
         F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
-        let tool_list = serde_json::to_string(&self.tool_registry.prompt_json())
-            .unwrap_or_else(|_| "[]".to_string());
+        let tool_list = {
+            let overrides = load_tool_approval_overrides(&self.db).unwrap_or_default();
+            let mut tools = self.tool_registry.list_metadata();
+            for tool in &mut tools {
+                if let Some(value) = overrides.get(&tool.name) {
+                    tool.requires_approval = *value;
+                }
+            }
+            serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string())
+        };
         let prompt = CONTROLLER_PROMPT
             .replace("{user_message}", user_message)
             .replace("{recent_messages}", &self.render_history(self.messages.len()))

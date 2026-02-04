@@ -19,43 +19,81 @@ pub fn register_integration_tools(registry: &mut ToolRegistry, db: Db) -> Result
     Ok(())
 }
 
-fn get_connection(db: &Db, connection_id: &str, expected_integration: &str) -> Result<IntegrationConnection, ToolError> {
+fn get_connection(
+    db: &Db,
+    connection_id: &str,
+    expected_integration: &str,
+) -> Result<IntegrationConnection, ToolError> {
     let connection_id = connection_id.trim();
-    if connection_id.is_empty() || connection_id == "default" {
-        let connections = IntegrationConnectionOperations::get_integration_connections(db)
-            .map_err(|err| ToolError::new(format!("Failed to load integration connections: {err}")))?;
-        if let Some(connection) = connections.iter().find(|item| {
-            item.integration_id == expected_integration && item.status == "connected"
-        }) {
-            return Ok(connection.clone());
-        }
+    let connections = IntegrationConnectionOperations::get_integration_connections(db)
+        .map_err(|err| ToolError::new(format!("Failed to load integration connections: {err}")))?;
 
-        if let Some(connection) = connections
+    let pick_by_integration = |connections: &[IntegrationConnection]| {
+        connections
             .iter()
-            .find(|item| item.integration_id == expected_integration)
-        {
-            log::warn!(
-                "[tool] using non-connected integration: id={} integration={} status={}",
-                connection.id,
-                connection.integration_id,
-                connection.status
-            );
-            return Ok(connection.clone());
+            .find(|item| item.integration_id == expected_integration && item.status == "connected")
+            .or_else(|| connections.iter().find(|item| item.integration_id == expected_integration))
+            .cloned()
+    };
+
+    if connection_id.is_empty() || connection_id == "default" {
+        if let Some(connection) = pick_by_integration(&connections) {
+            if connection.status != "connected" {
+                log::warn!(
+                    "[tool] using non-connected integration: id={} integration={} status={}",
+                    connection.id,
+                    connection.integration_id,
+                    connection.status
+                );
+            }
+            return Ok(connection);
         }
 
         return Err(ToolError::new("Integration connection not found"));
     }
 
-    let connection = IntegrationConnectionOperations::get_integration_connection_by_id(db, connection_id)
-        .map_err(|err| ToolError::new(format!("Failed to load integration connection: {err}")))?
-        .ok_or_else(|| ToolError::new("Integration connection not found"))?;
-
-    if connection.integration_id != expected_integration {
-        return Err(ToolError::new(format!(
-            "Connection {connection_id} is not a {expected_integration} integration"
-        )));
+    if let Some(connection) = connections.iter().find(|item| item.id == connection_id) {
+        if connection.integration_id != expected_integration {
+            return Err(ToolError::new(format!(
+                "Connection {connection_id} is not a {expected_integration} integration"
+            )));
+        }
+        return Ok(connection.clone());
     }
-    Ok(connection)
+
+    let alias = connection_id.to_lowercase();
+    let alias_matches_integration = alias == expected_integration
+        || (alias == "google" && expected_integration == "google_calendar");
+
+    if alias_matches_integration {
+        if let Some(connection) = pick_by_integration(&connections) {
+            log::warn!(
+                "[tool] resolved integration alias '{}' to connection id={}",
+                connection_id,
+                connection.id
+            );
+            return Ok(connection);
+        }
+    }
+
+    let by_label = connections.iter().find(|item| {
+        item.integration_id == expected_integration
+            && item
+                .account_label
+                .as_ref()
+                .map(|label| label.eq_ignore_ascii_case(connection_id))
+                .unwrap_or(false)
+    });
+    if let Some(connection) = by_label.cloned() {
+        log::warn!(
+            "[tool] resolved account label '{}' to connection id={}",
+            connection_id,
+            connection.id
+        );
+        return Ok(connection);
+    }
+
+    Err(ToolError::new("Integration connection not found"))
 }
 
 fn get_access_token(connection: &IntegrationConnection) -> Result<String, ToolError> {

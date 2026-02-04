@@ -64,6 +64,10 @@ fn main() {
                 .expect("Failed to register integration tools");
             tools::register_tool_output_tools(&mut tool_registry, db.clone())
                 .expect("Failed to register tool output tools");
+            log::info!(
+                "[tools] registered {} tools",
+                tool_registry.list_metadata().len()
+            );
             let approval_store = tools::ApprovalStore::new();
             let oauth_store = oauth::OAuthSessionStore::new();
 
@@ -173,6 +177,7 @@ fn main() {
             // Tool approval commands
             commands::resolve_tool_execution_approval,
             commands::list_tools,
+            commands::set_tool_approval_override,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

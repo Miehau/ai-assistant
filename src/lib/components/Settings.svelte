@@ -1,5 +1,6 @@
 <script lang="ts">
   import { open } from "@tauri-apps/api/dialog";
+  import { onMount } from "svelte";
   import { X } from "lucide-svelte";
   import { backend } from "$lib/backend";
   import type { ToolMetadata } from "$lib/types/tools";
@@ -22,6 +23,10 @@
   let toolsError = $state("");
   let toolQuery = $state("");
   let selectedToolName = $state<string | null>(null);
+  let toolApprovalSaving = $state<string | null>(null);
+  let toolApprovalError = $state<string | null>(null);
+  let toolApprovalErrorTool = $state<string | null>(null);
+  const isDev = import.meta.env.DEV;
   let activeTab = $state<"tools" | "vault" | "integrations">("tools");
 
   $effect(() => {
@@ -30,6 +35,12 @@
     }
     if (activeTab === "vault") {
       loadVaultRoot();
+    }
+  });
+
+  onMount(() => {
+    if (activeTab === "tools") {
+      void loadTools();
     }
   });
 
@@ -86,7 +97,19 @@
     toolsLoading = true;
     toolsError = "";
     try {
-      tools = await backend.listTools();
+      const result = await backend.listTools();
+      if (!Array.isArray(result)) {
+        toolsError = "Failed to load tools: unexpected response.";
+        console.warn("[settings] listTools unexpected payload", result);
+        tools = [];
+        return;
+      }
+      console.info(
+        "[settings] listTools loaded",
+        result.length,
+        result.slice(0, 5).map((tool) => tool?.name)
+      );
+      tools = result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toolsError = message ? `Failed to load tools: ${message}` : "Failed to load tools.";
@@ -95,19 +118,51 @@
     }
   }
 
-  let filteredTools = $derived(() => {
-    const query = toolQuery.trim().toLowerCase();
-    if (!query) return tools;
-    return tools.filter((tool) => {
-      const nameMatch = tool.name.toLowerCase().includes(query);
-      const descMatch = tool.description?.toLowerCase().includes(query);
-      return nameMatch || descMatch;
+  async function updateToolApproval(toolName: string, requiresApproval: boolean) {
+    if (toolApprovalSaving) return;
+    toolApprovalSaving = toolName;
+    toolApprovalError = null;
+    toolApprovalErrorTool = null;
+
+    const previousTools = tools;
+    tools = tools.map((tool) =>
+      tool.name === toolName ? { ...tool, requires_approval: requiresApproval } : tool
+    );
+
+    try {
+      await backend.setToolApprovalOverride(toolName, requiresApproval);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toolApprovalError = message
+        ? `Failed to update tool approval: ${message}`
+        : "Failed to update tool approval.";
+      toolApprovalErrorTool = toolName;
+      tools = previousTools;
+    } finally {
+      toolApprovalSaving = null;
+    }
+  }
+
+  let filteredTools = $state<ToolMetadata[]>([]);
+  let selectedTool = $state<ToolMetadata | null>(null);
+
+  $effect(() => {
+    const rawQuery = typeof toolQuery === "string" ? toolQuery : "";
+    const query = rawQuery.trim().toLowerCase();
+    if (!query) {
+      filteredTools = [...tools];
+      return;
+    }
+    filteredTools = tools.filter((tool) => {
+      const name = typeof tool.name === "string" ? tool.name : "";
+      const desc = typeof tool.description === "string" ? tool.description : "";
+      return name.toLowerCase().includes(query) || desc.toLowerCase().includes(query);
     });
   });
 
-  let selectedTool = $derived(
-    () => filteredTools.find((tool) => tool.name === selectedToolName) ?? null
-  );
+  $effect(() => {
+    selectedTool = filteredTools.find((tool) => tool.name === selectedToolName) ?? null;
+  });
 
   $effect(() => {
     if (!filteredTools.length) {
@@ -201,6 +256,11 @@
           </div>
 
           <div class="mt-2 flex-1 min-h-0 overflow-y-auto space-y-1 pr-1">
+            {#if isDev}
+              <p class="text-[10px] text-muted-foreground/60">
+                Loaded: {tools.length} · Filtered: {filteredTools.length}
+              </p>
+            {/if}
             {#if toolsLoading}
               <p class="text-xs text-muted-foreground">Loading tools...</p>
             {:else if toolsError}
@@ -217,7 +277,18 @@
                 </Button>
               </div>
             {:else if filteredTools.length === 0}
-              <p class="text-xs text-muted-foreground">No tools found.</p>
+              <div class="space-y-2">
+                <p class="text-xs text-muted-foreground">No tools found.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="h-7 text-[10px] border-white/10"
+                  onclick={loadTools}
+                  disabled={toolsLoading}
+                >
+                  Reload tools
+                </Button>
+              </div>
             {:else}
               {#each filteredTools as tool (tool.name)}
                 <button
@@ -250,7 +321,7 @@
             <p class="text-xs text-muted-foreground">Loading tools...</p>
           {:else if toolsError}
             <p class="text-xs text-red-400">{toolsError}</p>
-          {:else if !selectedTool}
+          {:else if !selectedTool || filteredTools.length === 0}
             <p class="text-xs text-muted-foreground">Select a tool to view settings.</p>
           {:else}
             <div class="space-y-3">
@@ -273,12 +344,32 @@
               </div>
 
               <div class="grid gap-2 text-xs">
-                <div class="grid grid-cols-[120px_1fr] items-center gap-2">
+                <div class="grid grid-cols-1 gap-2 sm:grid-cols-[120px_minmax(0,1fr)] sm:items-center">
                   <span class="text-muted-foreground/70">Approval</span>
-                  <span>
-                    {selectedTool.requires_approval ? "Ask each time" : "Auto-approved"}
-                  </span>
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <Button
+                      variant={selectedTool.requires_approval ? "default" : "outline"}
+                      size="sm"
+                      class="h-7 w-full text-[10px] border-white/10 sm:w-auto"
+                      onclick={() => updateToolApproval(selectedTool.name, true)}
+                      disabled={toolApprovalSaving === selectedTool.name}
+                    >
+                      Ask each time
+                    </Button>
+                    <Button
+                      variant={selectedTool.requires_approval ? "outline" : "default"}
+                      size="sm"
+                      class="h-7 w-full text-[10px] border-white/10 sm:w-auto"
+                      onclick={() => updateToolApproval(selectedTool.name, false)}
+                      disabled={toolApprovalSaving === selectedTool.name}
+                    >
+                      Auto
+                    </Button>
+                  </div>
                 </div>
+                {#if toolApprovalError && toolApprovalErrorTool === selectedTool.name}
+                  <p class="text-[11px] text-red-400">{toolApprovalError}</p>
+                {/if}
                 <div class="grid grid-cols-[120px_1fr] items-center gap-2">
                   <span class="text-muted-foreground/70">Schemas</span>
                   <span>Args + Result</span>

@@ -121,25 +121,43 @@
                             <!-- Edit mode -->
                             <div class="space-y-3">
                                 <div>
-                                    <label class="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
+                                    <label
+                                        class="text-xs font-medium text-muted-foreground mb-1 block"
+                                        for={`edit-backend-name-${backend.id}`}
+                                    >
+                                        Name
+                                    </label>
                                     <Input
+                                        id={`edit-backend-name-${backend.id}`}
                                         bind:value={editName}
                                         placeholder="Backend name"
                                         class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                                     />
                                 </div>
                                 <div>
-                                    <label class="text-xs font-medium text-muted-foreground mb-1 block">URL</label>
+                                    <label
+                                        class="text-xs font-medium text-muted-foreground mb-1 block"
+                                        for={`edit-backend-url-${backend.id}`}
+                                    >
+                                        URL
+                                    </label>
                                     <Input
+                                        id={`edit-backend-url-${backend.id}`}
                                         bind:value={editUrl}
                                         placeholder="https://api.example.com/v1/chat/completions"
                                         class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                                     />
                                 </div>
                                 <div>
-                                    <label class="text-xs font-medium text-muted-foreground mb-1 block">API Key (optional)</label>
+                                    <label
+                                        class="text-xs font-medium text-muted-foreground mb-1 block"
+                                        for={`edit-backend-api-key-${backend.id}`}
+                                    >
+                                        API Key (optional)
+                                    </label>
                                     <div class="relative">
                                         <Input
+                                            id={`edit-backend-api-key-${backend.id}`}
                                             type={showEditApiKey ? "text" : "password"}
                                             bind:value={editApiKey}
                                             placeholder="API key (optional)"
@@ -216,25 +234,43 @@
                     <div class="pt-6 border-t surface-divider space-y-3">
                         <h3 class="text-xs font-medium text-muted-foreground">Add New Backend</h3>
                         <div>
-                            <label class="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
+                            <label
+                                class="text-xs font-medium text-muted-foreground mb-1 block"
+                                for="new-backend-name"
+                            >
+                                Name
+                            </label>
                             <Input
+                                id="new-backend-name"
                                 bind:value={newName}
                                 placeholder="My Custom Backend"
                                 class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                             />
                         </div>
                         <div>
-                            <label class="text-xs font-medium text-muted-foreground mb-1 block">URL</label>
+                            <label
+                                class="text-xs font-medium text-muted-foreground mb-1 block"
+                                for="new-backend-url"
+                            >
+                                URL
+                            </label>
                             <Input
+                                id="new-backend-url"
                                 bind:value={newUrl}
                                 placeholder="https://api.example.com/v1/chat/completions"
                                 class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
                             />
                         </div>
                         <div>
-                            <label class="text-xs font-medium text-muted-foreground mb-1 block">API Key (optional)</label>
+                            <label
+                                class="text-xs font-medium text-muted-foreground mb-1 block"
+                                for="new-backend-api-key"
+                            >
+                                API Key (optional)
+                            </label>
                             <div class="relative">
                                 <Input
+                                    id="new-backend-api-key"
                                     type={showNewApiKey ? "text" : "password"}
                                     bind:value={newApiKey}
                                     placeholder="API key (optional)"

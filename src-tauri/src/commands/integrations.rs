@@ -235,7 +235,7 @@ pub fn test_integration_connection(state: State<'_, Db>, id: String) -> Result<V
 }
 
 #[derive(Debug, serde::Serialize)]
-struct GoogleCalendarListItem {
+pub struct GoogleCalendarListItem {
     id: String,
     summary: String,
     primary: bool,

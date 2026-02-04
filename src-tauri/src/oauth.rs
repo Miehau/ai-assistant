@@ -7,7 +7,6 @@ use sha2::{Digest, Sha256};
 use specta::Type;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 use uuid::Uuid;
 
@@ -15,26 +14,6 @@ use uuid::Uuid;
 pub struct GoogleOAuthConfig {
     pub client_id: String,
     pub client_secret: Option<String>,
-}
-
-pub fn google_oauth_config_with_override(
-    client_id: Option<String>,
-    client_secret: Option<String>,
-) -> Result<GoogleOAuthConfig, String> {
-    if let Some(client_id) = client_id {
-        let secret = client_secret.and_then(|value| {
-            if value.trim().is_empty() {
-                None
-            } else {
-                Some(value)
-            }
-        });
-        return Ok(GoogleOAuthConfig {
-            client_id,
-            client_secret: secret,
-        });
-    }
-    google_oauth_config()
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,8 +25,6 @@ pub struct GoogleTokenResponse {
     pub expires_in: Option<i64>,
     #[serde(default)]
     pub scope: Option<String>,
-    #[serde(default)]
-    pub token_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -272,7 +249,6 @@ fn format_google_oauth_error(body: &str) -> String {
 #[derive(Clone, Debug)]
 struct OAuthSession {
     status: OAuthStatus,
-    created_at: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -306,13 +282,8 @@ impl OAuthSessionStore {
 
     pub fn create_session(&self) -> String {
         let id = Uuid::new_v4().to_string();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
         let session = OAuthSession {
             status: OAuthStatus::Pending,
-            created_at: now,
         };
         let mut sessions = self.sessions.lock().unwrap();
         sessions.insert(id.clone(), session);
@@ -377,7 +348,7 @@ impl OAuthSessionStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_google_auth_url, generate_pkce, google_oauth_config_with_override, GoogleOAuthConfig};
+    use super::{build_google_auth_url, generate_pkce, GoogleOAuthConfig};
 
     #[test]
     fn pkce_generation_is_deterministic_length() {
@@ -403,10 +374,4 @@ mod tests {
         assert_eq!(params.get("code_challenge"), Some(&"challenge".to_string()));
     }
 
-    #[test]
-    fn oauth_override_prefers_custom_id() {
-        let config = google_oauth_config_with_override(Some("custom-id".to_string()), None)
-            .expect("config");
-        assert_eq!(config.client_id, "custom-id");
-    }
 }

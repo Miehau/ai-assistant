@@ -426,6 +426,16 @@ class BackendClient {
     return invoke('list_tools', {});
   }
 
+  async setToolApprovalOverride(
+    toolName: string,
+    requiresApproval: boolean | null
+  ): Promise<void> {
+    return invoke('set_tool_approval_override', {
+      tool_name: toolName,
+      requires_approval: requiresApproval
+    });
+  }
+
   // ============ Files ============
 
   async uploadFile(
