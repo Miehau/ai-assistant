@@ -10,6 +10,7 @@ mod oauth;
 mod llm;
 mod tools;
 mod agent;
+mod tool_outputs;
 
 use db::Db;
 use events::EventBus;
@@ -25,6 +26,7 @@ fn init_logging() {
 }
 
 fn main() {
+    let _ = dotenvy::dotenv();
     init_logging();
     tauri::Builder::default()
         .setup(|app| {
@@ -60,6 +62,8 @@ fn main() {
                 .expect("Failed to register preference tools");
             tools::register_integration_tools(&mut tool_registry, db.clone())
                 .expect("Failed to register integration tools");
+            tools::register_tool_output_tools(&mut tool_registry, db.clone())
+                .expect("Failed to register tool output tools");
             let approval_store = tools::ApprovalStore::new();
             let oauth_store = oauth::OAuthSessionStore::new();
 

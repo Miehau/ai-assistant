@@ -33,6 +33,7 @@ mime = "0.3"
 regex = "1.10"
 rand = "0.8"
 sha2 = "0.10"
+dotenvy = "0.15"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

@@ -2,6 +2,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use specta::Type;
 use std::collections::HashMap;
@@ -15,9 +16,6 @@ pub struct GoogleOAuthConfig {
     pub client_id: String,
     pub client_secret: Option<String>,
 }
-
-const GOOGLE_OAUTH_CLIENT_ID_DEFAULT: &str =
-    "645520844276-kdq09e1e1kkdjcd181caehri0avcku79.apps.googleusercontent.com";
 
 pub fn google_oauth_config_with_override(
     client_id: Option<String>,
@@ -52,20 +50,51 @@ pub struct GoogleTokenResponse {
     pub token_type: Option<String>,
 }
 
-pub fn google_oauth_config() -> Result<GoogleOAuthConfig, String> {
-    let client_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID")
-        .ok()
-        .or_else(|| option_env!("GOOGLE_OAUTH_CLIENT_ID").map(|value| value.to_string()))
-        .unwrap_or_else(|| GOOGLE_OAUTH_CLIENT_ID_DEFAULT.to_string());
+#[derive(Debug, Deserialize)]
+struct GoogleOAuthErrorResponse {
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    error_description: Option<String>,
+    #[serde(default)]
+    error_uri: Option<String>,
+}
 
-    let client_secret = std::env::var("GOOGLE_OAUTH_CLIENT_SECRET")
-        .ok()
-        .or_else(|| option_env!("GOOGLE_OAUTH_CLIENT_SECRET").map(|value| value.to_string()));
+pub fn google_oauth_config() -> Result<GoogleOAuthConfig, String> {
+    let client_id = google_oauth_env_value("GOOGLE_OAUTH_CLIENT_ID");
+    let client_secret = google_oauth_env_value("GOOGLE_OAUTH_CLIENT_SECRET");
+
+    if client_id.trim().is_empty() || client_secret.trim().is_empty() {
+        return Err(
+            "Google OAuth is disabled. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET."
+                .to_string(),
+        );
+    }
 
     Ok(GoogleOAuthConfig {
         client_id,
-        client_secret,
+        client_secret: Some(client_secret),
     })
+}
+
+pub fn google_oauth_env_configured() -> bool {
+    let client_id = google_oauth_env_value("GOOGLE_OAUTH_CLIENT_ID");
+    let client_secret = google_oauth_env_value("GOOGLE_OAUTH_CLIENT_SECRET");
+    !client_id.trim().is_empty() && !client_secret.trim().is_empty()
+}
+
+fn google_oauth_env_value(key: &str) -> String {
+    match key {
+        "GOOGLE_OAUTH_CLIENT_ID" => std::env::var(key)
+            .ok()
+            .or_else(|| option_env!("GOOGLE_OAUTH_CLIENT_ID").map(|value| value.to_string()))
+            .unwrap_or_default(),
+        "GOOGLE_OAUTH_CLIENT_SECRET" => std::env::var(key)
+            .ok()
+            .or_else(|| option_env!("GOOGLE_OAUTH_CLIENT_SECRET").map(|value| value.to_string()))
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
 pub fn generate_pkce() -> (String, String) {
@@ -126,12 +155,22 @@ pub fn exchange_google_code(
         .send()
         .map_err(|err| format!("Token exchange failed: {err}"))?;
 
-    if !response.status().is_success() {
-        return Err(format!("Token exchange error: HTTP {}", response.status()));
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|err| format!("Failed to read token response: {err}"))?;
+
+    if !status.is_success() {
+        let details = format_google_oauth_error(&body);
+        let has_secret = config.client_secret.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+        return Err(format!(
+            "Token exchange error: HTTP {status}{details} [client_id={}, client_secret={}]",
+            config.client_id,
+            if has_secret { "present" } else { "absent" }
+        ));
     }
 
-    response
-        .json::<GoogleTokenResponse>()
+    serde_json::from_str::<GoogleTokenResponse>(&body)
         .map_err(|err| format!("Failed to parse token response: {err}"))
 }
 
@@ -155,13 +194,79 @@ pub fn refresh_google_token(
         .send()
         .map_err(|err| format!("Token refresh failed: {err}"))?;
 
-    if !response.status().is_success() {
-        return Err(format!("Token refresh error: HTTP {}", response.status()));
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|err| format!("Failed to read refresh response: {err}"))?;
+
+    if !status.is_success() {
+        let details = format_google_oauth_error(&body);
+        let has_secret = config.client_secret.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+        return Err(format!(
+            "Token refresh error: HTTP {status}{details} [client_id={}, client_secret={}]",
+            config.client_id,
+            if has_secret { "present" } else { "absent" }
+        ));
     }
 
-    response
-        .json::<GoogleTokenResponse>()
+    serde_json::from_str::<GoogleTokenResponse>(&body)
         .map_err(|err| format!("Failed to parse refresh response: {err}"))
+}
+
+fn format_google_oauth_error(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Ok(parsed) = serde_json::from_str::<GoogleOAuthErrorResponse>(trimmed) {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(error) = parsed.error {
+            if !error.trim().is_empty() {
+                parts.push(error.trim().to_string());
+            }
+        }
+        if let Some(description) = parsed.error_description {
+            if !description.trim().is_empty() {
+                parts.push(description.trim().to_string());
+            }
+        }
+        if let Some(uri) = parsed.error_uri {
+            if !uri.trim().is_empty() {
+                parts.push(uri.trim().to_string());
+            }
+        }
+        if !parts.is_empty() {
+            return format!(" ({})", parts.join(" - "));
+        }
+    } else if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+            let mut parts: Vec<String> = Vec::new();
+            if !error.trim().is_empty() {
+                parts.push(error.trim().to_string());
+            }
+            if let Some(description) = value.get("error_description").and_then(|v| v.as_str()) {
+                if !description.trim().is_empty() {
+                    parts.push(description.trim().to_string());
+                }
+            }
+            if let Some(uri) = value.get("error_uri").and_then(|v| v.as_str()) {
+                if !uri.trim().is_empty() {
+                    parts.push(uri.trim().to_string());
+                }
+            }
+            if !parts.is_empty() {
+                return format!(" ({})", parts.join(" - "));
+            }
+        }
+    }
+
+    let truncated: String = trimmed.chars().take(300).collect();
+    if trimmed.len() > truncated.len() {
+        format!(" ({}...)", truncated)
+    } else {
+        format!(" ({truncated})")
+    }
 }
 
 #[derive(Clone, Debug)]

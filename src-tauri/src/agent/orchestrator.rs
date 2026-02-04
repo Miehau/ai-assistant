@@ -30,6 +30,7 @@ use crate::events::{
 };
 use crate::llm::{json_schema_output_format, LlmMessage, StreamResult};
 use crate::tools::{ApprovalStore, ToolApprovalDecision, ToolExecutionContext, ToolRegistry};
+use crate::tool_outputs::{store_tool_output, ToolOutputRecord};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -561,66 +562,110 @@ impl DynamicController {
         let duration_ms = start.elapsed().as_millis() as i64;
         let completed_at = Utc::now();
         let timestamp_ms = completed_at.timestamp_millis();
+        let persist_output = tool_name != "tool_outputs.read";
 
         let (success, output, error) = match result {
-            Ok(output) => {
-                let result_for_event = output.clone();
-                log::info!(
-                    "[tool] execution completed: tool={} execution_id={} duration_ms={} success=true session_id={} conversation_id={} message_id={}",
-                    tool_name,
-                    execution_id,
-                    duration_ms,
-                    self.session.id,
-                    self.session.conversation_id,
-                    self.assistant_message_id
-                );
-                self.event_bus.publish(AgentEvent::new_with_timestamp(
-                    EVENT_TOOL_EXECUTION_COMPLETED,
-                    json!({
-                        "execution_id": execution_id.clone(),
-                        "tool_name": tool_name,
-                        "result": result_for_event,
-                        "success": true,
-                        "duration_ms": duration_ms,
-                        "iteration": self.tool_calls_made,
-                        "conversation_id": self.session.conversation_id,
-                        "message_id": self.assistant_message_id,
-                        "timestamp_ms": timestamp_ms,
-                    }),
-                    timestamp_ms,
-                ));
-                (true, Some(output), None)
+            Ok(output_value) => {
+                if !persist_output {
+                    (true, Some(output_value), None)
+                } else {
+                    let record = ToolOutputRecord {
+                        id: execution_id.clone(),
+                        tool_name: tool_name.to_string(),
+                        conversation_id: Some(self.session.conversation_id.clone()),
+                        message_id: self.assistant_message_id.clone(),
+                        created_at: timestamp_ms,
+                        success: true,
+                        parameters: args.clone(),
+                        output: output_value,
+                    };
+
+                    match store_tool_output(&record) {
+                        Ok(output_ref) => {
+                            let message = json!({
+                                "message": "Tool output stored in app data. Use tool_outputs.read to retrieve.",
+                                "success": true,
+                                "output_ref": output_ref
+                            });
+                            (true, Some(message), None)
+                        }
+                        Err(err) => {
+                            let error_message = format!("Failed to persist tool output: {err}");
+                            let message = json!({
+                                "message": error_message,
+                                "success": false
+                            });
+                            (false, Some(message), Some(error_message))
+                        }
+                    }
+                }
             }
             Err(err) => {
                 let error_message = err.message.clone();
-                log::warn!(
-                    "[tool] execution failed: tool={} execution_id={} duration_ms={} error={} session_id={} conversation_id={} message_id={}",
-                    tool_name,
-                    execution_id,
-                    duration_ms,
-                    error_message,
-                    self.session.id,
-                    self.session.conversation_id,
-                    self.assistant_message_id
-                );
-                self.event_bus.publish(AgentEvent::new_with_timestamp(
-                    EVENT_TOOL_EXECUTION_COMPLETED,
-                    json!({
-                        "execution_id": execution_id.clone(),
-                        "tool_name": tool_name,
-                        "success": false,
-                        "error": error_message,
-                        "duration_ms": duration_ms,
-                        "iteration": self.tool_calls_made,
-                        "conversation_id": self.session.conversation_id,
-                        "message_id": self.assistant_message_id,
-                        "timestamp_ms": timestamp_ms,
-                    }),
-                    timestamp_ms,
-                ));
-                (false, None, Some(error_message))
+                let message = json!({
+                    "message": error_message,
+                    "success": false
+                });
+                (false, Some(message), Some(error_message))
             }
         };
+
+        if success {
+            let result_for_event = output.clone().unwrap_or_else(|| json!(null));
+            log::info!(
+                "[tool] execution completed: tool={} execution_id={} duration_ms={} success=true session_id={} conversation_id={} message_id={}",
+                tool_name,
+                execution_id,
+                duration_ms,
+                self.session.id,
+                self.session.conversation_id,
+                self.assistant_message_id
+            );
+            self.event_bus.publish(AgentEvent::new_with_timestamp(
+                EVENT_TOOL_EXECUTION_COMPLETED,
+                json!({
+                    "execution_id": execution_id.clone(),
+                    "tool_name": tool_name,
+                    "result": result_for_event,
+                    "success": true,
+                    "duration_ms": duration_ms,
+                    "iteration": self.tool_calls_made,
+                    "conversation_id": self.session.conversation_id,
+                    "message_id": self.assistant_message_id,
+                    "timestamp_ms": timestamp_ms,
+                }),
+                timestamp_ms,
+            ));
+        } else {
+            let error_message = error
+                .clone()
+                .unwrap_or_else(|| "Tool execution failed".to_string());
+            log::warn!(
+                "[tool] execution failed: tool={} execution_id={} duration_ms={} error={} session_id={} conversation_id={} message_id={}",
+                tool_name,
+                execution_id,
+                duration_ms,
+                error_message,
+                self.session.id,
+                self.session.conversation_id,
+                self.assistant_message_id
+            );
+            self.event_bus.publish(AgentEvent::new_with_timestamp(
+                EVENT_TOOL_EXECUTION_COMPLETED,
+                json!({
+                    "execution_id": execution_id.clone(),
+                    "tool_name": tool_name,
+                    "success": false,
+                    "error": error_message,
+                    "duration_ms": duration_ms,
+                    "iteration": self.tool_calls_made,
+                    "conversation_id": self.session.conversation_id,
+                    "message_id": self.assistant_message_id,
+                    "timestamp_ms": timestamp_ms,
+                }),
+                timestamp_ms,
+            ));
+        }
 
         tool_executions.push(ToolExecutionRecord {
             execution_id: execution_id.clone(),
