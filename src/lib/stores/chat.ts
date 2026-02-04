@@ -62,6 +62,10 @@ export const hasAttachments = derived(
 
 // Preference keys
 const PREF_LAST_USED_MODEL = 'last_used_model';
+let modelsLoaded = false;
+let modelsLoadingPromise: Promise<void> | null = null;
+let systemPromptsLoaded = false;
+let systemPromptsLoadingPromise: Promise<void> | null = null;
 let stopAgentEventBridge: (() => void) | null = null;
 let streamingAssistantMessageId: string | null = null;
 let streamingChunkBuffer = '';
@@ -431,100 +435,121 @@ export async function startAgentEvents() {
 }
 
 // Actions
-export async function loadModels() {
-  try {
-    console.log('[ChatStore] Starting loadModels...');
+export async function loadModels(options: { force?: boolean } = {}) {
+  const { force = false } = options;
+  if (modelsLoadingPromise) {
+    await modelsLoadingPromise;
+    if (!force && modelsLoaded) return;
+  }
+  if (modelsLoaded && !force) return;
 
-    // First load API keys to ensure model availability is updated
-    console.log('[ChatStore] Loading API keys...');
-    await apiKeyService.loadAllApiKeys();
-    console.log('[ChatStore] API keys loaded');
+  const loader = (async () => {
+    try {
+      console.log('[ChatStore] Starting loadModels...');
 
-    // Load custom backends for custom model support
-    console.log('[ChatStore] Loading custom backends...');
-    await customBackendService.loadBackends();
-    console.log('[ChatStore] Custom backends count:', customBackendService.backends.length);
+      // First load API keys to ensure model availability is updated
+      console.log('[ChatStore] Loading API keys...');
+      await apiKeyService.loadAllApiKeys();
+      console.log('[ChatStore] API keys loaded');
 
-    // Get models from both sources
-    console.log('[ChatStore] Loading stored models...');
-    const storedModels = await modelService.loadModels();
-    console.log('[ChatStore] Stored models count:', storedModels.length);
+      // Load custom backends for custom model support
+      console.log('[ChatStore] Loading custom backends...');
+      await customBackendService.loadBackends();
+      console.log('[ChatStore] Custom backends count:', customBackendService.backends.length);
 
-    console.log('[ChatStore] Getting registry models with capabilities...');
-    const registryModels = modelService.getAvailableModelsWithCapabilities();
-    console.log('[ChatStore] Registry models count:', registryModels.length);
+      // Get models from both sources
+      console.log('[ChatStore] Loading stored models...');
+      const storedModels = await modelService.loadModels();
+      console.log('[ChatStore] Stored models count:', storedModels.length);
 
-    // Combine models, prioritizing registry models for their capabilities
-    const combinedModels: ModelWithBackend[] = [...storedModels];
+      console.log('[ChatStore] Getting registry models with capabilities...');
+      const registryModels = modelService.getAvailableModelsWithCapabilities();
+      console.log('[ChatStore] Registry models count:', registryModels.length);
 
-    // Add registry models that aren't already in stored models
-    for (const regModel of registryModels) {
-      const existingIndex = combinedModels.findIndex(
-        m => m.model_name === regModel.model_name && m.provider === regModel.provider
-      );
+      // Combine models, prioritizing registry models for their capabilities
+      const combinedModels: ModelWithBackend[] = [...storedModels];
 
-      if (existingIndex >= 0) {
-        // Update existing model with capabilities and specs
-        combinedModels[existingIndex] = {
-          ...combinedModels[existingIndex],
-          capabilities: regModel.capabilities,
-          specs: regModel.specs
-        };
-      } else {
-        // Add new model from registry
-        combinedModels.push(regModel);
-      }
-    }
+      // Add registry models that aren't already in stored models
+      for (const regModel of registryModels) {
+        const existingIndex = combinedModels.findIndex(
+          m => m.model_name === regModel.model_name && m.provider === regModel.provider
+        );
 
-    // Convert custom backends directly into model entries
-    // Each backend becomes a selectable "model" in the chat
-    const customBackendModels: ModelWithBackend[] = customBackendService.backends.map(backend => ({
-      provider: 'custom',
-      model_name: backend.name,  // Use backend name as model identifier
-      name: backend.name,
-      enabled: true,
-      custom_backend_id: backend.id,
-      backendName: backend.name,
-    }));
-
-    // Add custom backend models to the list
-    combinedModels.push(...customBackendModels);
-
-    console.log('[ChatStore] Combined models count:', combinedModels.length);
-    console.log('[ChatStore] Custom backend models:', customBackendModels.map(m => m.name));
-
-    // Filter to only enabled models
-    const enabledModels = combinedModels.filter(model => model.enabled);
-
-    console.log('[ChatStore] Enabled models count:', enabledModels.length);
-    console.log('[ChatStore] Enabled models:', enabledModels.map(m => `${m.model_name} (${m.provider})`));
-
-    availableModels.set(enabledModels);
-
-    // Try to restore last used model
-    const lastUsedModel = await getLastUsedModel();
-    const modelToSelect = lastUsedModel && enabledModels.some(m => m.model_name === lastUsedModel)
-      ? lastUsedModel
-      : enabledModels[0]?.model_name || null;
-
-    if (modelToSelect) {
-      selectedModel.set(modelToSelect);
-      console.log('[ChatStore] Selected model:', modelToSelect, lastUsedModel ? '(restored from preferences)' : '(default)');
-    } else {
-      console.warn('[ChatStore] No enabled models available!');
-    }
-
-    // Fire-and-forget Ollama discovery and merge into available models
-    void ollamaService.discoverModels().then((models) => {
-      mergeOllamaModels(models, lastUsedModel);
-      if (lastUsedModel && models.some((model) => model.name === lastUsedModel)) {
-        if (modelToSelect && get(selectedModel) === modelToSelect) {
-          selectedModel.set(lastUsedModel);
+        if (existingIndex >= 0) {
+          // Update existing model with capabilities and specs
+          combinedModels[existingIndex] = {
+            ...combinedModels[existingIndex],
+            capabilities: regModel.capabilities,
+            specs: regModel.specs
+          };
+        } else {
+          // Add new model from registry
+          combinedModels.push(regModel);
         }
       }
-    });
-  } catch (error) {
-    console.error('[ChatStore] Failed to load models:', error);
+
+      // Convert custom backends directly into model entries
+      // Each backend becomes a selectable "model" in the chat
+      const customBackendModels: ModelWithBackend[] = customBackendService.backends.map(backend => ({
+        provider: 'custom',
+        model_name: backend.name,  // Use backend name as model identifier
+        name: backend.name,
+        enabled: true,
+        custom_backend_id: backend.id,
+        backendName: backend.name,
+      }));
+
+      // Add custom backend models to the list
+      combinedModels.push(...customBackendModels);
+
+      console.log('[ChatStore] Combined models count:', combinedModels.length);
+      console.log('[ChatStore] Custom backend models:', customBackendModels.map(m => m.name));
+
+      // Filter to only enabled models
+      const enabledModels = combinedModels.filter(model => model.enabled);
+
+      console.log('[ChatStore] Enabled models count:', enabledModels.length);
+      console.log('[ChatStore] Enabled models:', enabledModels.map(m => `${m.model_name} (${m.provider})`));
+
+      availableModels.set(enabledModels);
+
+      // Try to restore last used model
+      const lastUsedModel = await getLastUsedModel();
+      const modelToSelect = lastUsedModel && enabledModels.some(m => m.model_name === lastUsedModel)
+        ? lastUsedModel
+        : enabledModels[0]?.model_name || null;
+
+      if (modelToSelect) {
+        selectedModel.set(modelToSelect);
+        console.log('[ChatStore] Selected model:', modelToSelect, lastUsedModel ? '(restored from preferences)' : '(default)');
+      } else {
+        console.warn('[ChatStore] No enabled models available!');
+      }
+
+      // Fire-and-forget Ollama discovery and merge into available models
+      void ollamaService.discoverModels().then((models) => {
+        mergeOllamaModels(models, lastUsedModel);
+        if (lastUsedModel && models.some((model) => model.name === lastUsedModel)) {
+          if (modelToSelect && get(selectedModel) === modelToSelect) {
+            selectedModel.set(lastUsedModel);
+          }
+        }
+      });
+
+      modelsLoaded = true;
+    } catch (error) {
+      modelsLoaded = false;
+      console.error('[ChatStore] Failed to load models:', error);
+    }
+  })();
+
+  modelsLoadingPromise = loader;
+  try {
+    await loader;
+  } finally {
+    if (modelsLoadingPromise === loader) {
+      modelsLoadingPromise = null;
+    }
   }
 }
 
@@ -573,16 +598,36 @@ export async function saveLastUsedModel(modelName: string): Promise<void> {
   }
 }
 
-export async function loadSystemPrompts() {
-  try {
-    const prompts = await invoke<SystemPrompt[]>('get_all_system_prompts');
-    systemPrompts.set(prompts);
+export async function loadSystemPrompts(options: { force?: boolean } = {}) {
+  const { force = false } = options;
+  if (systemPromptsLoadingPromise) {
+    await systemPromptsLoadingPromise;
+    if (!force && systemPromptsLoaded) return;
+  }
+  if (systemPromptsLoaded && !force) return;
 
-    if (prompts.length > 0) {
-      selectedSystemPrompt.set(prompts[0]);
+  const loader = (async () => {
+    try {
+      const prompts = await invoke<SystemPrompt[]>('get_all_system_prompts');
+      systemPrompts.set(prompts);
+
+      if (prompts.length > 0) {
+        selectedSystemPrompt.set(prompts[0]);
+      }
+      systemPromptsLoaded = true;
+    } catch (error) {
+      systemPromptsLoaded = false;
+      console.error('Failed to load system prompts:', error);
     }
-  } catch (error) {
-    console.error('Failed to load system prompts:', error);
+  })();
+
+  systemPromptsLoadingPromise = loader;
+  try {
+    await loader;
+  } finally {
+    if (systemPromptsLoadingPromise === loader) {
+      systemPromptsLoadingPromise = null;
+    }
   }
 }
 

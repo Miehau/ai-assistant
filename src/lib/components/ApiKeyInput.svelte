@@ -2,7 +2,6 @@
     import { Input } from "$lib/components/ui/input";
     import { Button } from "$lib/components/ui/button";
     import { cn } from "$lib/utils";
-    import { onMount } from "svelte";
     import { Trash2 } from "lucide-svelte";
     import { apiKeyService } from "$lib/models";
     import { loadModels } from "$lib/stores/chat";
@@ -24,17 +23,6 @@
         }
     });
 
-    onMount(async () => {
-        try {
-            const savedKey = await apiKeyService.getApiKey(provider.value);
-            if (savedKey) {
-                apiKey = savedKey;
-            }
-        } catch (error) {
-            console.error(`Error loading API key for ${provider.label}:`, error);
-        }
-    });
-
     async function submitApiKey() {
         isLoading = true;
         try {
@@ -42,7 +30,7 @@
             if (success) {
                 console.log(`API key for ${provider.label} updated successfully`);
                 // Reload models to reflect API key changes in model selector
-                await loadModels();
+                await loadModels({ force: true });
             }
         } catch (error) {
             console.error(`Error setting API key for ${provider.label}:`, error);
@@ -59,7 +47,7 @@
                 apiKey = "";
                 console.log(`API key for ${provider.label} deleted successfully`);
                 // Reload models to reflect API key changes in model selector
-                await loadModels();
+                await loadModels({ force: true });
             }
         } catch (error) {
             console.error(`Error deleting API key for ${provider.label}:`, error);

@@ -5,7 +5,6 @@
   import * as Card from "$lib/components/ui/card";
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";
-  import { Switch } from "$lib/components/ui/switch";
   import * as Select from "$lib/components/ui/select";
   import { Plus, Edit2, Check, X, Eye, EyeOff, Trash2 } from "lucide-svelte";
   import type { IntegrationMetadata } from "$lib/types/integrations";
@@ -20,20 +19,13 @@
   let integrationsLoading = $state(true);
   let integrationsError = $state("");
   let connections = $derived(integrationConnectionService.connections);
+  let gmailIntegration = $derived(integrations.find((item) => item.id === "gmail"));
   let gmailConnection = $derived(connections.find((item) => item.integration_id === "gmail"));
 
   let oauthSessionId = $state<string | null>(null);
   let oauthStatus = $state<"idle" | "pending" | "completed" | "error" | "cancelled">("idle");
   let oauthError = $state("");
   let oauthLoading = $state(false);
-
-  let useCustomOAuth = $state(false);
-  let customClientId = $state("");
-  let customClientSecret = $state("");
-  let showCustomSecret = $state(false);
-  let oauthPrefsLoading = $state(false);
-  let oauthPrefsMessage = $state("");
-  let oauthPrefsTone = $state<"idle" | "success" | "error">("idle");
 
   let isAddingConnection = $state(false);
   let newConnectionIntegrationId = $state("google_calendar");
@@ -81,7 +73,6 @@
     await loadIntegrations();
     await integrationConnectionService.loadConnections();
     await mcpServerService.loadServers();
-    await loadOAuthPrefs();
   });
 
   async function loadIntegrations() {
@@ -94,25 +85,6 @@
       integrationsError = "Failed to load integrations.";
     } finally {
       integrationsLoading = false;
-    }
-  }
-
-  async function loadOAuthPrefs() {
-    oauthPrefsLoading = true;
-    oauthPrefsMessage = "";
-    oauthPrefsTone = "idle";
-    try {
-      const useCustom = await backend.getPreference("oauth.google.use_custom");
-      const clientId = await backend.getPreference("oauth.google.client_id");
-      const clientSecret = await backend.getPreference("oauth.google.client_secret");
-      useCustomOAuth = useCustom === "true";
-      customClientId = clientId ?? "";
-      customClientSecret = clientSecret ?? "";
-    } catch (error) {
-      oauthPrefsMessage = "Failed to load OAuth settings.";
-      oauthPrefsTone = "error";
-    } finally {
-      oauthPrefsLoading = false;
     }
   }
 
@@ -212,24 +184,6 @@
     } catch (error) {
       oauthError = error instanceof Error ? error.message : String(error);
       oauthStatus = "error";
-    }
-  }
-
-  async function saveOAuthPrefs() {
-    oauthPrefsLoading = true;
-    oauthPrefsMessage = "";
-    oauthPrefsTone = "idle";
-    try {
-      await backend.setPreference("oauth.google.use_custom", useCustomOAuth ? "true" : "false");
-      await backend.setPreference("oauth.google.client_id", customClientId.trim());
-      await backend.setPreference("oauth.google.client_secret", customClientSecret.trim());
-      oauthPrefsMessage = "OAuth settings saved.";
-      oauthPrefsTone = "success";
-    } catch (error) {
-      oauthPrefsMessage = "Failed to save OAuth settings.";
-      oauthPrefsTone = "error";
-    } finally {
-      oauthPrefsLoading = false;
     }
   }
 
@@ -518,127 +472,63 @@
   >
     <Card.Content class={embedded ? "p-4 pt-4" : "p-6"}>
       <div class="space-y-6">
-        <div
-          class={`rounded-xl border px-4 py-4 ${
-            embedded ? "border-white/10 bg-white/5" : "border-border/40 bg-background/40"
-          }`}
-        >
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p class="text-sm font-semibold text-foreground">Gmail OAuth</p>
-              <p class="text-xs text-muted-foreground">
-                {#if gmailConnection}
-                  Connected as {gmailConnection.account_label || "Gmail account"}.
-                {:else}
-                  Connect Gmail via OAuth to enable read and send tools.
-                {/if}
-              </p>
-            </div>
-            <div class="flex items-center gap-2">
-              {#if oauthStatus === "pending"}
-                <span class="text-[10px] uppercase tracking-wide rounded-full px-2 py-1 bg-amber-500/15 text-amber-300">
-                  Waiting for approval
-                </span>
-                <Button size="sm" variant="ghost" onclick={cancelOAuth}>
-                  Cancel
-                </Button>
-              {/if}
-              {#if gmailConnection}
-                <Button size="sm" variant="ghost" onclick={disconnectGmail} disabled={isLoading}>
-                  Disconnect
-                </Button>
-              {/if}
-              <Button
-                size="sm"
-                class="glass-badge hover:glass-light"
-                onclick={connectGmail}
-                disabled={oauthLoading || oauthStatus === "pending"}
-              >
-                {gmailConnection ? "Reconnect Gmail" : "Connect Gmail"}
-              </Button>
-            </div>
-          </div>
-          {#if oauthError}
-            <p class="text-xs text-red-400 mt-2">{oauthError}</p>
-          {/if}
-        </div>
-
-        <div
-          class={`rounded-xl border px-4 py-4 ${
-            embedded ? "border-white/10 bg-white/5" : "border-border/40 bg-background/40"
-          }`}
-        >
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p class="text-sm font-semibold text-foreground">Custom Google OAuth Client</p>
-              <p class="text-xs text-muted-foreground">
-                Use your own Google OAuth client ID (advanced). Applies to Gmail and Google Calendar.
-              </p>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-muted-foreground">Use custom</span>
-              <Switch bind:checked={useCustomOAuth} disabled={oauthPrefsLoading} />
-            </div>
-          </div>
-
-          {#if useCustomOAuth}
-            <div class="mt-4 space-y-3">
+        {#if gmailIntegration}
+          <div
+            class={`rounded-xl border px-4 py-4 ${
+              embedded ? "border-white/10 bg-white/5" : "border-border/40 bg-background/40"
+            }`}
+          >
+            <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <label class="text-xs font-medium text-muted-foreground mb-1 block">Client ID</label>
-                <Input
-                  bind:value={customClientId}
-                  placeholder="your-client-id.apps.googleusercontent.com"
-                  class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
-                />
-              </div>
-              <div>
-                <label class="text-xs font-medium text-muted-foreground mb-1 block">Client secret (optional)</label>
-                <div class="relative">
-                  <Input
-                    type={showCustomSecret ? "text" : "password"}
-                    bind:value={customClientSecret}
-                    placeholder="Optional for desktop apps"
-                    class="pr-10 glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
-                  />
-                  <button
-                    type="button"
-                    class="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground hover:text-foreground"
-                    onclick={() => showCustomSecret = !showCustomSecret}
-                  >
-                    {#if showCustomSecret}
-                      <EyeOff class="h-4 w-4" />
-                    {:else}
-                      <Eye class="h-4 w-4" />
-                    {/if}
-                  </button>
-                </div>
+                <p class="text-sm font-semibold text-foreground">Gmail OAuth</p>
+                <p class="text-xs text-muted-foreground">
+                  {#if gmailConnection}
+                    Connected as {gmailConnection.account_label || "Gmail account"}.
+                  {:else}
+                    Connect Gmail via OAuth to enable read and send tools.
+                  {/if}
+                </p>
               </div>
               <div class="flex items-center gap-2">
+                {#if oauthStatus === "pending"}
+                  <span class="text-[10px] uppercase tracking-wide rounded-full px-2 py-1 bg-amber-500/15 text-amber-300">
+                    Waiting for approval
+                  </span>
+                  <Button size="sm" variant="ghost" onclick={cancelOAuth}>
+                    Cancel
+                  </Button>
+                {/if}
+                {#if gmailConnection}
+                  <Button size="sm" variant="ghost" onclick={disconnectGmail} disabled={isLoading}>
+                    Disconnect
+                  </Button>
+                {/if}
                 <Button
                   size="sm"
                   class="glass-badge hover:glass-light"
-                  onclick={saveOAuthPrefs}
-                  disabled={oauthPrefsLoading}
+                  onclick={connectGmail}
+                  disabled={oauthLoading || oauthStatus === "pending"}
                 >
-                  {oauthPrefsLoading ? "Saving..." : "Save OAuth settings"}
+                  {gmailConnection ? "Reconnect Gmail" : "Connect Gmail"}
                 </Button>
-                {#if oauthPrefsMessage}
-                  <p
-                    class={`text-xs ${
-                      oauthPrefsTone === "success"
-                        ? "text-emerald-400"
-                        : oauthPrefsTone === "error"
-                          ? "text-red-400"
-                          : "text-muted-foreground"
-                    }`}
-                  >
-                    {oauthPrefsMessage}
-                  </p>
-                {/if}
               </div>
             </div>
-          {/if}
-        </div>
+            {#if oauthError}
+              <p class="text-xs text-red-400 mt-2">{oauthError}</p>
+            {/if}
+          </div>
+        {:else}
+          <div
+            class={`rounded-xl border px-4 py-4 ${
+              embedded ? "border-white/10 bg-white/5" : "border-border/40 bg-background/40"
+            }`}
+          >
+            <p class="text-sm font-semibold text-foreground">Gmail OAuth</p>
+            <p class="text-xs text-muted-foreground mt-1">
+              Gmail is disabled. Set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in your `.env` to enable it.
+            </p>
+          </div>
+        {/if}
 
         {#if integrationConnectionService.loading}
           <p class="text-sm text-muted-foreground">Loading connections...</p>

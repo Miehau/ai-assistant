@@ -1,11 +1,11 @@
 use crate::db::{
     CreateIntegrationConnectionInput, Db, IntegrationConnection, IntegrationConnectionOperations,
-    PreferenceOperations, UpdateIntegrationConnectionInput,
+    UpdateIntegrationConnectionInput,
 };
 use crate::integrations::{default_integrations, IntegrationMetadata};
 use crate::oauth::{
-    build_google_auth_url, exchange_google_code, generate_pkce, google_oauth_config_with_override,
-    GoogleOAuthConfig, OAuthSessionStatus, OAuthSessionStore,
+    build_google_auth_url, exchange_google_code, generate_pkce, google_oauth_config,
+    google_oauth_env_configured, GoogleOAuthConfig, OAuthSessionStatus, OAuthSessionStore,
 };
 use reqwest::blocking::Client;
 use serde_json::Value;
@@ -23,7 +23,11 @@ pub struct OAuthStartResponse {
 
 #[tauri::command]
 pub fn list_integrations() -> Result<Vec<IntegrationMetadata>, String> {
-    Ok(default_integrations())
+    let mut integrations = default_integrations();
+    if !google_oauth_env_configured() {
+        integrations.retain(|item| item.id != "gmail" && item.id != "google_calendar");
+    }
+    Ok(integrations)
 }
 
 #[tauri::command]
@@ -32,6 +36,13 @@ pub fn start_google_oauth(
     oauth_store: State<'_, OAuthSessionStore>,
     integration_id: String,
 ) -> Result<OAuthStartResponse, String> {
+    if !google_oauth_env_configured() {
+        return Err(
+            "Google OAuth is disabled. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET."
+                .to_string(),
+        );
+    }
+
     let scopes = match integration_id.as_str() {
         "gmail" => vec![
             "https://www.googleapis.com/auth/gmail.readonly".to_string(),
@@ -44,7 +55,7 @@ pub fn start_google_oauth(
         _ => return Err("Unsupported integration for Google OAuth.".to_string()),
     };
 
-    let config = resolve_google_oauth_config(&*state)?;
+    let config = google_oauth_config()?;
     let (code_verifier, code_challenge) = generate_pkce();
     let state_token = uuid::Uuid::new_v4().to_string();
 
@@ -222,42 +233,7 @@ pub fn test_integration_connection(state: State<'_, Db>, id: String) -> Result<V
     }
 }
 
-fn resolve_google_oauth_config(db: &Db) -> Result<GoogleOAuthConfig, String> {
-    let use_custom = PreferenceOperations::get_preference(db, "oauth.google.use_custom")
-        .map_err(|e| e.to_string())?;
-    let use_custom = use_custom.as_deref() == Some("true");
 
-    let custom_client_id = PreferenceOperations::get_preference(db, "oauth.google.client_id")
-        .map_err(|e| e.to_string())?
-        .and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
-
-    let custom_client_secret = PreferenceOperations::get_preference(db, "oauth.google.client_secret")
-        .map_err(|e| e.to_string())?
-        .and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
-
-    if use_custom {
-        if custom_client_id.is_none() {
-            return Err("Custom Google OAuth client ID is not set.".to_string());
-        }
-        return google_oauth_config_with_override(custom_client_id, custom_client_secret);
-    }
-
-    google_oauth_config_with_override(None, None)
-}
 
 fn handle_oauth_callback(
     stream: &mut TcpStream,
@@ -295,17 +271,24 @@ fn handle_oauth_callback(
     let mut code: Option<String> = None;
     let mut state: Option<String> = None;
     let mut error: Option<String> = None;
+    let mut error_description: Option<String> = None;
     for (key, value) in parsed.query_pairs() {
         match key.as_ref() {
             "code" => code = Some(value.to_string()),
             "state" => state = Some(value.to_string()),
             "error" => error = Some(value.to_string()),
+            "error_description" => error_description = Some(value.to_string()),
             _ => {}
         }
     }
 
     if let Some(error) = error {
-        store.set_error(session_id, format!("OAuth error: {error}"));
+        let message = if let Some(description) = error_description {
+            format!("OAuth error: {error} - {description}")
+        } else {
+            format!("OAuth error: {error}")
+        };
+        store.set_error(session_id, message);
         let _ = respond_html(stream, "Authorization failed. You can close this window.");
         return;
     }

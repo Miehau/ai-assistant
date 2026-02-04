@@ -7,17 +7,45 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::db::{
     Db, IntegrationConnection, IntegrationConnectionOperations, UpdateIntegrationConnectionInput,
 };
-use crate::oauth::{google_oauth_config, refresh_google_token};
+use crate::oauth::{google_oauth_config, google_oauth_env_configured, refresh_google_token};
 use super::{ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry};
 
 pub fn register_integration_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
-    register_gmail_tools(registry, db.clone())?;
-    register_google_calendar_tools(registry, db.clone())?;
+    if google_oauth_env_configured() {
+        register_gmail_tools(registry, db.clone())?;
+        register_google_calendar_tools(registry, db.clone())?;
+    }
     register_todoist_tools(registry, db)?;
     Ok(())
 }
 
 fn get_connection(db: &Db, connection_id: &str, expected_integration: &str) -> Result<IntegrationConnection, ToolError> {
+    let connection_id = connection_id.trim();
+    if connection_id.is_empty() || connection_id == "default" {
+        let connections = IntegrationConnectionOperations::get_integration_connections(db)
+            .map_err(|err| ToolError::new(format!("Failed to load integration connections: {err}")))?;
+        if let Some(connection) = connections.iter().find(|item| {
+            item.integration_id == expected_integration && item.status == "connected"
+        }) {
+            return Ok(connection.clone());
+        }
+
+        if let Some(connection) = connections
+            .iter()
+            .find(|item| item.integration_id == expected_integration)
+        {
+            log::warn!(
+                "[tool] using non-connected integration: id={} integration={} status={}",
+                connection.id,
+                connection.integration_id,
+                connection.status
+            );
+            return Ok(connection.clone());
+        }
+
+        return Err(ToolError::new("Integration connection not found"));
+    }
+
     let connection = IntegrationConnectionOperations::get_integration_connection_by_id(db, connection_id)
         .map_err(|err| ToolError::new(format!("Failed to load integration connection: {err}")))?
         .ok_or_else(|| ToolError::new("Integration connection not found"))?;
@@ -39,48 +67,97 @@ fn get_access_token(connection: &IntegrationConnection) -> Result<String, ToolEr
 }
 
 fn get_google_access_token(db: &Db, connection: &IntegrationConnection) -> Result<String, ToolError> {
-    let token = get_access_token(connection)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| ToolError::new(format!("Time error: {err}")))?
+        .as_millis() as i64;
+
+    let token = connection.access_token.clone().unwrap_or_default();
     let expires_at = connection.expires_at.unwrap_or(0);
-    if expires_at > 0 {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|err| ToolError::new(format!("Time error: {err}")))?
-            .as_millis() as i64;
-        if expires_at <= now + 60_000 {
-            let refresh_token = connection
-                .refresh_token
-                .clone()
-                .ok_or_else(|| ToolError::new("Missing refresh token for Google integration"))?;
-            let config = google_oauth_config().map_err(ToolError::new)?;
-            let refreshed = refresh_google_token(&config, &refresh_token).map_err(ToolError::new)?;
-            let new_access_token = refreshed.access_token.clone();
-            let new_refresh_token = refreshed.refresh_token.clone().unwrap_or(refresh_token);
-            let new_expires_at = refreshed.expires_in.map(|seconds| now + seconds * 1000);
+    let has_refresh = connection
+        .refresh_token
+        .as_ref()
+        .map(|token| !token.trim().is_empty())
+        .unwrap_or(false);
 
-            let _ = IntegrationConnectionOperations::update_integration_connection(
-                db,
-                &UpdateIntegrationConnectionInput {
-                    id: connection.id.clone(),
-                    account_label: None,
-                    status: Some("connected".to_string()),
-                    auth_type: None,
-                    access_token: Some(new_access_token.clone()),
-                    refresh_token: Some(new_refresh_token),
-                    scopes: None,
-                    expires_at: new_expires_at,
-                    last_error: Some(String::new()),
-                    last_sync_at: None,
-                },
+    let needs_refresh = token.trim().is_empty()
+        || (expires_at > 0 && expires_at <= now + 60_000);
+
+    if needs_refresh {
+        log::info!(
+            "[oauth] refreshing Google access token: connection_id={} integration_id={} expires_at={} now={} has_refresh={}",
+            connection.id,
+            connection.integration_id,
+            expires_at,
+            now,
+            has_refresh
+        );
+        let refresh_token = connection
+            .refresh_token
+            .clone()
+            .ok_or_else(|| ToolError::new("Missing refresh token for Google integration"))?;
+        let config = google_oauth_config().map_err(ToolError::new)?;
+        let refreshed = refresh_google_token(&config, &refresh_token).map_err(|err| {
+            log::warn!(
+                "[oauth] refresh failed: connection_id={} integration_id={} error={}",
+                connection.id,
+                connection.integration_id,
+                err
             );
+            ToolError::new(err)
+        })?;
+        let new_access_token = refreshed.access_token.clone();
+        let new_refresh_token = refreshed.refresh_token.clone().unwrap_or(refresh_token);
+        let new_expires_at = refreshed.expires_in.map(|seconds| now + seconds * 1000);
 
-            return Ok(new_access_token);
-        }
+        let _ = IntegrationConnectionOperations::update_integration_connection(
+            db,
+            &UpdateIntegrationConnectionInput {
+                id: connection.id.clone(),
+                account_label: None,
+                status: Some("connected".to_string()),
+                auth_type: None,
+                access_token: Some(new_access_token.clone()),
+                refresh_token: Some(new_refresh_token),
+                scopes: None,
+                expires_at: new_expires_at,
+                last_error: Some(String::new()),
+                last_sync_at: None,
+            },
+        );
+
+        log::info!(
+            "[oauth] refresh succeeded: connection_id={} integration_id={} expires_at={}",
+            connection.id,
+            connection.integration_id,
+            new_expires_at.unwrap_or(0)
+        );
+        return Ok(new_access_token);
     }
+
+    if token.trim().is_empty() && !has_refresh {
+        log::warn!(
+            "[oauth] missing access and refresh tokens: connection_id={} integration_id={}",
+            connection.id,
+            connection.integration_id
+        );
+        return Err(ToolError::new(
+            "Integration connection is missing access and refresh tokens",
+        ));
+    }
+
+    log::debug!(
+        "[oauth] using cached access token: connection_id={} integration_id={} expires_at={}",
+        connection.id,
+        connection.integration_id,
+        expires_at
+    );
     Ok(token)
 }
 
 fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let db_for_list = db.clone();
+    let db_for_get = db.clone();
     let db_for_labels = db.clone();
     let db_for_send = db.clone();
     let list_threads = ToolDefinition {
@@ -105,7 +182,7 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
                     "nextPageToken": { "type": "string" }
                 }
             }),
-            requires_approval: true,
+            requires_approval: false,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
             let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -147,6 +224,61 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
         preview: None,
     };
 
+    let get_thread = ToolDefinition {
+        metadata: ToolMetadata {
+            name: "gmail.get_thread".to_string(),
+            description: "Get a Gmail thread with minimal fields (title, body, date, attachments).".to_string(),
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "connection_id": { "type": "string" },
+                    "thread_id": { "type": "string" },
+                    "mode": { "type": "string", "enum": ["latest", "all"] },
+                    "max_messages": { "type": "integer", "minimum": 1, "maximum": 50 }
+                },
+                "required": ["connection_id", "thread_id"]
+            }),
+            result_schema: json!({ "type": "object" }),
+            requires_approval: false,
+        },
+        handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
+            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let thread_id = args.get("thread_id").and_then(|v| v.as_str()).unwrap_or("");
+            if thread_id.trim().is_empty() {
+                return Err(ToolError::new("Missing 'thread_id'"));
+            }
+            let connection = get_connection(&db_for_get, connection_id, "gmail")?;
+            let token = get_google_access_token(&db_for_get, &connection)?;
+
+            let url = format!(
+                "https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}"
+            );
+            let client = Client::new();
+            let mut request = client.get(url);
+
+            request = request.query(&[("format", "full")]);
+            request = request.query(&[("fields", "id,messages(id,threadId,internalDate,payload(headers,body,filename,mimeType,parts(headers,body,filename,mimeType,parts)))")]);
+
+            let response = request
+                .bearer_auth(token)
+                .send()
+                .map_err(|err| ToolError::new(format!("Failed to call Gmail API: {err}")))?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(ToolError::new(format!("Gmail API error: HTTP {status}")));
+            }
+
+            let raw = response
+                .json::<Value>()
+                .map_err(|err| ToolError::new(format!("Failed to parse Gmail response: {err}")))?;
+
+            let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("latest");
+            let max_messages = args.get("max_messages").and_then(|v| v.as_u64()).map(|v| v as usize);
+            Ok(minify_gmail_thread(raw, mode, max_messages))
+        }),
+        preview: None,
+    };
+
     let list_labels = ToolDefinition {
         metadata: ToolMetadata {
             name: "gmail.list_labels".to_string(),
@@ -159,7 +291,7 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
                 "required": ["connection_id"]
             }),
             result_schema: json!({ "type": "object" }),
-            requires_approval: true,
+            requires_approval: false,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
             let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -208,7 +340,7 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
                     "threadId": { "type": "string" }
                 }
             }),
-            requires_approval: true,
+            requires_approval: false,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
             let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -262,9 +394,160 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
     };
 
     registry.register(list_threads)?;
+    registry.register(get_thread)?;
     registry.register(list_labels)?;
     registry.register(send_message)?;
     Ok(())
+}
+
+fn minify_gmail_thread(raw: Value, mode: &str, max_messages: Option<usize>) -> Value {
+    let thread_id = raw.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let messages = raw.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    let mut parsed = messages
+        .into_iter()
+        .filter_map(|message| parse_gmail_message(&thread_id, message))
+        .collect::<Vec<_>>();
+
+    parsed.sort_by(|a, b| a.internal_date_ms.cmp(&b.internal_date_ms));
+    if mode == "latest" {
+        if let Some(last) = parsed.pop() {
+            return json!({
+                "thread_id": thread_id,
+                "mode": "latest",
+                "message": last
+            });
+        }
+        return json!({
+            "thread_id": thread_id,
+            "mode": "latest",
+            "message": null
+        });
+    }
+
+    if let Some(max) = max_messages {
+        if parsed.len() > max {
+            parsed = parsed.into_iter().rev().take(max).collect::<Vec<_>>();
+            parsed.sort_by(|a, b| a.internal_date_ms.cmp(&b.internal_date_ms));
+        }
+    }
+
+    json!({
+        "thread_id": thread_id,
+        "mode": "all",
+        "messages": parsed
+    })
+}
+
+fn parse_gmail_message(thread_id: &str, message: Value) -> Option<GmailMessageSummary> {
+    let message_id = message.get("id").and_then(|v| v.as_str())?.to_string();
+    let internal_date_ms = message
+        .get("internalDate")
+        .and_then(|v| v.as_str())
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    let payload = message.get("payload").cloned().unwrap_or_else(|| json!({}));
+    let headers = extract_headers(&payload);
+    let subject = headers.get("subject").cloned().unwrap_or_default();
+    let date_header = headers.get("date").cloned();
+
+    let mut body_text: Option<String> = None;
+    let mut body_html: Option<String> = None;
+    let mut attachments: Vec<GmailAttachmentSummary> = Vec::new();
+    collect_parts(&payload, &mut body_text, &mut body_html, &mut attachments);
+
+    Some(GmailMessageSummary {
+        thread_id: thread_id.to_string(),
+        message_id,
+        title: subject,
+        date_header,
+        internal_date_ms,
+        body_text,
+        body_html,
+        attachments,
+    })
+}
+
+fn extract_headers(payload: &Value) -> std::collections::HashMap<String, String> {
+    let mut headers = std::collections::HashMap::new();
+    if let Some(items) = payload.get("headers").and_then(|v| v.as_array()) {
+        for item in items {
+            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            if !name.is_empty() {
+                headers.insert(name.to_lowercase(), value.to_string());
+            }
+        }
+    }
+    headers
+}
+
+fn collect_parts(
+    payload: &Value,
+    body_text: &mut Option<String>,
+    body_html: &mut Option<String>,
+    attachments: &mut Vec<GmailAttachmentSummary>,
+) {
+    let filename = payload.get("filename").and_then(|v| v.as_str()).unwrap_or("");
+    let mime_type = payload.get("mimeType").and_then(|v| v.as_str()).unwrap_or("");
+    let body = payload.get("body").cloned().unwrap_or_else(|| json!({}));
+    let attachment_id = body.get("attachmentId").and_then(|v| v.as_str()).unwrap_or("");
+    let size = body.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
+
+    if !filename.is_empty() && !attachment_id.is_empty() {
+        attachments.push(GmailAttachmentSummary {
+            filename: filename.to_string(),
+            mime_type: mime_type.to_string(),
+            attachment_id: attachment_id.to_string(),
+            size,
+        });
+    }
+
+    if let Some(data) = body.get("data").and_then(|v| v.as_str()) {
+        if mime_type == "text/plain" && body_text.is_none() {
+            *body_text = decode_gmail_body(data);
+        } else if mime_type == "text/html" && body_html.is_none() {
+            *body_html = decode_gmail_body(data);
+        }
+    }
+
+    if let Some(parts) = payload.get("parts").and_then(|v| v.as_array()) {
+        for part in parts {
+            collect_parts(part, body_text, body_html, attachments);
+        }
+    }
+}
+
+fn decode_gmail_body(data: &str) -> Option<String> {
+    if data.trim().is_empty() {
+        return None;
+    }
+    let decoded = URL_SAFE_NO_PAD.decode(data.as_bytes()).ok()?;
+    String::from_utf8(decoded).ok()
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct GmailMessageSummary {
+    thread_id: String,
+    message_id: String,
+    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date_header: Option<String>,
+    internal_date_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body_html: Option<String>,
+    attachments: Vec<GmailAttachmentSummary>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct GmailAttachmentSummary {
+    filename: String,
+    mime_type: String,
+    attachment_id: String,
+    size: i64,
 }
 
 fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
