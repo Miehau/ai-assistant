@@ -139,7 +139,10 @@ impl DynamicController {
 
             let decision = self.call_controller(call_llm, user_message, turns)?;
             match decision {
-                ControllerAction::NextStep { step } => {
+                ControllerAction::NextStep {
+                    thinking: _thinking,
+                    step,
+                } => {
                     self.ensure_plan(user_message)?;
                     match self.execute_step(call_llm, step)? {
                         StepExecutionOutcome::Continue => {}
@@ -1082,6 +1085,7 @@ impl DynamicController {
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ControllerAction {
     NextStep {
+        thinking: Value,
         step: ControllerStep,
     },
     Complete {
@@ -1161,7 +1165,8 @@ fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
                         }
                     }
                     if let Ok(step) = serde_json::from_value::<ControllerStep>(step) {
-                        return Ok(ControllerAction::NextStep { step });
+                        let thinking = parse_thinking(value)?;
+                        return Ok(ControllerAction::NextStep { thinking, step });
                     }
                 }
 
@@ -1187,7 +1192,8 @@ fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
                         }
                     }
                     if let Ok(step) = serde_json::from_value::<ControllerStep>(step) {
-                        return Ok(ControllerAction::NextStep { step });
+                        let thinking = parse_thinking(value)?;
+                        return Ok(ControllerAction::NextStep { thinking, step });
                     }
                 }
 
@@ -1216,6 +1222,16 @@ fn parse_resume_target(value: Option<&Value>) -> ResumeTarget {
     }
 }
 
+fn parse_thinking(value: &Value) -> Result<Value, String> {
+    let thinking = value
+        .get("thinking")
+        .ok_or_else(|| "Missing required field: thinking".to_string())?;
+    if !thinking.is_object() {
+        return Err("Invalid field thinking: expected object".to_string());
+    }
+    Ok(thinking.clone())
+}
+
 fn controller_output_format() -> Value {
     json_schema_output_format(json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1237,7 +1253,10 @@ fn controller_output_format() -> Value {
                     "description": { "type": "string" },
                     "tool": { "type": "string" },
                     "args": {
-                        "type": "string"
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
                     },
                     "message": { "type": "string" },
                     "question": { "type": "string" },
@@ -1249,6 +1268,17 @@ fn controller_output_format() -> Value {
                 },
                 "additionalProperties": false
             },
+            "thinking": {
+                "type": "object",
+                "properties": {
+                    "task": { "type": "string" },
+                    "facts": { "type": "array", "items": { "type": "string" } },
+                    "decisions": { "type": "array", "items": { "type": "string" } },
+                    "risks": { "type": "array", "items": { "type": "string" } },
+                    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+                },
+                "additionalProperties": true
+            },
             "message": { "type": "string" },
             "reason": { "type": "string" },
             "question": { "type": "string" },
@@ -1258,6 +1288,16 @@ fn controller_output_format() -> Value {
                 "enum": ["reflecting", "controller"]
             }
         },
+        "allOf": [
+            {
+                "if": {
+                    "properties": { "action": { "const": "next_step" } }
+                },
+                "then": {
+                    "required": ["step", "thinking"]
+                }
+            }
+        ],
         "additionalProperties": false
     }))
 }
