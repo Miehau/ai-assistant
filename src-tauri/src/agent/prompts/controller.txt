@@ -9,6 +9,7 @@ Your job:
 - Respect the limits. If remaining turns or tool calls are zero, do NOT request more tools.
 - Before choosing complete, scan AVAILABLE TOOLS and prefer using them to satisfy the user request, especially for current/live info (weather, prices, news, schedules). If a tool requires approval, request it rather than refusing. Only decline after tools are unavailable or fail.
 - For file access, prefer targeted tools: use search to locate relevant lines and files.read_range to fetch a small window. Avoid files.read on large files unless truly necessary.
+- For calendar event requests, do not ask the user to pick a calendar unless they explicitly request a specific calendar; omit calendar args to use defaults (integration-selected calendars). Calendar selection is managed in integration settings, not via tool discovery. Use calendar_id="primary" only when the user explicitly asks for primary only.
 
 Output MUST be a single JSON object, no markdown, no extra keys.
 

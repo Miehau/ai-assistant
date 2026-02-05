@@ -5,7 +5,8 @@ use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::db::{
-    Db, IntegrationConnection, IntegrationConnectionOperations, UpdateIntegrationConnectionInput,
+    Db, IntegrationConnection, IntegrationConnectionOperations, PreferenceOperations,
+    UpdateIntegrationConnectionInput,
 };
 use crate::oauth::{google_oauth_config, google_oauth_env_configured, refresh_google_token};
 use super::{ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry};
@@ -63,7 +64,8 @@ fn get_connection(
 
     let alias = connection_id.to_lowercase();
     let alias_matches_integration = alias == expected_integration
-        || (alias == "google" && expected_integration == "google_calendar");
+        || (alias == "google"
+            && (expected_integration == "google_calendar" || expected_integration == "gmail"));
 
     if alias_matches_integration {
         if let Some(connection) = pick_by_integration(&connections) {
@@ -595,7 +597,7 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
     let list_calendars = ToolDefinition {
         metadata: ToolMetadata {
             name: "gcal.list_calendars".to_string(),
-            description: "List Google Calendar calendars for the connected account.".to_string(),
+            description: "List Google Calendar calendars for the connected account. By default, returns only the user's selected calendars from integration settings (falls back to primary if none).".to_string(),
             args_schema: json!({
                 "type": "object",
                 "properties": {
@@ -674,7 +676,45 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
                 })
                 .unwrap_or_default();
 
-            Ok(json!({ "calendars": items }))
+            let pref_key = format!("integration_settings.google_calendar.{}", connection.id);
+            let preferred_ids = PreferenceOperations::get_preference(&db_for_list_calendars, &pref_key)
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                .and_then(|value| value.get("calendar_ids").and_then(|v| v.as_array()).cloned())
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|item| item.as_str())
+                        .map(|value| value.trim())
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.to_string())
+                        .collect::<Vec<_>>()
+                })
+                .filter(|values| !values.is_empty());
+
+            let filtered = if let Some(ids) = preferred_ids {
+                let allowed: std::collections::HashSet<_> = ids.into_iter().collect();
+                items
+                    .into_iter()
+                    .filter(|item| {
+                        item.get("id")
+                            .and_then(|value| value.as_str())
+                            .map(|id| allowed.contains(id))
+                            .unwrap_or(false)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                let primary = items
+                    .iter()
+                    .find(|item| item.get("primary").and_then(|value| value.as_bool()) == Some(true))
+                    .cloned()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                primary
+            };
+
+            Ok(json!({ "calendars": filtered }))
         }),
         preview: None,
     };
@@ -682,7 +722,8 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
     let list_events = ToolDefinition {
         metadata: ToolMetadata {
             name: "gcal.list_events".to_string(),
-            description: "List or search Google Calendar events, grouped by calendar.".to_string(),
+            description: "List or search Google Calendar events, grouped by calendar. If calendar_ids is omitted, uses the user's selected calendars (integration settings); falls back to primary if none."
+                .to_string(),
             args_schema: json!({
                 "type": "object",
                 "properties": {
@@ -710,23 +751,51 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
             let token = get_google_access_token(&db_for_list, &connection)?;
 
             let client = Client::new();
-            let calendar_ids = args
+            let explicit_calendar_ids = args
                 .get("calendar_ids")
                 .and_then(|v| v.as_array())
                 .map(|values| {
                     values
                         .iter()
-                        .filter_map(|item| item.as_str().map(|value| value.to_string()))
+                        .filter_map(|item| item.as_str())
+                        .map(|value| value.trim())
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.to_string())
                         .collect::<Vec<_>>()
                 })
-                .filter(|values| !values.is_empty())
-                .unwrap_or_else(|| {
-                    vec![args
-                        .get("calendar_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("primary")
-                        .to_string()]
-                });
+                .filter(|values| !values.is_empty());
+
+            let explicit_calendar_id = args
+                .get("calendar_id")
+                .and_then(|v| v.as_str())
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string());
+
+            let calendar_ids = if let Some(ids) = explicit_calendar_ids {
+                ids
+            } else if let Some(id) = explicit_calendar_id {
+                vec![id]
+            } else {
+                let pref_key = format!("integration_settings.google_calendar.{}", connection.id);
+                let preferred_ids = PreferenceOperations::get_preference(&db_for_list, &pref_key)
+                    .ok()
+                    .flatten()
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                    .and_then(|value| value.get("calendar_ids").and_then(|v| v.as_array()).cloned())
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(|item| item.as_str())
+                            .map(|value| value.trim())
+                            .filter(|value| !value.is_empty())
+                            .map(|value| value.to_string())
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|values| !values.is_empty());
+
+                preferred_ids.unwrap_or_else(|| vec!["primary".to_string()])
+            };
 
             let mut grouped: Vec<Value> = Vec::new();
             for calendar_id in calendar_ids {

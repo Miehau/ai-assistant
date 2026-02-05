@@ -749,6 +749,7 @@ impl DynamicController {
         let tool_list = {
             let overrides = load_tool_approval_overrides(&self.db).unwrap_or_default();
             let mut tools = self.tool_registry.list_metadata();
+            tools.retain(|tool| tool.name != "gcal.list_calendars");
             for tool in &mut tools {
                 if let Some(value) = overrides.get(&tool.name) {
                     tool.requires_approval = *value;
