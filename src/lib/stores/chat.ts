@@ -28,6 +28,7 @@ import type {
   ConversationUpdatedPayload,
   MessageSavedPayload,
   ToolExecutionCompletedPayload,
+  ToolExecutionStartedPayload,
   ToolExecutionApprovalScope,
   ToolExecutionDecisionPayload,
   ToolExecutionProposedPayload,
@@ -535,6 +536,54 @@ export async function startAgentEvents() {
       }
 
       resetStreamingState();
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_STARTED) {
+      const payload = event.payload as ToolExecutionStartedPayload;
+      if (payload.message_id && cancelledAssistantMessageIds.has(payload.message_id)) {
+        return;
+      }
+      const currentConversation = conversationService.getCurrentConversation();
+      if (payload.conversation_id && currentConversation?.id !== payload.conversation_id) {
+        return;
+      }
+
+      if (payload.message_id) {
+        ensureAssistantMessageForToolExecution(payload.message_id, payload.timestamp_ms);
+        upsertToolCall(payload.message_id, payload.execution_id, {
+          tool_name: payload.tool_name,
+          args: payload.args ?? {},
+          started_at: payload.timestamp_ms,
+        });
+      }
+
+      toolActivity.update((entries) => {
+        const existingIndex = entries.findIndex(
+          (entry) => entry.execution_id === payload.execution_id
+        );
+        if (existingIndex !== -1) {
+          const next = [...entries];
+          next[existingIndex] = {
+            ...next[existingIndex],
+            tool_name: payload.tool_name,
+            status: 'running',
+            started_at: payload.timestamp_ms,
+            completed_at: undefined,
+            duration_ms: undefined,
+            error: undefined,
+          };
+          return next.slice(0, TOOL_ACTIVITY_LIMIT);
+        }
+
+        const nextEntry: ToolActivityEntry = {
+          execution_id: payload.execution_id,
+          tool_name: payload.tool_name,
+          status: 'running',
+          started_at: payload.timestamp_ms,
+        };
+
+        return [nextEntry, ...entries].slice(0, TOOL_ACTIVITY_LIMIT);
+      });
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_COMPLETED) {

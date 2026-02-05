@@ -90,7 +90,7 @@
                 </p>
               {/if}
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center justify-end gap-2">
               <Button
                 size="sm"
                 onclick={() => approve(approval.approval_id, "once")}
@@ -138,10 +138,10 @@
                 {/each}
               </div>
             {:else}
-              <pre class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">{formatPreview(approval.preview)}</pre>
+              <pre class="mt-3 max-h-64 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">{formatPreview(approval.preview)}</pre>
             {/if}
           {:else}
-            <pre class="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">{JSON.stringify(approval.args, null, 2)}</pre>
+            <pre class="mt-3 max-h-48 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/40 p-3 text-xs font-mono text-foreground">{JSON.stringify(approval.args, null, 2)}</pre>
           {/if}
         </div>
       {/each}

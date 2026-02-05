@@ -61,17 +61,17 @@
     </summary>
 
     <div class="mt-3 grid gap-2 md:grid-cols-2">
-      <div>
+      <div class="min-w-0">
         <p class="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Input</p>
-        <pre class="max-h-40 overflow-auto rounded-md bg-background/60 p-2 text-[11px] font-mono text-foreground">
+        <pre class="max-h-40 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/60 p-2 text-[11px] font-mono text-foreground">
 {formatToolPayload(call.args)}
         </pre>
       </div>
-      <div>
+      <div class="min-w-0">
         <p class="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
           {call.success === false ? "Error" : "Output"}
         </p>
-        <pre class="max-h-40 overflow-auto rounded-md bg-background/60 p-2 text-[11px] font-mono text-foreground">
+        <pre class="max-h-40 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/60 p-2 text-[11px] font-mono text-foreground">
 {formatToolPayload(call.success === false ? call.error : call.result)}
         </pre>
       </div>

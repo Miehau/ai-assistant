@@ -70,6 +70,7 @@ fn get_connection(
 
     let alias = connection_id.to_lowercase();
     let alias_matches_integration = alias == expected_integration
+        || (alias == "gcal" && expected_integration == "google_calendar")
         || (alias == "google"
             && (expected_integration == "google_calendar" || expected_integration == "gmail"));
 
