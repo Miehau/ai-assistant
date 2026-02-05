@@ -1,8 +1,8 @@
-use rusqlite::{params, Result as RusqliteResult};
-use chrono::{TimeZone, Utc};
-use uuid::Uuid;
-use crate::db::models::SystemPrompt;
 use super::DbOperations;
+use crate::db::models::SystemPrompt;
+use chrono::{TimeZone, Utc};
+use rusqlite::{params, Result as RusqliteResult};
+use uuid::Uuid;
 
 pub trait SystemPromptOperations: DbOperations {
     fn save_system_prompt(&self, name: &str, content: &str) -> RusqliteResult<SystemPrompt> {
@@ -27,7 +27,12 @@ pub trait SystemPromptOperations: DbOperations {
         })
     }
 
-    fn update_system_prompt(&self, id: &str, name: &str, content: &str) -> RusqliteResult<SystemPrompt> {
+    fn update_system_prompt(
+        &self,
+        id: &str,
+        name: &str,
+        content: &str,
+    ) -> RusqliteResult<SystemPrompt> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let now = Utc::now();
@@ -51,9 +56,9 @@ pub trait SystemPromptOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, content, created_at, updated_at FROM system_prompts WHERE id = ?1"
+            "SELECT id, name, content, created_at, updated_at FROM system_prompts WHERE id = ?1",
         )?;
-        
+
         let result = stmt.query_row(params![id], |row| {
             let created_timestamp: i64 = row.get(3)?;
             let updated_timestamp: i64 = row.get(4)?;
@@ -79,7 +84,7 @@ pub trait SystemPromptOperations: DbOperations {
         let mut stmt = conn.prepare(
             "SELECT id, name, content, created_at, updated_at FROM system_prompts ORDER BY updated_at DESC"
         )?;
-        
+
         let prompts = stmt.query_map([], |row| {
             let created_timestamp: i64 = row.get(3)?;
             let updated_timestamp: i64 = row.get(4)?;
@@ -98,10 +103,7 @@ pub trait SystemPromptOperations: DbOperations {
     fn delete_system_prompt(&self, id: &str) -> RusqliteResult<()> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
-        conn.execute(
-            "DELETE FROM system_prompts WHERE id = ?1",
-            params![id],
-        )?;
+        conn.execute("DELETE FROM system_prompts WHERE id = ?1", params![id])?;
         Ok(())
     }
-} 
+}

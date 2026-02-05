@@ -1,20 +1,20 @@
+mod agent;
 mod branch;
 mod conversation;
 mod custom_backend;
 mod integration_connection;
 mod mcp_server;
-mod agent;
 mod message;
 mod model;
 mod system_prompt;
 mod usage;
 
+pub use agent::*;
 pub use branch::*;
 pub use conversation::*;
 pub use custom_backend::*;
 pub use integration_connection::*;
 pub use mcp_server::*;
-pub use agent::*;
 pub use message::*;
 pub use model::*;
 pub use system_prompt::*;

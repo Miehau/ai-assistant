@@ -8,9 +8,6 @@ pub fn integrations() -> Vec<IntegrationMetadata> {
         description: "Configure local or remote MCP servers.".to_string(),
         auth_type: "api_key".to_string(),
         category: "mcp".to_string(),
-        capabilities: vec![
-            "discovery".to_string(),
-            "health_check".to_string(),
-        ],
+        capabilities: vec!["discovery".to_string(), "health_check".to_string()],
     }]
 }

@@ -2,17 +2,10 @@ use chrono::{TimeZone, Utc};
 use rusqlite::{params, Result as RusqliteResult};
 use serde_json::Value;
 
-use crate::db::models::{
-    AgentConfig,
-    AgentSession,
-    PhaseKind,
-    Plan,
-    PlanStep,
-    StepAction,
-    StepResult,
-    StepStatus,
-};
 use super::DbOperations;
+use crate::db::models::{
+    AgentConfig, AgentSession, PhaseKind, Plan, PlanStep, StepAction, StepResult, StepStatus,
+};
 
 pub trait AgentSessionOperations: DbOperations {
     fn save_agent_session(&self, session: &AgentSession) -> RusqliteResult<()> {
@@ -41,7 +34,11 @@ pub trait AgentSessionOperations: DbOperations {
         Ok(())
     }
 
-    fn update_agent_session_phase(&self, session_id: &str, phase: &PhaseKind) -> RusqliteResult<()> {
+    fn update_agent_session_phase(
+        &self,
+        session_id: &str,
+        phase: &PhaseKind,
+    ) -> RusqliteResult<()> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
@@ -60,7 +57,11 @@ pub trait AgentSessionOperations: DbOperations {
         Ok(())
     }
 
-    fn update_agent_session_completed(&self, session_id: &str, final_response: &str) -> RusqliteResult<()> {
+    fn update_agent_session_completed(
+        &self,
+        session_id: &str,
+        final_response: &str,
+    ) -> RusqliteResult<()> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let phase = PhaseKind::Complete {
@@ -171,7 +172,10 @@ pub trait AgentSessionOperations: DbOperations {
     }
 
     #[allow(dead_code)]
-    fn find_incomplete_session(&self, conversation_id: &str) -> RusqliteResult<Option<AgentSession>> {
+    fn find_incomplete_session(
+        &self,
+        conversation_id: &str,
+    ) -> RusqliteResult<Option<AgentSession>> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
@@ -195,7 +199,10 @@ pub trait AgentSessionOperations: DbOperations {
             let config: AgentConfig =
                 serde_json::from_str(&config_data).unwrap_or_else(|_| AgentConfig::default());
 
-            let plan = self.load_latest_plan(row.get::<_, String>(0)?.as_str()).ok().flatten();
+            let plan = self
+                .load_latest_plan(row.get::<_, String>(0)?.as_str())
+                .ok()
+                .flatten();
             let gathered_info = Vec::new();
             let step_results = Vec::new();
 
@@ -210,8 +217,7 @@ pub trait AgentSessionOperations: DbOperations {
                 config,
                 created_at: Utc.timestamp_opt(created_at, 0).single().unwrap(),
                 updated_at: Utc.timestamp_opt(updated_at, 0).single().unwrap(),
-                completed_at: completed_at
-                    .and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                completed_at: completed_at.and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
             }));
         }
 
@@ -316,8 +322,15 @@ fn parse_step_action(action_type: &str, action_data: &str) -> StepAction {
     let data: Value = serde_json::from_str(action_data).unwrap_or_else(|_| Value::Null);
     match action_type {
         "tool_call" => StepAction::ToolCall {
-            tool: data.get("tool").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            args: data.get("args").cloned().unwrap_or_else(|| Value::Object(Default::default())),
+            tool: data
+                .get("tool")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            args: data
+                .get("args")
+                .cloned()
+                .unwrap_or_else(|| Value::Object(Default::default())),
         },
         "ask_user" => StepAction::AskUser {
             question: data

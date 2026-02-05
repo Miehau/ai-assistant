@@ -4,12 +4,14 @@ use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::{
+    ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode,
+};
 use crate::db::{
     Db, IntegrationConnection, IntegrationConnectionOperations, PreferenceOperations,
     UpdateIntegrationConnectionInput,
 };
 use crate::oauth::{google_oauth_config, google_oauth_env_configured, refresh_google_token};
-use super::{ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry};
 
 pub fn register_integration_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     if google_oauth_env_configured() {
@@ -33,7 +35,11 @@ fn get_connection(
         connections
             .iter()
             .find(|item| item.integration_id == expected_integration && item.status == "connected")
-            .or_else(|| connections.iter().find(|item| item.integration_id == expected_integration))
+            .or_else(|| {
+                connections
+                    .iter()
+                    .find(|item| item.integration_id == expected_integration)
+            })
             .cloned()
     };
 
@@ -101,12 +107,17 @@ fn get_connection(
 fn get_access_token(connection: &IntegrationConnection) -> Result<String, ToolError> {
     let token = connection.access_token.clone().unwrap_or_default();
     if token.is_empty() {
-        return Err(ToolError::new("Integration connection is missing an access token"));
+        return Err(ToolError::new(
+            "Integration connection is missing an access token",
+        ));
     }
     Ok(token)
 }
 
-fn get_google_access_token(db: &Db, connection: &IntegrationConnection) -> Result<String, ToolError> {
+fn get_google_access_token(
+    db: &Db,
+    connection: &IntegrationConnection,
+) -> Result<String, ToolError> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| ToolError::new(format!("Time error: {err}")))?
@@ -120,8 +131,7 @@ fn get_google_access_token(db: &Db, connection: &IntegrationConnection) -> Resul
         .map(|token| !token.trim().is_empty())
         .unwrap_or(false);
 
-    let needs_refresh = token.trim().is_empty()
-        || (expires_at > 0 && expires_at <= now + 60_000);
+    let needs_refresh = token.trim().is_empty() || (expires_at > 0 && expires_at <= now + 60_000);
 
     if needs_refresh {
         log::info!(
@@ -223,9 +233,13 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
                 }
             }),
             requires_approval: false,
+            result_mode: ToolResultMode::Auto,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
-            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let connection = get_connection(&db_for_list, connection_id, "gmail")?;
             let token = get_google_access_token(&db_for_list, &connection)?;
 
@@ -267,7 +281,8 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
     let get_thread = ToolDefinition {
         metadata: ToolMetadata {
             name: "gmail.get_thread".to_string(),
-            description: "Get a Gmail thread with minimal fields (title, body, date, attachments).".to_string(),
+            description: "Get a Gmail thread with minimal fields (title, body, date, attachments)."
+                .to_string(),
             args_schema: json!({
                 "type": "object",
                 "properties": {
@@ -280,9 +295,13 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: false,
+            result_mode: ToolResultMode::Auto,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
-            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let thread_id = args.get("thread_id").and_then(|v| v.as_str()).unwrap_or("");
             if thread_id.trim().is_empty() {
                 return Err(ToolError::new("Missing 'thread_id'"));
@@ -290,9 +309,7 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
             let connection = get_connection(&db_for_get, connection_id, "gmail")?;
             let token = get_google_access_token(&db_for_get, &connection)?;
 
-            let url = format!(
-                "https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}"
-            );
+            let url = format!("https://gmail.googleapis.com/gmail/v1/users/me/threads/{thread_id}");
             let client = Client::new();
             let mut request = client.get(url);
 
@@ -312,8 +329,14 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
                 .json::<Value>()
                 .map_err(|err| ToolError::new(format!("Failed to parse Gmail response: {err}")))?;
 
-            let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("latest");
-            let max_messages = args.get("max_messages").and_then(|v| v.as_u64()).map(|v| v as usize);
+            let mode = args
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("latest");
+            let max_messages = args
+                .get("max_messages")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
             Ok(minify_gmail_thread(raw, mode, max_messages))
         }),
         preview: None,
@@ -332,9 +355,13 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: false,
+            result_mode: ToolResultMode::Auto,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
-            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let connection = get_connection(&db_for_labels, connection_id, "gmail")?;
             let token = get_google_access_token(&db_for_labels, &connection)?;
 
@@ -381,19 +408,44 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
                 }
             }),
             requires_approval: false,
+            result_mode: ToolResultMode::Inline,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
-            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let connection = get_connection(&db_for_send, connection_id, "gmail")?;
             let token = get_google_access_token(&db_for_send, &connection)?;
 
-            let to = args.get("to").and_then(|v| v.as_array()).ok_or_else(|| ToolError::new("Missing 'to'"))?;
-            let to_list = to.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", ");
-            let cc_list = args.get("cc").and_then(|v| v.as_array())
-                .map(|list| list.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+            let to = args
+                .get("to")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| ToolError::new("Missing 'to'"))?;
+            let to_list = to
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let cc_list = args
+                .get("cc")
+                .and_then(|v| v.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
                 .unwrap_or_default();
-            let bcc_list = args.get("bcc").and_then(|v| v.as_array())
-                .map(|list| list.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+            let bcc_list = args
+                .get("bcc")
+                .and_then(|v| v.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
                 .unwrap_or_default();
             let subject = args.get("subject").and_then(|v| v.as_str()).unwrap_or("");
             let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
@@ -441,8 +493,16 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
 }
 
 fn minify_gmail_thread(raw: Value, mode: &str, max_messages: Option<usize>) -> Value {
-    let thread_id = raw.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let messages = raw.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let thread_id = raw
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let messages = raw
+        .get("messages")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let mut parsed = messages
         .into_iter()
@@ -529,10 +589,19 @@ fn collect_parts(
     body_html: &mut Option<String>,
     attachments: &mut Vec<GmailAttachmentSummary>,
 ) {
-    let filename = payload.get("filename").and_then(|v| v.as_str()).unwrap_or("");
-    let mime_type = payload.get("mimeType").and_then(|v| v.as_str()).unwrap_or("");
+    let filename = payload
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let mime_type = payload
+        .get("mimeType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let body = payload.get("body").cloned().unwrap_or_else(|| json!({}));
-    let attachment_id = body.get("attachmentId").and_then(|v| v.as_str()).unwrap_or("");
+    let attachment_id = body
+        .get("attachmentId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let size = body.get("size").and_then(|v| v.as_i64()).unwrap_or(0);
 
     if !filename.is_empty() && !attachment_id.is_empty() {
@@ -594,6 +663,7 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
     let db_for_list = db.clone();
     let db_for_list_calendars = db.clone();
     let db_for_create = db.clone();
+    let db_for_update = db.clone();
     let list_calendars = ToolDefinition {
         metadata: ToolMetadata {
             name: "gcal.list_calendars".to_string(),
@@ -613,6 +683,7 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
                 }
             }),
             requires_approval: true,
+            result_mode: ToolResultMode::Auto,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
             let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -744,6 +815,7 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
                 }
             }),
             requires_approval: true,
+            result_mode: ToolResultMode::Auto,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
             let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -868,26 +940,37 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: true,
+            result_mode: ToolResultMode::Auto,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
-            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let connection = get_connection(&db_for_create, connection_id, "google_calendar")?;
             let token = get_google_access_token(&db_for_create, &connection)?;
 
-            let calendar_id = args.get("calendar_id").and_then(|v| v.as_str()).unwrap_or("primary");
-            let url = format!("https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events");
+            let calendar_id = args
+                .get("calendar_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("primary");
+            let url =
+                format!("https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events");
             let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("");
             let description = args.get("description").and_then(|v| v.as_str());
             let start = args.get("start").and_then(|v| v.as_str()).unwrap_or("");
             let end = args.get("end").and_then(|v| v.as_str()).unwrap_or("");
             let time_zone = args.get("time_zone").and_then(|v| v.as_str());
-            let attendees = args.get("attendees").and_then(|v| v.as_array()).map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str())
-                    .map(|email| json!({ "email": email }))
-                    .collect::<Vec<_>>()
-            });
+            let attendees = args
+                .get("attendees")
+                .and_then(|v| v.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str())
+                        .map(|email| json!({ "email": email }))
+                        .collect::<Vec<_>>()
+                });
 
             let event = json!({
                 "summary": summary,
@@ -909,10 +992,130 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
                 .bearer_auth(token)
                 .json(&event)
                 .send()
-                .map_err(|err| ToolError::new(format!("Failed to call Google Calendar API: {err}")))?;
+                .map_err(|err| {
+                    ToolError::new(format!("Failed to call Google Calendar API: {err}"))
+                })?;
             let status = response.status();
             if !status.is_success() {
-                return Err(ToolError::new(format!("Google Calendar API error: HTTP {status}")));
+                return Err(ToolError::new(format!(
+                    "Google Calendar API error: HTTP {status}"
+                )));
+            }
+
+            response
+                .json::<Value>()
+                .map_err(|err| ToolError::new(format!("Failed to parse Calendar response: {err}")))
+        }),
+        preview: None,
+    };
+
+    let update_event = ToolDefinition {
+        metadata: ToolMetadata {
+            name: "gcal.update_event".to_string(),
+            description: "Update fields on an existing Google Calendar event.".to_string(),
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "connection_id": { "type": "string" },
+                    "event_id": { "type": "string" },
+                    "calendar_id": { "type": "string" },
+                    "summary": { "type": "string" },
+                    "description": { "type": "string" },
+                    "location": { "type": "string" },
+                    "start": { "type": "string" },
+                    "end": { "type": "string" },
+                    "time_zone": { "type": "string" },
+                    "attendees": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["connection_id", "event_id"]
+            }),
+            result_schema: json!({ "type": "object" }),
+            requires_approval: true,
+            result_mode: ToolResultMode::Auto,
+        },
+        handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let connection = get_connection(&db_for_update, connection_id, "google_calendar")?;
+            let token = get_google_access_token(&db_for_update, &connection)?;
+
+            let event_id = args
+                .get("event_id")
+                .and_then(|v| v.as_str())
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| ToolError::new("event_id is required"))?;
+            let calendar_id = args
+                .get("calendar_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("primary");
+            let url = format!(
+                "https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/{event_id}"
+            );
+
+            let mut event = serde_json::Map::new();
+
+            if let Some(summary) = args.get("summary").and_then(|v| v.as_str()) {
+                event.insert("summary".to_string(), json!(summary));
+            }
+            if let Some(description) = args.get("description").and_then(|v| v.as_str()) {
+                event.insert("description".to_string(), json!(description));
+            }
+            if let Some(location) = args.get("location").and_then(|v| v.as_str()) {
+                event.insert("location".to_string(), json!(location));
+            }
+
+            let time_zone = args.get("time_zone").and_then(|v| v.as_str());
+            if let Some(start) = args.get("start").and_then(|v| v.as_str()) {
+                event.insert(
+                    "start".to_string(),
+                    json!({
+                        "dateTime": start,
+                        "timeZone": time_zone
+                    }),
+                );
+            }
+            if let Some(end) = args.get("end").and_then(|v| v.as_str()) {
+                event.insert(
+                    "end".to_string(),
+                    json!({
+                        "dateTime": end,
+                        "timeZone": time_zone
+                    }),
+                );
+            }
+
+            if let Some(attendees) = args.get("attendees").and_then(|v| v.as_array()) {
+                let values = attendees
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(|email| json!({ "email": email }))
+                    .collect::<Vec<_>>();
+                event.insert("attendees".to_string(), json!(values));
+            }
+
+            if event.is_empty() {
+                return Err(ToolError::new(
+                    "Provide at least one field to update (for example summary, start, or end)",
+                ));
+            }
+
+            let client = Client::new();
+            let response = client
+                .patch(url)
+                .bearer_auth(token)
+                .json(&Value::Object(event))
+                .send()
+                .map_err(|err| {
+                    ToolError::new(format!("Failed to call Google Calendar API: {err}"))
+                })?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(ToolError::new(format!(
+                    "Google Calendar API error: HTTP {status}"
+                )));
             }
 
             response
@@ -925,6 +1128,7 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
     registry.register(list_calendars)?;
     registry.register(list_events)?;
     registry.register(create_event)?;
+    registry.register(update_event)?;
     Ok(())
 }
 
@@ -947,9 +1151,13 @@ fn register_todoist_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
             }),
             result_schema: json!({ "type": "array" }),
             requires_approval: true,
+            result_mode: ToolResultMode::Auto,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
-            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let connection = get_connection(&db_for_list, connection_id, "todoist")?;
             let token = get_access_token(&connection)?;
 
@@ -999,9 +1207,13 @@ fn register_todoist_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: true,
+            result_mode: ToolResultMode::Auto,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
-            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let connection = get_connection(&db_for_create, connection_id, "todoist")?;
             let token = get_access_token(&connection)?;
 
@@ -1065,9 +1277,13 @@ fn register_todoist_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: true,
+            result_mode: ToolResultMode::Inline,
         },
         handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
-            let connection_id = args.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let connection = get_connection(&db_for_complete, connection_id, "todoist")?;
             let token = get_access_token(&connection)?;
 

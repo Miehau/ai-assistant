@@ -9,4 +9,4 @@ pub struct SystemPrompt {
     pub content: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-} 
+}

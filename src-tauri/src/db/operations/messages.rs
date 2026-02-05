@@ -1,20 +1,16 @@
-use rusqlite::{params, Result as RusqliteResult};
-use chrono::{TimeZone, Utc};
-use serde_json::Value;
-use uuid::Uuid;
-use std::fs;
-use std::collections::HashMap;
-use base64::Engine;
-use tauri::api::path;
-use crate::db::models::{
-    Message,
-    MessageAttachment,
-    IncomingAttachment,
-    MessageToolExecution,
-    MessageToolExecutionInput,
-};
 use super::DbOperations;
+use crate::db::models::{
+    IncomingAttachment, Message, MessageAttachment, MessageToolExecution, MessageToolExecutionInput,
+};
+use base64::Engine;
+use chrono::{TimeZone, Utc};
+use rusqlite::{params, Result as RusqliteResult};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::fs;
 use std::time::Instant;
+use tauri::api::path;
+use uuid::Uuid;
 
 pub trait MessageOperations: DbOperations {
     fn save_message(
@@ -36,7 +32,7 @@ pub trait MessageOperations: DbOperations {
                     // If not a valid UUID, generate a new one
                     Uuid::new_v4().to_string()
                 }
-            },
+            }
             _ => Uuid::new_v4().to_string(),
         };
 
@@ -50,7 +46,13 @@ pub trait MessageOperations: DbOperations {
         tx.execute(
             "INSERT INTO messages (id, conversation_id, role, content, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![message_id, conversation_id, role, content, created_at_timestamp],
+            params![
+                message_id,
+                conversation_id,
+                role,
+                content,
+                created_at_timestamp
+            ],
         )?;
 
         for attachment in attachments {
@@ -59,10 +61,7 @@ pub trait MessageOperations: DbOperations {
                 attachment.data.to_string()
             } else {
                 // For binary attachments (images, audio), save to filesystem
-                self.save_attachment_to_fs(
-                    &attachment.data,
-                    &attachment.name
-                )?
+                self.save_attachment_to_fs(&attachment.data, &attachment.name)?
             };
 
             tx.execute(
@@ -132,8 +131,9 @@ pub trait MessageOperations: DbOperations {
 
         let binding = self.conn();
         let conn = binding.lock().unwrap();
-        let app_dir = path::app_data_dir(&tauri::Config::default())
-            .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
+        let app_dir = path::app_data_dir(&tauri::Config::default()).ok_or_else(|| {
+            rusqlite::Error::InvalidParameterName("Failed to get app directory".into())
+        })?;
         let attachments_dir = app_dir.join("dev.michalmlak.ai_agent").join("attachments");
 
         log::debug!("📁 Setup time: {:?}", start_time.elapsed());
@@ -143,23 +143,28 @@ pub trait MessageOperations: DbOperations {
             "SELECT id, conversation_id, role, content, created_at
              FROM messages
              WHERE conversation_id = ?1
-             ORDER BY created_at ASC"
+             ORDER BY created_at ASC",
         )?;
 
-        let mut messages: Vec<Message> = messages_stmt.query_map(params![conversation_id], |row| {
-            let timestamp: i64 = row.get(4)?;
-            Ok(Message {
-                id: row.get(0)?,
-                conversation_id: row.get(1)?,
-                role: row.get(2)?,
-                content: row.get(3)?,
-                created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
-                attachments: Vec::new(),
-                tool_executions: Vec::new(),
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let mut messages: Vec<Message> = messages_stmt
+            .query_map(params![conversation_id], |row| {
+                let timestamp: i64 = row.get(4)?;
+                Ok(Message {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
+                    attachments: Vec::new(),
+                    tool_executions: Vec::new(),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
-        log::debug!("📨 Messages query time: {:?}", messages_query_start.elapsed());
+        log::debug!(
+            "📨 Messages query time: {:?}",
+            messages_query_start.elapsed()
+        );
         let attachments_start = Instant::now();
 
         let mut attachments_stmt = conn.prepare(
@@ -190,8 +195,8 @@ pub trait MessageOperations: DbOperations {
 
             // Get updated_at timestamp if available, otherwise use created_at
             let updated_at_timestamp: Option<i64> = row.get(12).ok();
-            let updated_at = updated_at_timestamp
-                .map(|ts| Utc.timestamp_opt(ts, 0).single().unwrap());
+            let updated_at =
+                updated_at_timestamp.map(|ts| Utc.timestamp_opt(ts, 0).single().unwrap());
 
             Ok(MessageAttachment {
                 id: Some(row.get(1)?),
@@ -212,10 +217,8 @@ pub trait MessageOperations: DbOperations {
         })?;
 
         // Use HashMap for O(1) lookup instead of O(n) iteration
-        let mut message_map: HashMap<String, &mut Message> = messages
-            .iter_mut()
-            .map(|m| (m.id.clone(), m))
-            .collect();
+        let mut message_map: HashMap<String, &mut Message> =
+            messages.iter_mut().map(|m| (m.id.clone(), m)).collect();
 
         for attachment in attachments {
             if let Ok(att) = attachment {
@@ -240,21 +243,26 @@ pub trait MessageOperations: DbOperations {
 
             let parameters_raw: String = row.get(3)?;
             let result_raw: String = row.get(4)?;
-            let parameters = serde_json::from_str(&parameters_raw).unwrap_or_else(|_| Value::String(parameters_raw));
-            let result = serde_json::from_str(&result_raw).unwrap_or_else(|_| Value::String(result_raw));
+            let parameters = serde_json::from_str(&parameters_raw)
+                .unwrap_or_else(|_| Value::String(parameters_raw));
+            let result =
+                serde_json::from_str(&result_raw).unwrap_or_else(|_| Value::String(result_raw));
 
-            Ok((message_id, MessageToolExecution {
-                id: row.get(1)?,
-                message_id: row.get(0)?,
-                tool_name: row.get(2)?,
-                parameters,
-                result,
-                success: row.get(5)?,
-                duration_ms: row.get(6)?,
-                timestamp_ms,
-                error: row.get(8)?,
-                iteration_number: row.get(9)?,
-            }))
+            Ok((
+                message_id,
+                MessageToolExecution {
+                    id: row.get(1)?,
+                    message_id: row.get(0)?,
+                    tool_name: row.get(2)?,
+                    parameters,
+                    result,
+                    success: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    timestamp_ms,
+                    error: row.get(8)?,
+                    iteration_number: row.get(9)?,
+                },
+            ))
         })?;
 
         for tool_exec in tool_execs {
@@ -279,8 +287,9 @@ pub trait MessageOperations: DbOperations {
     }
 
     fn save_attachment_to_fs(&self, data: &str, file_name: &str) -> RusqliteResult<String> {
-        let app_dir = path::app_data_dir(&tauri::Config::default())
-            .ok_or_else(|| rusqlite::Error::InvalidParameterName("Failed to get app directory".into()))?;
+        let app_dir = path::app_data_dir(&tauri::Config::default()).ok_or_else(|| {
+            rusqlite::Error::InvalidParameterName("Failed to get app directory".into())
+        })?;
 
         let attachments_dir = app_dir.join("dev.michalmlak.ai_agent").join("attachments");
         fs::create_dir_all(&attachments_dir)
@@ -290,8 +299,9 @@ pub trait MessageOperations: DbOperations {
         let file_path = attachments_dir.join(&unique_filename);
 
         let base64_data = if data.starts_with("data:") {
-            data.split(",").nth(1)
-                .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid data URL format".into()))?
+            data.split(",").nth(1).ok_or_else(|| {
+                rusqlite::Error::InvalidParameterName("Invalid data URL format".into())
+            })?
         } else {
             data
         };

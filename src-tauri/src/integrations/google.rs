@@ -20,7 +20,7 @@ pub fn integrations() -> Vec<IntegrationMetadata> {
             id: "google_calendar".to_string(),
             name: "Google Calendar".to_string(),
             provider: "google".to_string(),
-            description: "Read and create calendar events.".to_string(),
+            description: "Read, create, and edit calendar events.".to_string(),
             auth_type: "oauth2".to_string(),
             category: "calendar".to_string(),
             capabilities: vec![

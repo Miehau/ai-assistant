@@ -1,9 +1,8 @@
-use crate::db::{Conversation, Db, Message, MessageOperations, ConversationOperations, IncomingAttachment};
+use crate::db::{
+    Conversation, ConversationOperations, Db, IncomingAttachment, Message, MessageOperations,
+};
 use crate::events::{
-    AgentEvent,
-    EventBus,
-    EVENT_CONVERSATION_DELETED,
-    EVENT_CONVERSATION_UPDATED,
+    AgentEvent, EventBus, EVENT_CONVERSATION_DELETED, EVENT_CONVERSATION_UPDATED,
     EVENT_MESSAGE_SAVED,
 };
 use chrono::Utc;
@@ -12,7 +11,10 @@ use tauri::State;
 use uuid::Uuid;
 
 #[tauri::command]
-pub fn get_or_create_conversation(state: State<'_, Db>, conversation_id: Option<String>) -> Result<Conversation, String> {
+pub fn get_or_create_conversation(
+    state: State<'_, Db>,
+    conversation_id: Option<String>,
+) -> Result<Conversation, String> {
     let conversation_id = conversation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     ConversationOperations::get_or_create_conversation(&*state, &conversation_id)
         .map_err(|e| e.to_string())
@@ -56,15 +58,16 @@ pub fn save_message(
 }
 
 #[tauri::command]
-pub fn get_conversation_history(state: State<'_, Db>, conversation_id: String) -> Result<Vec<Message>, String> {
-    MessageOperations::get_messages(&*state, &conversation_id)
-        .map_err(|e| e.to_string())
+pub fn get_conversation_history(
+    state: State<'_, Db>,
+    conversation_id: String,
+) -> Result<Vec<Message>, String> {
+    MessageOperations::get_messages(&*state, &conversation_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_conversations(state: State<'_, Db>) -> Result<Vec<Conversation>, String> {
-    ConversationOperations::get_conversations(&*state)
-        .map_err(|e| e.to_string())
+    ConversationOperations::get_conversations(&*state).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -79,11 +82,12 @@ pub fn update_conversation_name(
         conversation_id,
         name
     );
-    ConversationOperations::update_conversation_name(&*state, &conversation_id, &name)
-        .map_err(|e| {
+    ConversationOperations::update_conversation_name(&*state, &conversation_id, &name).map_err(
+        |e| {
             log::error!("Error in update_conversation_name command: {}", e);
             e.to_string()
-        })?;
+        },
+    )?;
 
     let timestamp_ms = Utc::now().timestamp_millis();
     event_bus.publish(AgentEvent::new_with_timestamp(
@@ -109,11 +113,10 @@ pub fn delete_conversation(
         "Tauri command delete_conversation called with id={}",
         conversation_id
     );
-    ConversationOperations::delete_conversation(&*state, &conversation_id)
-        .map_err(|e| {
-            log::error!("Error in delete_conversation command: {}", e);
-            e.to_string()
-        })?;
+    ConversationOperations::delete_conversation(&*state, &conversation_id).map_err(|e| {
+        log::error!("Error in delete_conversation command: {}", e);
+        e.to_string()
+    })?;
 
     let timestamp_ms = Utc::now().timestamp_millis();
     event_bus.publish(AgentEvent::new_with_timestamp(

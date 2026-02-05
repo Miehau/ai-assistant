@@ -1,17 +1,13 @@
-use rusqlite::{params, Result as RusqliteResult};
 use super::DbOperations;
+use rusqlite::{params, Result as RusqliteResult};
 
 pub trait PreferenceOperations: DbOperations {
     fn get_preference(&self, key: &str) -> RusqliteResult<Option<String>> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT value FROM user_preferences WHERE key = ?1"
-        )?;
+        let mut stmt = conn.prepare("SELECT value FROM user_preferences WHERE key = ?1")?;
 
-        let result = stmt.query_row(params![key], |row| {
-            row.get(0)
-        });
+        let result = stmt.query_row(params![key], |row| row.get(0));
 
         match result {
             Ok(value) => Ok(Some(value)),

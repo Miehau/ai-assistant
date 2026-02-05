@@ -1,6 +1,8 @@
 use crate::db::{Db, PreferenceOperations};
 use crate::tools::vault::resolve_vault_path;
-use crate::tools::{ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry};
+use crate::tools::{
+    ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode,
+};
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::redirect::Policy;
@@ -60,6 +62,7 @@ fn register_approve_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Stri
             "additionalProperties": false
         }),
         requires_approval: false,
+        result_mode: ToolResultMode::Inline,
     };
 
     let handler_db = db.clone();
@@ -134,7 +137,8 @@ fn register_approve_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Stri
 fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: "web.fetch".to_string(),
-        description: "Fetch a web page and extract text plus links (host must be approved).".to_string(),
+        description: "Fetch a web page and extract text plus links (host must be approved)."
+            .to_string(),
         args_schema: json!({
             "type": "object",
             "properties": {
@@ -167,6 +171,7 @@ fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String
             "additionalProperties": false
         }),
         requires_approval: false,
+        result_mode: ToolResultMode::Persist,
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
@@ -211,7 +216,13 @@ fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String
         ensure_host_allowed(&allowlist, &original_host)?;
 
         let allowed_map = build_allowlist_map(&allowlist);
-        let client = build_client(timeout_ms, user_agent, &allowed_map, Some(&original_host), same_host_only)?;
+        let client = build_client(
+            timeout_ms,
+            user_agent,
+            &allowed_map,
+            Some(&original_host),
+            same_host_only,
+        )?;
 
         let response = client
             .get(parsed.as_str())
@@ -257,7 +268,8 @@ fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String
             title = extract_title(&document);
             text = extract_text(&document);
             if extract_links {
-                links = extract_links_from_document(&document, &base_url, same_host_only, max_links);
+                links =
+                    extract_links_from_document(&document, &base_url, same_host_only, max_links);
             }
         } else if is_text_content(&content_type) {
             text = body_text.clone();
@@ -293,7 +305,8 @@ fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String
 fn register_request_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: "web.request".to_string(),
-        description: "Send an HTTP request and return the response (host must be approved).".to_string(),
+        description: "Send an HTTP request and return the response (host must be approved)."
+            .to_string(),
         args_schema: json!({
             "type": "object",
             "properties": {
@@ -333,17 +346,18 @@ fn register_request_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Stri
             "additionalProperties": false
         }),
         requires_approval: true,
+        result_mode: ToolResultMode::Auto,
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
         let url = require_string_arg(&args, "url")?;
-        let method_raw = args
-            .get("method")
-            .and_then(|v| v.as_str())
-            .unwrap_or("GET");
+        let method_raw = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
         let method = parse_method(method_raw)?;
         let headers = parse_headers(&args)?;
-        let body = args.get("body").and_then(|v| v.as_str()).map(|v| v.to_string());
+        let body = args
+            .get("body")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string());
         let json_body = args.get("json").filter(|v| !v.is_null()).cloned();
         if body.is_some() && json_body.is_some() {
             return Err(ToolError::new("Provide either 'body' or 'json', not both"));
@@ -464,7 +478,9 @@ fn register_request_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Stri
 fn register_download_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: "web.download".to_string(),
-        description: "Download one or more URLs into the vault attachments folder (host must be approved).".to_string(),
+        description:
+            "Download one or more URLs into the vault attachments folder (host must be approved)."
+                .to_string(),
         args_schema: json!({
             "type": "object",
             "properties": {
@@ -507,6 +523,7 @@ fn register_download_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
             "additionalProperties": false
         }),
         requires_approval: false,
+        result_mode: ToolResultMode::Auto,
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
@@ -584,7 +601,13 @@ fn register_download_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
         std::fs::create_dir_all(&base_dir.full_path)
             .map_err(|err| ToolError::new(format!("Failed to create vault directory: {err}")))?;
 
-        let client = build_client(timeout_ms, user_agent, &allowed_map, Some(&base_host), same_host_only)?;
+        let client = build_client(
+            timeout_ms,
+            user_agent,
+            &allowed_map,
+            Some(&base_host),
+            same_host_only,
+        )?;
 
         let mut results = Vec::new();
         for url_value in urls {
@@ -837,7 +860,9 @@ fn headers_to_json(headers: &HeaderMap) -> Value {
 
 fn normalize_host_from_input(input: &str) -> Result<String, ToolError> {
     let url = parse_url(input)?;
-    let host = url.host_str().ok_or_else(|| ToolError::new("URL missing host"))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| ToolError::new("URL missing host"))?;
     normalize_host(host)
 }
 
@@ -854,8 +879,7 @@ fn parse_url(input: &str) -> Result<Url, ToolError> {
         Ok(url) => Ok(url),
         Err(_) => {
             let with_scheme = format!("https://{input}");
-            Url::parse(&with_scheme)
-                .map_err(|err| ToolError::new(format!("Invalid URL: {err}")))
+            Url::parse(&with_scheme).map_err(|err| ToolError::new(format!("Invalid URL: {err}")))
         }
     }
 }
@@ -950,7 +974,10 @@ fn build_client(
         .map_err(|err| ToolError::new(format!("Failed to build client: {err}")))
 }
 
-fn read_limited_body(response: reqwest::blocking::Response, max_bytes: usize) -> Result<(Vec<u8>, bool), ToolError> {
+fn read_limited_body(
+    response: reqwest::blocking::Response,
+    max_bytes: usize,
+) -> Result<(Vec<u8>, bool), ToolError> {
     use std::io::Read;
     let mut body = Vec::new();
     let mut limited = response.take((max_bytes + 1) as u64);

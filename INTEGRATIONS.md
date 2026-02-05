@@ -67,11 +67,10 @@ A plugin exposes a manifest and a set of capabilities. The runtime uses the mani
 
 ## Phase 2 (Core Plugins)
 - Gmail plugin: read threads, send email, label threads.
-- Google Calendar plugin: read events, create events.
+- Google Calendar plugin: read events, create events, edit events.
 - Todoist plugin: create tasks, complete tasks, list projects.
 
 ## Open Questions
 - Do we bundle plugins in-app or load from a plugin directory at runtime?
 - Where should plugin settings schemas live and how are they validated?
 - How should webhook verification secrets be stored and rotated?
-

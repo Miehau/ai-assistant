@@ -1,20 +1,15 @@
 use crate::db::{
-    ConversationUsageSummary,
-    Db,
-    MessageUsage,
-    SaveMessageUsageInput,
-    UsageOperations,
-    UsageStatistics,
-    DbOperations,
+    ConversationUsageSummary, Db, DbOperations, MessageUsage, SaveMessageUsageInput,
+    UsageOperations, UsageStatistics,
 };
 use crate::events::{AgentEvent, EventBus, EVENT_MESSAGE_USAGE_SAVED, EVENT_USAGE_UPDATED};
-use serde_json::json;
-use serde::{Deserialize, Serialize};
-use tauri::State;
 use chrono::{TimeZone, Utc};
 use rusqlite::{params, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
+use tauri::State;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -52,7 +47,12 @@ fn calculate_estimated_cost(model: &str, prompt_tokens: i32, completion_tokens: 
                 .unwrap_or(model);
             pricing.get(cleaned)
         })
-        .or_else(|| pricing.iter().find(|(key, _)| model.contains(*key)).map(|(_, v)| v));
+        .or_else(|| {
+            pricing
+                .iter()
+                .find(|(key, _)| model.contains(*key))
+                .map(|(_, v)| v)
+        });
 
     let entry = match entry {
         Some(entry) => entry,
@@ -91,10 +91,9 @@ pub struct UsageBackfillResult {
 pub fn save_message_usage(
     state: State<'_, Db>,
     event_bus: State<'_, EventBus>,
-    input: SaveMessageUsageInput
+    input: SaveMessageUsageInput,
 ) -> Result<MessageUsage, String> {
-    let usage = UsageOperations::save_message_usage(&*state, input)
-        .map_err(|e| e.to_string())?;
+    let usage = UsageOperations::save_message_usage(&*state, input).map_err(|e| e.to_string())?;
 
     let timestamp_ms = usage.created_at.timestamp_millis();
     event_bus.publish(AgentEvent::new_with_timestamp(
@@ -119,7 +118,7 @@ pub fn save_message_usage(
 pub fn update_conversation_usage(
     state: State<'_, Db>,
     event_bus: State<'_, EventBus>,
-    conversation_id: String
+    conversation_id: String,
 ) -> Result<ConversationUsageSummary, String> {
     let summary = UsageOperations::update_conversation_usage(&*state, &conversation_id)
         .map_err(|e| e.to_string())?;
@@ -145,17 +144,16 @@ pub fn update_conversation_usage(
 #[tauri::command]
 pub fn get_conversation_usage(
     state: State<'_, Db>,
-    conversation_id: String
+    conversation_id: String,
 ) -> Result<Option<ConversationUsageSummary>, String> {
-    UsageOperations::get_conversation_usage(&*state, &conversation_id)
-        .map_err(|e| e.to_string())
+    UsageOperations::get_conversation_usage(&*state, &conversation_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_usage_statistics(
     state: State<'_, Db>,
     start_date: Option<i64>,
-    end_date: Option<i64>
+    end_date: Option<i64>,
 ) -> Result<UsageStatistics, String> {
     // Convert Option<i64> timestamps to Option<DateTime<Utc>>
     let start_date_time = start_date.and_then(|ts| Utc.timestamp_opt(ts, 0).single());
@@ -168,10 +166,9 @@ pub fn get_usage_statistics(
 #[tauri::command]
 pub fn get_message_usage(
     state: State<'_, Db>,
-    message_id: String
+    message_id: String,
 ) -> Result<Option<MessageUsage>, String> {
-    UsageOperations::get_message_usage(&*state, &message_id)
-        .map_err(|e| e.to_string())
+    UsageOperations::get_message_usage(&*state, &message_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -180,7 +177,7 @@ pub fn backfill_message_usage(
     event_bus: State<'_, EventBus>,
     conversation_id: Option<String>,
     default_model: Option<String>,
-    dry_run: Option<bool>
+    dry_run: Option<bool>,
 ) -> Result<UsageBackfillResult, String> {
     let dry_run = dry_run.unwrap_or(false);
     let default_model = default_model
@@ -196,7 +193,8 @@ pub fn backfill_message_usage(
             let mut stmt = conn
                 .prepare("SELECT id FROM conversations")
                 .map_err(|e| e.to_string())?;
-            let rows = stmt.query_map([], |row| row.get(0))
+            let rows = stmt
+                .query_map([], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
             rows.collect::<Result<Vec<String>, _>>()
                 .map_err(|e| e.to_string())?
@@ -291,16 +289,15 @@ pub fn backfill_message_usage(
             if role == "assistant" {
                 result.messages_checked += 1;
                 if !existing_usage.contains(&message_id) {
-                    let model_name = current_model.clone().unwrap_or_else(|| "unknown".to_string());
+                    let model_name = current_model
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
 
                     let prompt_tokens = running_prompt_tokens.max(0);
                     let completion_tokens = estimated_tokens.max(0);
                     let total_tokens = prompt_tokens + completion_tokens;
-                    let estimated_cost = calculate_estimated_cost(
-                        &model_name,
-                        prompt_tokens,
-                        completion_tokens,
-                    );
+                    let estimated_cost =
+                        calculate_estimated_cost(&model_name, prompt_tokens, completion_tokens);
 
                     if !dry_run {
                         let binding = state.conn();
@@ -336,7 +333,9 @@ pub fn backfill_message_usage(
         }
 
         if conversation_backfilled > 0 && !dry_run {
-            if let Ok(summary) = UsageOperations::update_conversation_usage(&*state, &conversation_id) {
+            if let Ok(summary) =
+                UsageOperations::update_conversation_usage(&*state, &conversation_id)
+            {
                 let timestamp_ms = summary.last_updated.timestamp_millis();
                 event_bus.publish(AgentEvent::new_with_timestamp(
                     EVENT_USAGE_UPDATED,

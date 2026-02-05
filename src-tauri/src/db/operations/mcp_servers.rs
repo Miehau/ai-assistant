@@ -1,7 +1,7 @@
-use rusqlite::{params, Result as RusqliteResult};
-use rusqlite::types::Null;
-use crate::db::models::{McpServer, CreateMcpServerInput, UpdateMcpServerInput};
 use super::DbOperations;
+use crate::db::models::{CreateMcpServerInput, McpServer, UpdateMcpServerInput};
+use rusqlite::types::Null;
+use rusqlite::{params, Result as RusqliteResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -43,7 +43,7 @@ pub trait McpServerOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, auth_type, api_key, created_at FROM mcp_servers ORDER BY name"
+            "SELECT id, name, url, auth_type, api_key, created_at FROM mcp_servers ORDER BY name",
         )?;
         let server_iter = stmt.query_map([], |row| {
             Ok(McpServer {
@@ -62,7 +62,7 @@ pub trait McpServerOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, auth_type, api_key, created_at FROM mcp_servers WHERE id = ?1"
+            "SELECT id, name, url, auth_type, api_key, created_at FROM mcp_servers WHERE id = ?1",
         )?;
         let result = stmt.query_row(params![id], |row| {
             Ok(McpServer {
@@ -116,12 +116,10 @@ pub trait McpServerOperations: DbOperations {
 
         params_vec.push(Box::new(input.id.clone()));
 
-        let sql = format!(
-            "UPDATE mcp_servers SET {} WHERE id = ?",
-            updates.join(", ")
-        );
+        let sql = format!("UPDATE mcp_servers SET {} WHERE id = ?", updates.join(", "));
 
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
         conn.execute(&sql, params_refs.as_slice())?;
 
         drop(conn);
@@ -131,10 +129,7 @@ pub trait McpServerOperations: DbOperations {
     fn delete_mcp_server(&self, id: &str) -> RusqliteResult<bool> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
-        let rows_affected = conn.execute(
-            "DELETE FROM mcp_servers WHERE id = ?1",
-            params![id],
-        )?;
+        let rows_affected = conn.execute("DELETE FROM mcp_servers WHERE id = ?1", params![id])?;
         Ok(rows_affected > 0)
     }
 }

@@ -1,5 +1,7 @@
 use crate::db::{Db, PreferenceOperations};
-use crate::tools::{ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry};
+use crate::tools::{
+    ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode,
+};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -31,6 +33,7 @@ fn register_get_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> 
             "additionalProperties": false
         }),
         requires_approval: false,
+        result_mode: ToolResultMode::Inline,
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
@@ -74,6 +77,7 @@ fn register_set_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> 
             "additionalProperties": false
         }),
         requires_approval: true,
+        result_mode: ToolResultMode::Inline,
     };
 
     let handler_db = db.clone();

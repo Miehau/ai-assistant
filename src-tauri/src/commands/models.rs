@@ -21,4 +21,4 @@ pub fn add_model(state: State<'_, Db>, model: Model) -> Result<(), String> {
 pub fn delete_model(state: State<'_, Db>, model: Model) -> Result<(), String> {
     ModelOperations::delete_model(&*state, &model.provider, &model.model_name)
         .map_err(|e| e.to_string())
-} 
+}

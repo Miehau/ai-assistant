@@ -55,10 +55,9 @@ pub fn store_tool_output(record: &ToolOutputRecord) -> Result<ToolOutputRef, Str
         .map_err(|err| format!("Failed to create tool output directory: {err}"))?;
 
     let file_path = tool_output_file_path(&record.id)?;
-    let payload =
-        serde_json::to_vec(record).map_err(|err| format!("Failed to serialize tool output: {err}"))?;
-    fs::write(&file_path, &payload)
-        .map_err(|err| format!("Failed to write tool output: {err}"))?;
+    let payload = serde_json::to_vec(record)
+        .map_err(|err| format!("Failed to serialize tool output: {err}"))?;
+    fs::write(&file_path, &payload).map_err(|err| format!("Failed to write tool output: {err}"))?;
 
     let size_bytes = fs::metadata(&file_path)
         .map_err(|err| format!("Failed to read tool output metadata: {err}"))?
@@ -80,6 +79,5 @@ pub fn read_tool_output(id: &str) -> Result<ToolOutputRecord, String> {
     let file_path = tool_output_file_path(id)?;
     let payload = fs::read_to_string(&file_path)
         .map_err(|err| format!("Failed to read tool output: {err}"))?;
-    serde_json::from_str(&payload)
-        .map_err(|err| format!("Failed to parse tool output: {err}"))
+    serde_json::from_str(&payload).map_err(|err| format!("Failed to parse tool output: {err}"))
 }

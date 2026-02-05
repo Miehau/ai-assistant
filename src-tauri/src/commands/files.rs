@@ -1,9 +1,9 @@
 // src-tauri/src/commands/files.rs
 use crate::files::{FileManager, FileMetadata, FileUploadResult};
-use tauri::State;
-use serde::Deserialize;
 use base64::Engine;
+use serde::Deserialize;
 use std::fs;
+use tauri::State;
 
 #[derive(Debug, Deserialize)]
 pub struct FileUploadPayload {
@@ -94,14 +94,14 @@ pub fn get_file(
                 let mime_type = mime_guess::from_path(&file_path)
                     .first_or_octet_stream()
                     .to_string();
-                
+
                 // Return as base64 with MIME type prefix
                 Ok(file_manager.encode_to_base64(&data, &mime_type))
             } else {
                 // Return raw binary data encoded as base64 without MIME prefix
                 Ok(base64::engine::general_purpose::STANDARD.encode(data))
             }
-        },
+        }
         Err(e) => Err(format!("Failed to read file: {}", e)),
     }
 }
@@ -118,9 +118,7 @@ pub fn delete_file(
 }
 
 #[tauri::command]
-pub fn cleanup_empty_directories(
-    file_manager: State<'_, FileManager>,
-) -> Result<bool, String> {
+pub fn cleanup_empty_directories(file_manager: State<'_, FileManager>) -> Result<bool, String> {
     match file_manager.cleanup_empty_dirs() {
         Ok(_) => Ok(true),
         Err(e) => Err(format!("Failed to cleanup directories: {}", e)),
@@ -145,10 +143,10 @@ pub fn get_image_thumbnail(
         Ok(data) => {
             // Determine MIME type (always JPEG for thumbnails)
             let mime_type = "image/jpeg";
-            
+
             // Return as base64 with MIME type prefix
             Ok(file_manager.encode_to_base64(&data, mime_type))
-        },
+        }
         Err(e) => Err(format!("Failed to get thumbnail: {}", e)),
     }
 }
@@ -160,20 +158,20 @@ pub fn optimize_image(
     file_manager: State<'_, FileManager>,
 ) -> Result<String, String> {
     match file_manager.optimize_image(
-        &file_path, 
-        options.max_width, 
-        options.max_height, 
-        options.quality
+        &file_path,
+        options.max_width,
+        options.max_height,
+        options.quality,
     ) {
         Ok(data) => {
             // Determine MIME type
             let mime_type = mime_guess::from_path(&file_path)
                 .first_or_octet_stream()
                 .to_string();
-            
+
             // Return as base64 with MIME type prefix
             Ok(file_manager.encode_to_base64(&data, &mime_type))
-        },
+        }
         Err(e) => Err(format!("Failed to optimize image: {}", e)),
     }
 }
@@ -214,9 +212,9 @@ pub fn upload_file_from_path(
                     },
                     success: false,
                     error: Some(format!("Failed to save file: {}", e)),
-                })
+                }),
             }
-        },
+        }
         Err(e) => Ok(FileUploadResult {
             metadata: FileMetadata {
                 id: String::new(),
@@ -231,7 +229,7 @@ pub fn upload_file_from_path(
             },
             success: false,
             error: Some(format!("Failed to read file: {}", e)),
-        })
+        }),
     }
 }
 
@@ -247,7 +245,7 @@ pub fn validate_audio(
         Ok(data) => data,
         Err(e) => return Err(format!("Failed to decode audio data: {}", e)),
     };
-    
+
     // Validate the audio data
     match crate::files::AudioProcessor::validate_audio(&data) {
         Ok(valid) => Ok(valid),
@@ -265,7 +263,7 @@ pub fn extract_audio_metadata(
         Ok(data) => data,
         Err(e) => return Err(format!("Failed to read audio file: {}", e)),
     };
-    
+
     // Extract metadata
     match crate::files::AudioProcessor::extract_metadata(&data) {
         Ok(metadata) => Ok(metadata),
@@ -285,7 +283,7 @@ pub fn validate_text(
         Ok(data) => data,
         Err(e) => return Err(format!("Failed to decode text data: {}", e)),
     };
-    
+
     // Validate the text data
     match crate::files::TextProcessor::validate_text(&data) {
         Ok(valid) => Ok(valid),
@@ -303,7 +301,7 @@ pub fn extract_text_metadata(
         Ok(data) => data,
         Err(e) => return Err(format!("Failed to read text file: {}", e)),
     };
-    
+
     // Extract metadata
     match crate::files::TextProcessor::extract_metadata(&data) {
         Ok(metadata) => Ok(metadata),
@@ -321,7 +319,7 @@ pub fn extract_code_blocks(
         Ok(data) => data,
         Err(e) => return Err(format!("Failed to read text file: {}", e)),
     };
-    
+
     // Extract code blocks
     match crate::files::TextProcessor::extract_code(&data) {
         Ok(code_blocks) => Ok(code_blocks),

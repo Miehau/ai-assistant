@@ -1,6 +1,6 @@
-use rusqlite::{params, Result as RusqliteResult};
-use crate::db::models::Model;
 use super::DbOperations;
+use crate::db::models::Model;
+use rusqlite::{params, Result as RusqliteResult};
 
 pub trait ModelOperations: DbOperations {
     fn add_model(&self, model: &Model) -> RusqliteResult<()> {
@@ -91,4 +91,4 @@ pub trait ModelOperations: DbOperations {
         )?;
         Ok(())
     }
-} 
+}

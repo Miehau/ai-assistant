@@ -1,6 +1,8 @@
-use rusqlite::{params, Result as RusqliteResult};
-use crate::db::models::{IntegrationConnection, CreateIntegrationConnectionInput, UpdateIntegrationConnectionInput};
 use super::DbOperations;
+use crate::db::models::{
+    CreateIntegrationConnectionInput, IntegrationConnection, UpdateIntegrationConnectionInput,
+};
+use rusqlite::{params, Result as RusqliteResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -96,7 +98,10 @@ pub trait IntegrationConnectionOperations: DbOperations {
         iter.collect()
     }
 
-    fn get_integration_connection_by_id(&self, id: &str) -> RusqliteResult<Option<IntegrationConnection>> {
+    fn get_integration_connection_by_id(
+        &self,
+        id: &str,
+    ) -> RusqliteResult<Option<IntegrationConnection>> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -193,7 +198,8 @@ pub trait IntegrationConnectionOperations: DbOperations {
             updates.join(", ")
         );
 
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
         conn.execute(&sql, params_refs.as_slice())?;
 
         drop(conn);

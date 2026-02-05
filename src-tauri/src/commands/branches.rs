@@ -1,6 +1,6 @@
 use crate::db::{
-    Db, Branch, MessageTreeNode, ConversationTree, BranchPath, BranchStats, MessageTreeConsistencyCheck,
-    BranchOperations
+    Branch, BranchOperations, BranchPath, BranchStats, ConversationTree, Db,
+    MessageTreeConsistencyCheck, MessageTreeNode,
 };
 use tauri::State;
 
@@ -10,8 +10,7 @@ pub fn create_branch(
     conversation_id: String,
     name: String,
 ) -> Result<Branch, String> {
-    BranchOperations::create_branch(&*state, &conversation_id, &name)
-        .map_err(|e| e.to_string())
+    BranchOperations::create_branch(&*state, &conversation_id, &name).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -46,17 +45,12 @@ pub fn get_conversation_tree(
     state: State<'_, Db>,
     conversation_id: String,
 ) -> Result<ConversationTree, String> {
-    BranchOperations::get_conversation_tree(&*state, &conversation_id)
-        .map_err(|e| e.to_string())
+    BranchOperations::get_conversation_tree(&*state, &conversation_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_branch_path(
-    state: State<'_, Db>,
-    branch_id: String,
-) -> Result<BranchPath, String> {
-    BranchOperations::get_branch_path(&*state, &branch_id)
-        .map_err(|e| e.to_string())
+pub fn get_branch_path(state: State<'_, Db>, branch_id: String) -> Result<BranchPath, String> {
+    BranchOperations::get_branch_path(&*state, &branch_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -65,17 +59,12 @@ pub fn rename_branch(
     branch_id: String,
     new_name: String,
 ) -> Result<(), String> {
-    BranchOperations::rename_branch(&*state, &branch_id, &new_name)
-        .map_err(|e| e.to_string())
+    BranchOperations::rename_branch(&*state, &branch_id, &new_name).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_branch(
-    state: State<'_, Db>,
-    branch_id: String,
-) -> Result<(), String> {
-    BranchOperations::delete_branch(&*state, &branch_id)
-        .map_err(|e| e.to_string())
+pub fn delete_branch(state: State<'_, Db>, branch_id: String) -> Result<(), String> {
+    BranchOperations::delete_branch(&*state, &branch_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -83,8 +72,7 @@ pub fn get_branch_stats(
     state: State<'_, Db>,
     conversation_id: String,
 ) -> Result<BranchStats, String> {
-    BranchOperations::get_branch_stats(&*state, &conversation_id)
-        .map_err(|e| e.to_string())
+    BranchOperations::get_branch_stats(&*state, &conversation_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -118,15 +106,11 @@ pub fn create_branch_from_message(
 pub fn check_message_tree_consistency(
     state: State<'_, Db>,
 ) -> Result<MessageTreeConsistencyCheck, String> {
-    BranchOperations::check_message_tree_consistency(&*state)
-        .map_err(|e| e.to_string())
+    BranchOperations::check_message_tree_consistency(&*state).map_err(|e| e.to_string())
 }
 
 /// Repair message tree by adding orphaned messages
 #[tauri::command]
-pub fn repair_message_tree(
-    state: State<'_, Db>,
-) -> Result<usize, String> {
-    BranchOperations::repair_message_tree(&*state)
-        .map_err(|e| e.to_string())
+pub fn repair_message_tree(state: State<'_, Db>) -> Result<usize, String> {
+    BranchOperations::repair_message_tree(&*state).map_err(|e| e.to_string())
 }

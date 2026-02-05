@@ -1,7 +1,10 @@
-use rusqlite::{params, Result as RusqliteResult};
-use chrono::{TimeZone, Utc, DateTime};
-use crate::db::models::{MessageUsage, ConversationUsageSummary, SaveMessageUsageInput, UsageStatistics, ModelUsage, DailyUsage, DailyModelUsage};
 use super::DbOperations;
+use crate::db::models::{
+    ConversationUsageSummary, DailyModelUsage, DailyUsage, MessageUsage, ModelUsage,
+    SaveMessageUsageInput, UsageStatistics,
+};
+use chrono::{DateTime, TimeZone, Utc};
+use rusqlite::{params, Result as RusqliteResult};
 use uuid::Uuid;
 
 pub trait UsageOperations: DbOperations {
@@ -43,14 +46,21 @@ pub trait UsageOperations: DbOperations {
     }
 
     /// Update or create conversation usage summary
-    fn update_conversation_usage(&self, conversation_id: &str) -> RusqliteResult<ConversationUsageSummary> {
+    fn update_conversation_usage(
+        &self,
+        conversation_id: &str,
+    ) -> RusqliteResult<ConversationUsageSummary> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
         // Calculate totals with a single JOIN query instead of N+1 queries
-        let (total_prompt_tokens, total_completion_tokens, total_cost, message_count): (i32, i32, f64, i32) =
-            conn.query_row(
-                "SELECT
+        let (total_prompt_tokens, total_completion_tokens, total_cost, message_count): (
+            i32,
+            i32,
+            f64,
+            i32,
+        ) = conn.query_row(
+            "SELECT
                     COALESCE(SUM(mu.prompt_tokens), 0),
                     COALESCE(SUM(mu.completion_tokens), 0),
                     COALESCE(SUM(mu.estimated_cost), 0.0),
@@ -58,9 +68,9 @@ pub trait UsageOperations: DbOperations {
                  FROM messages m
                  LEFT JOIN message_usage mu ON m.id = mu.message_id
                  WHERE m.conversation_id = ?1",
-                params![conversation_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-            )?;
+            params![conversation_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
 
         let total_tokens = total_prompt_tokens + total_completion_tokens;
         let last_updated = Utc::now();
@@ -101,7 +111,10 @@ pub trait UsageOperations: DbOperations {
     }
 
     /// Get usage summary for a specific conversation
-    fn get_conversation_usage(&self, conversation_id: &str) -> RusqliteResult<Option<ConversationUsageSummary>> {
+    fn get_conversation_usage(
+        &self,
+        conversation_id: &str,
+    ) -> RusqliteResult<Option<ConversationUsageSummary>> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
@@ -132,7 +145,11 @@ pub trait UsageOperations: DbOperations {
     }
 
     /// Get usage statistics for a date range
-    fn get_usage_statistics(&self, start_date: Option<DateTime<Utc>>, end_date: Option<DateTime<Utc>>) -> RusqliteResult<UsageStatistics> {
+    fn get_usage_statistics(
+        &self,
+        start_date: Option<DateTime<Utc>>,
+        end_date: Option<DateTime<Utc>>,
+    ) -> RusqliteResult<UsageStatistics> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
@@ -145,7 +162,7 @@ pub trait UsageOperations: DbOperations {
              FROM message_usage
              WHERE created_at >= ?1 AND created_at <= ?2",
             params![start_timestamp, end_timestamp],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
 
         // Get usage by model
@@ -154,16 +171,18 @@ pub trait UsageOperations: DbOperations {
              FROM message_usage
              WHERE created_at >= ?1 AND created_at <= ?2
              GROUP BY model_name
-             ORDER BY SUM(estimated_cost) DESC"
+             ORDER BY SUM(estimated_cost) DESC",
         )?;
-        let by_model = stmt.query_map(params![start_timestamp, end_timestamp], |row| {
-            Ok(ModelUsage {
-                model_name: row.get(0)?,
-                message_count: row.get(1)?,
-                total_tokens: row.get(2)?,
-                total_cost: row.get(3)?,
-            })
-        })?.collect::<Result<_, _>>()?;
+        let by_model = stmt
+            .query_map(params![start_timestamp, end_timestamp], |row| {
+                Ok(ModelUsage {
+                    model_name: row.get(0)?,
+                    message_count: row.get(1)?,
+                    total_tokens: row.get(2)?,
+                    total_cost: row.get(3)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
 
         // Get usage by date
         let mut stmt = conn.prepare(
@@ -173,14 +192,16 @@ pub trait UsageOperations: DbOperations {
              GROUP BY date
              ORDER BY date DESC"
         )?;
-        let by_date = stmt.query_map(params![start_timestamp, end_timestamp], |row| {
-            Ok(DailyUsage {
-                date: row.get(0)?,
-                message_count: row.get(1)?,
-                total_tokens: row.get(2)?,
-                total_cost: row.get(3)?,
-            })
-        })?.collect::<Result<_, _>>()?;
+        let by_date = stmt
+            .query_map(params![start_timestamp, end_timestamp], |row| {
+                Ok(DailyUsage {
+                    date: row.get(0)?,
+                    message_count: row.get(1)?,
+                    total_tokens: row.get(2)?,
+                    total_cost: row.get(3)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
 
         // Get usage by model and date (for stacked bar chart)
         let mut stmt = conn.prepare(
@@ -190,15 +211,17 @@ pub trait UsageOperations: DbOperations {
              GROUP BY date, model_name
              ORDER BY date DESC, model_name"
         )?;
-        let by_model_date = stmt.query_map(params![start_timestamp, end_timestamp], |row| {
-            Ok(DailyModelUsage {
-                date: row.get(0)?,
-                model_name: row.get(1)?,
-                message_count: row.get(2)?,
-                total_tokens: row.get(3)?,
-                total_cost: row.get(4)?,
-            })
-        })?.collect::<Result<_, _>>()?;
+        let by_model_date = stmt
+            .query_map(params![start_timestamp, end_timestamp], |row| {
+                Ok(DailyModelUsage {
+                    date: row.get(0)?,
+                    model_name: row.get(1)?,
+                    message_count: row.get(2)?,
+                    total_tokens: row.get(3)?,
+                    total_cost: row.get(4)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
 
         Ok(UsageStatistics {
             total_messages,

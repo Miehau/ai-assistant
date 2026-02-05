@@ -31,7 +31,10 @@ mod tests {
     #[test]
     fn default_integrations_include_core_providers() {
         let integrations = default_integrations();
-        let ids = integrations.iter().map(|item| item.id.as_str()).collect::<Vec<_>>();
+        let ids = integrations
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>();
         assert!(ids.contains(&"gmail"));
         assert!(ids.contains(&"google_calendar"));
         assert!(ids.contains(&"todoist"));

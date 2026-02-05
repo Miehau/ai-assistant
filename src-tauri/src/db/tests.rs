@@ -1,7 +1,8 @@
 use super::{
-    BranchOperations, ConversationOperations, Db, DbOperations, IncomingAttachment, MessageOperations,
-    Model, ModelOperations, PreferenceOperations, McpServerOperations, IntegrationConnectionOperations,
-    CreateMcpServerInput, UpdateMcpServerInput, CreateIntegrationConnectionInput, UpdateIntegrationConnectionInput,
+    BranchOperations, ConversationOperations, CreateIntegrationConnectionInput,
+    CreateMcpServerInput, Db, DbOperations, IncomingAttachment, IntegrationConnectionOperations,
+    McpServerOperations, MessageOperations, Model, ModelOperations, PreferenceOperations,
+    UpdateIntegrationConnectionInput, UpdateMcpServerInput,
 };
 use rusqlite::params;
 use uuid::Uuid;
@@ -76,7 +77,13 @@ fn save_message_rewrites_invalid_id() {
 
     let invalid_id = "not-a-uuid";
     let message_id = db
-        .save_message(conversation_id, "user", "hello", &[], Some(invalid_id.to_string()))
+        .save_message(
+            conversation_id,
+            "user",
+            "hello",
+            &[],
+            Some(invalid_id.to_string()),
+        )
         .unwrap();
 
     assert_ne!(message_id, invalid_id);
@@ -225,10 +232,8 @@ fn create_branch_from_message_copies_path_and_marks_branch_point() {
             .collect::<Result<_, _>>()
             .unwrap();
 
-        let expected: std::collections::HashSet<String> = message_ids[..=1]
-            .iter()
-            .cloned()
-            .collect();
+        let expected: std::collections::HashSet<String> =
+            message_ids[..=1].iter().cloned().collect();
         assert_eq!(branch_ids, expected);
     }
 }

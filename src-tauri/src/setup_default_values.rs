@@ -13,7 +13,10 @@ const DEFAULT_PROMPT: &str = "You are a helpful assistant.
 How can I help you today?";
 
 pub fn initialize(db: &mut Db) -> Result<(), String> {
-    let existing_prompt = db.conn().lock().unwrap()
+    let existing_prompt = db
+        .conn()
+        .lock()
+        .unwrap()
         .prepare("SELECT COUNT(*) FROM system_prompts")
         .map_err(|e| e.to_string())?
         .query_row([], |row| row.get::<_, i64>(0))
@@ -36,4 +39,4 @@ pub fn initialize(db: &mut Db) -> Result<(), String> {
     }
 
     Ok(())
-} 
+}

@@ -139,7 +139,11 @@ pub fn exchange_google_code(
 
     if !status.is_success() {
         let details = format_google_oauth_error(&body);
-        let has_secret = config.client_secret.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+        let has_secret = config
+            .client_secret
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
         return Err(format!(
             "Token exchange error: HTTP {status}{details} [client_id={}, client_secret={}]",
             config.client_id,
@@ -178,7 +182,11 @@ pub fn refresh_google_token(
 
     if !status.is_success() {
         let details = format_google_oauth_error(&body);
-        let has_secret = config.client_secret.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+        let has_secret = config
+            .client_secret
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
         return Err(format!(
             "Token refresh error: HTTP {status}{details} [client_id={}, client_secret={}]",
             config.client_id,
@@ -364,14 +372,22 @@ mod tests {
             client_secret: None,
         };
         let scopes = vec!["scope-a".to_string(), "scope-b".to_string()];
-        let url = build_google_auth_url(&config, "http://127.0.0.1:8000/callback", &scopes, "state", "challenge")
-            .expect("url");
+        let url = build_google_auth_url(
+            &config,
+            "http://127.0.0.1:8000/callback",
+            &scopes,
+            "state",
+            "challenge",
+        )
+        .expect("url");
         let parsed = url::Url::parse(&url).expect("parse url");
         let params: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
         assert_eq!(params.get("client_id"), Some(&"client-id".to_string()));
-        assert_eq!(params.get("redirect_uri"), Some(&"http://127.0.0.1:8000/callback".to_string()));
+        assert_eq!(
+            params.get("redirect_uri"),
+            Some(&"http://127.0.0.1:8000/callback".to_string())
+        );
         assert_eq!(params.get("scope"), Some(&"scope-a scope-b".to_string()));
         assert_eq!(params.get("code_challenge"), Some(&"challenge".to_string()));
     }
-
 }

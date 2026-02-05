@@ -1,11 +1,14 @@
-use rusqlite::{params, Result as RusqliteResult};
-use crate::db::models::{CustomBackend, CreateCustomBackendInput, UpdateCustomBackendInput};
 use super::DbOperations;
+use crate::db::models::{CreateCustomBackendInput, CustomBackend, UpdateCustomBackendInput};
+use rusqlite::{params, Result as RusqliteResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 pub trait CustomBackendOperations: DbOperations {
-    fn create_custom_backend(&self, input: &CreateCustomBackendInput) -> RusqliteResult<CustomBackend> {
+    fn create_custom_backend(
+        &self,
+        input: &CreateCustomBackendInput,
+    ) -> RusqliteResult<CustomBackend> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
@@ -18,13 +21,7 @@ pub trait CustomBackendOperations: DbOperations {
         conn.execute(
             "INSERT INTO custom_backends (id, name, url, api_key, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                id,
-                input.name,
-                input.url,
-                input.api_key,
-                created_at,
-            ],
+            params![id, input.name, input.url, input.api_key, created_at,],
         )?;
 
         Ok(CustomBackend {
@@ -40,7 +37,7 @@ pub trait CustomBackendOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, api_key, created_at FROM custom_backends ORDER BY name"
+            "SELECT id, name, url, api_key, created_at FROM custom_backends ORDER BY name",
         )?;
         let backend_iter = stmt.query_map([], |row| {
             Ok(CustomBackend {
@@ -58,7 +55,7 @@ pub trait CustomBackendOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, url, api_key, created_at FROM custom_backends WHERE id = ?1"
+            "SELECT id, name, url, api_key, created_at FROM custom_backends WHERE id = ?1",
         )?;
         let result = stmt.query_row(params![id], |row| {
             Ok(CustomBackend {
@@ -76,7 +73,10 @@ pub trait CustomBackendOperations: DbOperations {
         }
     }
 
-    fn update_custom_backend(&self, input: &UpdateCustomBackendInput) -> RusqliteResult<Option<CustomBackend>> {
+    fn update_custom_backend(
+        &self,
+        input: &UpdateCustomBackendInput,
+    ) -> RusqliteResult<Option<CustomBackend>> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
@@ -110,7 +110,8 @@ pub trait CustomBackendOperations: DbOperations {
             updates.join(", ")
         );
 
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
         conn.execute(&sql, params_refs.as_slice())?;
 
         drop(conn);
@@ -120,10 +121,8 @@ pub trait CustomBackendOperations: DbOperations {
     fn delete_custom_backend(&self, id: &str) -> RusqliteResult<bool> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
-        let rows_affected = conn.execute(
-            "DELETE FROM custom_backends WHERE id = ?1",
-            params![id],
-        )?;
+        let rows_affected =
+            conn.execute("DELETE FROM custom_backends WHERE id = ?1", params![id])?;
         Ok(rows_affected > 0)
     }
 }

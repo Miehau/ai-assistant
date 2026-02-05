@@ -1,6 +1,8 @@
 use crate::db::Db;
 use crate::tools::vault::{ensure_parent_dirs, resolve_vault_path};
-use crate::tools::{ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry};
+use crate::tools::{
+    ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode,
+};
 use regex::{Regex, RegexBuilder};
 use serde_json::{json, Value};
 use std::fs;
@@ -20,8 +22,18 @@ pub fn register_file_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), St
     register_read_tool(registry, db.clone(), "files.open", "Open file contents")?;
     register_read_range_tool(registry, db.clone())?;
     register_search_replace_tool(registry, db.clone())?;
-    register_write_tool(registry, db.clone(), "files.write", "Write/replace file contents")?;
-    register_write_tool(registry, db.clone(), "files.replace", "Replace file contents")?;
+    register_write_tool(
+        registry,
+        db.clone(),
+        "files.write",
+        "Write/replace file contents",
+    )?;
+    register_write_tool(
+        registry,
+        db.clone(),
+        "files.replace",
+        "Replace file contents",
+    )?;
     register_append_tool(registry, db.clone())?;
     register_create_tool(registry, db.clone())?;
     register_edit_tool(registry, db)?;
@@ -31,9 +43,7 @@ pub fn register_file_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), St
 fn register_list_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: "files.list".to_string(),
-        description: format!(
-            "List files and folders under a vault path. {VAULT_PATH_NOTE}"
-        ),
+        description: format!("List files and folders under a vault path. {VAULT_PATH_NOTE}"),
         args_schema: json!({
             "type": "object",
             "properties": {
@@ -65,17 +75,28 @@ fn register_list_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String>
             "additionalProperties": false
         }),
         requires_approval: false,
+        result_mode: ToolResultMode::Auto,
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
         let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(2) as usize;
-        let include_files = args.get("include_files").and_then(|v| v.as_bool()).unwrap_or(true);
-        let include_dirs = args.get("include_dirs").and_then(|v| v.as_bool()).unwrap_or(true);
+        let include_files = args
+            .get("include_files")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let include_dirs = args
+            .get("include_dirs")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let requested_path = optional_string_arg(&args, "path").unwrap_or_default();
         let vault_root = crate::tools::vault::get_vault_root(&db)?;
         let (root_path, display_path) = if requested_path.trim().is_empty() {
             let display = crate::tools::vault::to_display_path(&vault_root, &vault_root);
-            let display = if display.is_empty() { ".".to_string() } else { display };
+            let display = if display.is_empty() {
+                ".".to_string()
+            } else {
+                display
+            };
             (vault_root.clone(), display)
         } else {
             let vault_path = resolve_vault_path(&db, &requested_path)?;
@@ -136,6 +157,7 @@ fn register_read_tool(
             "additionalProperties": false
         }),
         requires_approval: false,
+        result_mode: ToolResultMode::Auto,
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
@@ -187,18 +209,19 @@ fn register_read_range_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
             "additionalProperties": false
         }),
         requires_approval: false,
+        result_mode: ToolResultMode::Auto,
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
         let path = require_string_arg(&args, "path")?;
-        let start_line = args
-            .get("start_line")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1) as usize;
+        let start_line = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
         if start_line == 0 {
             return Err(ToolError::new("Invalid 'start_line'"));
         }
-        let end_line = args.get("end_line").and_then(|v| v.as_u64()).map(|v| v as usize);
+        let end_line = args
+            .get("end_line")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
         let max_lines = args
             .get("max_lines")
             .and_then(|v| v.as_u64())
@@ -220,9 +243,8 @@ fn register_read_range_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
             return Err(ToolError::new("Invalid 'max_chars'"));
         }
 
-        let requested_end_line = end_line.unwrap_or_else(|| {
-            start_line.saturating_add(max_lines.saturating_sub(1))
-        });
+        let requested_end_line =
+            end_line.unwrap_or_else(|| start_line.saturating_add(max_lines.saturating_sub(1)));
 
         let vault_path = resolve_vault_path(&db, &path)?;
         let file = fs::File::open(&vault_path.full_path)
@@ -320,6 +342,7 @@ fn register_search_replace_tool(registry: &mut ToolRegistry, db: Db) -> Result<(
             "additionalProperties": false
         }),
         requires_approval: true,
+        result_mode: ToolResultMode::Inline,
     };
 
     let handler_db = db.clone();
@@ -364,7 +387,12 @@ fn register_search_replace_tool(registry: &mut ToolRegistry, db: Db) -> Result<(
     })
 }
 
-fn register_write_tool(registry: &mut ToolRegistry, db: Db, name: &str, description: &str) -> Result<(), String> {
+fn register_write_tool(
+    registry: &mut ToolRegistry,
+    db: Db,
+    name: &str,
+    description: &str,
+) -> Result<(), String> {
     let metadata = ToolMetadata {
         name: name.to_string(),
         description: format!("{description}. {VAULT_PATH_NOTE}"),
@@ -387,6 +415,7 @@ fn register_write_tool(registry: &mut ToolRegistry, db: Db, name: &str, descript
             "additionalProperties": false
         }),
         requires_approval: true,
+        result_mode: ToolResultMode::Inline,
     };
 
     let handler_db = db.clone();
@@ -407,7 +436,11 @@ fn register_write_tool(registry: &mut ToolRegistry, db: Db, name: &str, descript
         let (path, content) = parse_path_content_args(&args)?;
         let vault_path = resolve_vault_path(&preview_db, &path)?;
         let before = read_optional_file(&vault_path.full_path)?;
-        Ok(build_diff_preview(&vault_path.display_path, &before, &content))
+        Ok(build_diff_preview(
+            &vault_path.display_path,
+            &before,
+            &content,
+        ))
     });
 
     registry.register(ToolDefinition {
@@ -440,6 +473,7 @@ fn register_append_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
             "additionalProperties": false
         }),
         requires_approval: false,
+        result_mode: ToolResultMode::Inline,
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
@@ -489,6 +523,7 @@ fn register_create_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
             "additionalProperties": false
         }),
         requires_approval: true,
+        result_mode: ToolResultMode::Inline,
     };
 
     let handler_db = db.clone();
@@ -559,6 +594,7 @@ fn register_edit_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String>
             "additionalProperties": false
         }),
         requires_approval: true,
+        result_mode: ToolResultMode::Inline,
     };
 
     let handler_db = db.clone();
@@ -583,7 +619,11 @@ fn register_edit_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String>
         let original = fs::read_to_string(&vault_path.full_path)
             .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))?;
         let updated = apply_line_edit(&original, edit.start_line, edit.end_line, &edit.content)?;
-        Ok(build_diff_preview(&vault_path.display_path, &original, &updated))
+        Ok(build_diff_preview(
+            &vault_path.display_path,
+            &original,
+            &updated,
+        ))
     });
 
     registry.register(ToolDefinition {
@@ -630,14 +670,14 @@ fn parse_path_content_args(args: &Value) -> Result<(String, String), ToolError> 
 
 fn parse_edit_args(args: &Value) -> Result<EditArgs, ToolError> {
     let path = require_string_arg(args, "path")?;
-    let start_line = args
-        .get("start_line")
-        .and_then(|value| value.as_u64())
-        .ok_or_else(|| ToolError::new("Missing or invalid 'start_line'"))? as usize;
-    let end_line = args
-        .get("end_line")
-        .and_then(|value| value.as_u64())
-        .ok_or_else(|| ToolError::new("Missing or invalid 'end_line'"))? as usize;
+    let start_line =
+        args.get("start_line")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| ToolError::new("Missing or invalid 'start_line'"))? as usize;
+    let end_line =
+        args.get("end_line")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| ToolError::new("Missing or invalid 'end_line'"))? as usize;
     let content = require_string_arg(args, "content")?;
     Ok(EditArgs {
         path,
@@ -651,7 +691,10 @@ fn parse_search_replace_args(args: &Value) -> Result<SearchReplaceArgs, ToolErro
     let path = require_string_arg(args, "path")?;
     let query = require_string_arg(args, "query")?;
     let replace = require_string_arg(args, "replace")?;
-    let literal = args.get("literal").and_then(|v| v.as_bool()).unwrap_or(true);
+    let literal = args
+        .get("literal")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     let case_sensitive = args
         .get("case_sensitive")
         .and_then(|v| v.as_bool())
@@ -742,8 +785,12 @@ fn apply_search_replace(
     }
 
     let updated = match edit.max_replacements {
-        Some(limit) => regex.replacen(original, limit, edit.replace.as_str()).into_owned(),
-        None => regex.replace_all(original, edit.replace.as_str()).into_owned(),
+        Some(limit) => regex
+            .replacen(original, limit, edit.replace.as_str())
+            .into_owned(),
+        None => regex
+            .replace_all(original, edit.replace.as_str())
+            .into_owned(),
     };
     Ok((updated, replacements))
 }
@@ -752,14 +799,11 @@ fn read_optional_file(path: &Path) -> Result<String, ToolError> {
     if !path.exists() {
         return Ok(String::new());
     }
-    fs::read_to_string(path)
-        .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))
+    fs::read_to_string(path).map_err(|err| ToolError::new(format!("Failed to read file: {err}")))
 }
 
 fn build_diff_preview(path: &str, before: &str, after: &str) -> Value {
-    let diff = format!(
-        "--- a/{path}\n+++ b/{path}\n@@\n-{before}\n+{after}"
-    );
+    let diff = format!("--- a/{path}\n+++ b/{path}\n@@\n-{before}\n+{after}");
     json!({
         "path": path,
         "before": before,
@@ -795,7 +839,14 @@ fn list_dir(
             if include_dirs {
                 entries.push(json!({ "path": display_path, "type": "dir" }));
             }
-            list_dir(base, &path, depth.saturating_sub(1), include_files, include_dirs, entries)?;
+            list_dir(
+                base,
+                &path,
+                depth.saturating_sub(1),
+                include_files,
+                include_dirs,
+                entries,
+            )?;
         } else if metadata.is_file() && include_files {
             entries.push(json!({ "path": display_path, "type": "file" }));
         }

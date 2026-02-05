@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use specta::Type;
 use serde_json::Value;
+use specta::Type;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Type)]
 pub struct IncomingAttachment {

@@ -20,4 +20,4 @@ pub struct Model {
 pub struct ApiKey {
     pub provider: String,
     pub key: String,
-} 
+}

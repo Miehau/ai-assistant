@@ -16,6 +16,7 @@ use crate::tools::{
     get_conversation_tool_approval_override, get_tool_approval_override,
     load_conversation_tool_approval_overrides, load_tool_approval_overrides, ApprovalStore,
     PendingToolApprovalInput, ToolApprovalDecision, ToolExecutionContext, ToolRegistry,
+    ToolResultMode,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -24,6 +25,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+const AUTO_INLINE_RESULT_MAX_CHARS: usize = 4_096;
+const INLINE_RESULT_HARD_MAX_CHARS: usize = 16_384;
+const PERSISTED_RESULT_PREVIEW_MAX_CHARS: usize = 1_200;
 
 pub struct DynamicController {
     db: crate::db::Db,
@@ -682,13 +687,22 @@ impl DynamicController {
         let duration_ms = start.elapsed().as_millis() as i64;
         let completed_at = Utc::now();
         let timestamp_ms = completed_at.timestamp_millis();
-        let persist_output = tool_name != "tool_outputs.read";
-
         let (success, output, error) = match result {
             Ok(output_value) => {
+                let output_chars = value_char_len(&output_value);
+                let persist_output =
+                    should_persist_tool_output(tool_name, &tool.metadata.result_mode, output_chars);
+
                 if !persist_output {
                     (true, Some(output_value), None)
                 } else {
+                    let forced_persist_for_safety = tool.metadata.result_mode
+                        == ToolResultMode::Inline
+                        && output_chars > INLINE_RESULT_HARD_MAX_CHARS;
+                    let (preview, preview_truncated) = summarize_tool_output_value(
+                        &output_value,
+                        PERSISTED_RESULT_PREVIEW_MAX_CHARS,
+                    );
                     let record = ToolOutputRecord {
                         id: execution_id.clone(),
                         tool_name: tool_name.to_string(),
@@ -705,7 +719,13 @@ impl DynamicController {
                             let message = json!({
                                 "message": "Tool output stored in app data. Use tool_outputs.read to retrieve.",
                                 "success": true,
-                                "output_ref": output_ref
+                                "output_ref": output_ref,
+                                "result_mode": "persist",
+                                "requested_result_mode": &tool.metadata.result_mode,
+                                "result_size_chars": output_chars as i64,
+                                "forced_persist_for_safety": forced_persist_for_safety,
+                                "preview": preview,
+                                "preview_truncated": preview_truncated
                             });
                             (true, Some(message), None)
                         }
@@ -1217,15 +1237,7 @@ fn controller_output_format() -> Value {
                     "description": { "type": "string" },
                     "tool": { "type": "string" },
                     "args": {
-                        "oneOf": [
-                            { "type": "string" },
-                            { "type": "object" },
-                            { "type": "array" },
-                            { "type": "number" },
-                            { "type": "integer" },
-                            { "type": "boolean" },
-                            { "type": "null" }
-                        ]
+                        "type": "string"
                     },
                     "message": { "type": "string" },
                     "question": { "type": "string" },
@@ -1287,6 +1299,48 @@ fn summarize_tool_args(args: &Value, max_len: usize) -> String {
     }
     let truncated: String = raw.chars().take(max_len).collect();
     format!("{truncated}...")
+}
+
+fn should_persist_tool_output(
+    tool_name: &str,
+    result_mode: &ToolResultMode,
+    output_chars: usize,
+) -> bool {
+    if tool_name == "tool_outputs.read" {
+        return false;
+    }
+
+    match result_mode {
+        ToolResultMode::Inline => output_chars > INLINE_RESULT_HARD_MAX_CHARS,
+        ToolResultMode::Persist => true,
+        ToolResultMode::Auto => output_chars > AUTO_INLINE_RESULT_MAX_CHARS,
+    }
+}
+
+fn value_char_len(value: &Value) -> usize {
+    serde_json::to_string(value)
+        .map(|text| text.chars().count())
+        .unwrap_or(usize::MAX)
+}
+
+fn summarize_tool_output_value(value: &Value, max_chars: usize) -> (String, bool) {
+    let serialized = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
+    truncate_chars(&serialized, max_chars)
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> (String, bool) {
+    if max_chars == 0 {
+        return (String::new(), !input.is_empty());
+    }
+
+    let mut output = String::new();
+    for (idx, ch) in input.chars().enumerate() {
+        if idx >= max_chars {
+            return (output, true);
+        }
+        output.push(ch);
+    }
+    (output, false)
 }
 
 fn extract_json(raw: &str) -> String {

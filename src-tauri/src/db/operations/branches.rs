@@ -1,12 +1,13 @@
-use rusqlite::{params, Result as RusqliteResult};
-use chrono::{TimeZone, Utc};
-use uuid::Uuid;
-use std::collections::HashSet;
+use super::DbOperations;
 use crate::db::models::{
-    Branch, MessageTreeNode, ConversationTree, BranchPath, BranchStats, Message, MessageTreeConsistencyCheck
+    Branch, BranchPath, BranchStats, ConversationTree, Message, MessageTreeConsistencyCheck,
+    MessageTreeNode,
 };
 use crate::db::DatabaseError;
-use super::DbOperations;
+use chrono::{TimeZone, Utc};
+use rusqlite::{params, Result as RusqliteResult};
+use std::collections::HashSet;
+use uuid::Uuid;
 
 pub trait BranchOperations: DbOperations {
     /// Create a new branch in a conversation
@@ -73,7 +74,7 @@ pub trait BranchOperations: DbOperations {
 
         let mut stmt = conn.prepare(
             "SELECT id, conversation_id, name, created_at FROM branches
-             WHERE conversation_id = ?1 ORDER BY created_at ASC"
+             WHERE conversation_id = ?1 ORDER BY created_at ASC",
         )?;
 
         let branch_iter = stmt.query_map(params![conversation_id], |row| {
@@ -91,7 +92,10 @@ pub trait BranchOperations: DbOperations {
     }
 
     /// Get all message tree nodes for a conversation
-    fn get_message_tree_nodes(&self, conversation_id: &str) -> RusqliteResult<Vec<MessageTreeNode>> {
+    fn get_message_tree_nodes(
+        &self,
+        conversation_id: &str,
+    ) -> RusqliteResult<Vec<MessageTreeNode>> {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
@@ -126,7 +130,7 @@ pub trait BranchOperations: DbOperations {
 
         // Get all message IDs in this branch
         let mut stmt = conn.prepare(
-            "SELECT message_id FROM message_tree WHERE branch_id = ?1 ORDER BY created_at ASC"
+            "SELECT message_id FROM message_tree WHERE branch_id = ?1 ORDER BY created_at ASC",
         )?;
 
         let message_ids: Vec<String> = stmt
@@ -138,7 +142,11 @@ pub trait BranchOperations: DbOperations {
         }
 
         // Get messages for all IDs
-        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let placeholders = message_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
         let query = format!(
             "SELECT id, conversation_id, role, content, created_at FROM messages
              WHERE id IN ({}) ORDER BY created_at ASC",
@@ -179,7 +187,11 @@ pub trait BranchOperations: DbOperations {
 
         let mut messages = Vec::new();
         if !message_ids.is_empty() {
-            let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let placeholders = message_ids
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
             let query = format!(
                 "SELECT id, conversation_id, role, content, created_at FROM messages
                  WHERE id IN ({}) ORDER BY created_at ASC",
@@ -218,9 +230,8 @@ pub trait BranchOperations: DbOperations {
         let conn = binding.lock().unwrap();
 
         // Get branch info
-        let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, name, created_at FROM branches WHERE id = ?1"
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT id, conversation_id, name, created_at FROM branches WHERE id = ?1")?;
 
         let branch = stmt.query_row(params![branch_id], |row| {
             let timestamp: i64 = row.get(3)?;
@@ -257,10 +268,7 @@ pub trait BranchOperations: DbOperations {
         let binding = self.conn();
         let conn = binding.lock().unwrap();
 
-        conn.execute(
-            "DELETE FROM branches WHERE id = ?1",
-            params![branch_id],
-        )?;
+        conn.execute("DELETE FROM branches WHERE id = ?1", params![branch_id])?;
 
         Ok(())
     }
@@ -288,7 +296,7 @@ pub trait BranchOperations: DbOperations {
         // Try to get existing main branch
         let mut stmt = conn.prepare(
             "SELECT id, conversation_id, name, created_at FROM branches
-             WHERE conversation_id = ?1 AND name = 'Main' LIMIT 1"
+             WHERE conversation_id = ?1 AND name = 'Main' LIMIT 1",
         )?;
 
         let existing = stmt.query_row(params![conversation_id], |row| {
@@ -364,27 +372,29 @@ pub trait BranchOperations: DbOperations {
         let conn = binding.lock().unwrap();
 
         // Validation 1: Check if the message exists in the messages table
-        let message_exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM messages WHERE id = ?1)",
-                params![parent_message_id],
-                |row| row.get(0),
-            )?;
+        let message_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE id = ?1)",
+            params![parent_message_id],
+            |row| row.get(0),
+        )?;
 
         if !message_exists {
-            return Err(DatabaseError::MessageNotFound(parent_message_id.to_string()));
+            return Err(DatabaseError::MessageNotFound(
+                parent_message_id.to_string(),
+            ));
         }
 
         // Validation 2: Check if the conversation exists
-        let conversation_exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ?1)",
-                params![conversation_id],
-                |row| row.get(0),
-            )?;
+        let conversation_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ?1)",
+            params![conversation_id],
+            |row| row.get(0),
+        )?;
 
         if !conversation_exists {
-            return Err(DatabaseError::ConversationNotFound(conversation_id.to_string()));
+            return Err(DatabaseError::ConversationNotFound(
+                conversation_id.to_string(),
+            ));
         }
 
         // Release conn for get_or_create_main_branch
@@ -397,17 +407,18 @@ pub trait BranchOperations: DbOperations {
         // Validation 3: Check if the message is in the message tree
         let binding = self.conn();
         let conn = binding.lock().unwrap();
-        let message_in_tree: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM message_tree WHERE message_id = ?1 AND branch_id = ?2)",
-                params![parent_message_id, main_branch.id],
-                |row| row.get(0),
-            )?;
+        let message_in_tree: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM message_tree WHERE message_id = ?1 AND branch_id = ?2)",
+            params![parent_message_id, main_branch.id],
+            |row| row.get(0),
+        )?;
 
         if !message_in_tree {
             drop(conn);
             drop(binding);
-            return Err(DatabaseError::MessageNotInTree(parent_message_id.to_string()));
+            return Err(DatabaseError::MessageNotInTree(
+                parent_message_id.to_string(),
+            ));
         }
 
         drop(conn);
@@ -418,9 +429,10 @@ pub trait BranchOperations: DbOperations {
 
         // Validation 4: Ensure we found a valid path
         if message_path.is_empty() {
-            return Err(DatabaseError::ValidationError(
-                format!("Could not find message path for message: {}", parent_message_id)
-            ));
+            return Err(DatabaseError::ValidationError(format!(
+                "Could not find message path for message: {}",
+                parent_message_id
+            )));
         }
 
         // Create the new branch
@@ -476,7 +488,7 @@ pub trait BranchOperations: DbOperations {
              WHERE NOT EXISTS (
                  SELECT 1 FROM message_tree mt WHERE mt.message_id = m.id
              )
-             ORDER BY m.created_at"
+             ORDER BY m.created_at",
         )?;
 
         let orphaned_messages: Vec<String> = stmt
@@ -500,7 +512,10 @@ pub trait BranchOperations: DbOperations {
         )?;
 
         if parent_check > 0 {
-            warnings.push(format!("{} message tree nodes reference non-existent parent messages", parent_check));
+            warnings.push(format!(
+                "{} message tree nodes reference non-existent parent messages",
+                parent_check
+            ));
         }
 
         // 2. Message tree nodes referencing non-existent messages
@@ -515,7 +530,10 @@ pub trait BranchOperations: DbOperations {
         )?;
 
         if message_check > 0 {
-            warnings.push(format!("{} message tree nodes reference non-existent messages", message_check));
+            warnings.push(format!(
+                "{} message tree nodes reference non-existent messages",
+                message_check
+            ));
         }
 
         // 3. Message tree nodes referencing non-existent branches
@@ -530,7 +548,10 @@ pub trait BranchOperations: DbOperations {
         )?;
 
         if branch_check > 0 {
-            warnings.push(format!("{} message tree nodes reference non-existent branches", branch_check));
+            warnings.push(format!(
+                "{} message tree nodes reference non-existent branches",
+                branch_check
+            ));
         }
 
         Ok(MessageTreeConsistencyCheck {
@@ -553,7 +574,7 @@ pub trait BranchOperations: DbOperations {
              WHERE NOT EXISTS (
                  SELECT 1 FROM message_tree mt WHERE mt.message_id = m.id
              )
-             ORDER BY m.conversation_id, m.created_at"
+             ORDER BY m.conversation_id, m.created_at",
         )?;
 
         let orphaned: Vec<(String, String, i64)> = stmt
@@ -575,7 +596,10 @@ pub trait BranchOperations: DbOperations {
         for (message_id, conversation_id, created_at) in orphaned.iter() {
             if current_conversation != *conversation_id {
                 if !conversation_messages.is_empty() {
-                    repaired_count += self.repair_conversation_messages(&current_conversation, &conversation_messages)?;
+                    repaired_count += self.repair_conversation_messages(
+                        &current_conversation,
+                        &conversation_messages,
+                    )?;
                     conversation_messages.clear();
                 }
                 current_conversation = conversation_id.clone();
@@ -585,7 +609,8 @@ pub trait BranchOperations: DbOperations {
 
         // Repair last conversation
         if !conversation_messages.is_empty() {
-            repaired_count += self.repair_conversation_messages(&current_conversation, &conversation_messages)?;
+            repaired_count +=
+                self.repair_conversation_messages(&current_conversation, &conversation_messages)?;
         }
 
         Ok(repaired_count)

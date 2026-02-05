@@ -1,4 +1,6 @@
-use crate::db::{Db, CustomBackend, CreateCustomBackendInput, UpdateCustomBackendInput, CustomBackendOperations};
+use crate::db::{
+    CreateCustomBackendInput, CustomBackend, CustomBackendOperations, Db, UpdateCustomBackendInput,
+};
 use tauri::State;
 
 #[tauri::command]
@@ -7,7 +9,10 @@ pub fn get_custom_backends(state: State<'_, Db>) -> Result<Vec<CustomBackend>, S
 }
 
 #[tauri::command]
-pub fn get_custom_backend(state: State<'_, Db>, id: String) -> Result<Option<CustomBackend>, String> {
+pub fn get_custom_backend(
+    state: State<'_, Db>,
+    id: String,
+) -> Result<Option<CustomBackend>, String> {
     CustomBackendOperations::get_custom_backend_by_id(&*state, &id).map_err(|e| e.to_string())
 }
 

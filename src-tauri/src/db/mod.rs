@@ -39,7 +39,9 @@ impl IntegrationConnectionOperations for Db {}
 impl Db {
     pub fn new(db_path: &str) -> Result<Self, DatabaseError> {
         let conn = Connection::open(db_path)?;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     pub fn run_migrations(&mut self) -> Result<(), DatabaseError> {

@@ -63,7 +63,13 @@ pub fn start_google_oauth(
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|err| err.to_string())?;
     let port = listener.local_addr().map_err(|err| err.to_string())?.port();
     let redirect_uri = format!("http://127.0.0.1:{port}/oauth/google");
-    let auth_url = build_google_auth_url(&config, &redirect_uri, &scopes, &state_token, &code_challenge)?;
+    let auth_url = build_google_auth_url(
+        &config,
+        &redirect_uri,
+        &scopes,
+        &state_token,
+        &code_challenge,
+    )?;
 
     let session_id = oauth_store.create_session();
     let session_id_for_thread = session_id.clone();
@@ -103,14 +109,20 @@ pub fn start_google_oauth(
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 Err(err) => {
-                    store.set_error(&session_id_for_thread, format!("OAuth listener error: {err}"));
+                    store.set_error(
+                        &session_id_for_thread,
+                        format!("OAuth listener error: {err}"),
+                    );
                     break;
                 }
             }
         }
     });
 
-    Ok(OAuthStartResponse { session_id, auth_url })
+    Ok(OAuthStartResponse {
+        session_id,
+        auth_url,
+    })
 }
 
 #[tauri::command]
@@ -133,7 +145,9 @@ pub fn cancel_oauth_session(
 }
 
 #[tauri::command]
-pub fn get_integration_connections(state: State<'_, Db>) -> Result<Vec<IntegrationConnection>, String> {
+pub fn get_integration_connections(
+    state: State<'_, Db>,
+) -> Result<Vec<IntegrationConnection>, String> {
     IntegrationConnectionOperations::get_integration_connections(&*state).map_err(|e| e.to_string())
 }
 
@@ -142,7 +156,8 @@ pub fn create_integration_connection(
     state: State<'_, Db>,
     input: CreateIntegrationConnectionInput,
 ) -> Result<IntegrationConnection, String> {
-    IntegrationConnectionOperations::create_integration_connection(&*state, &input).map_err(|e| e.to_string())
+    IntegrationConnectionOperations::create_integration_connection(&*state, &input)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -150,19 +165,22 @@ pub fn update_integration_connection(
     state: State<'_, Db>,
     input: UpdateIntegrationConnectionInput,
 ) -> Result<Option<IntegrationConnection>, String> {
-    IntegrationConnectionOperations::update_integration_connection(&*state, &input).map_err(|e| e.to_string())
+    IntegrationConnectionOperations::update_integration_connection(&*state, &input)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn delete_integration_connection(state: State<'_, Db>, id: String) -> Result<bool, String> {
-    IntegrationConnectionOperations::delete_integration_connection(&*state, &id).map_err(|e| e.to_string())
+    IntegrationConnectionOperations::delete_integration_connection(&*state, &id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn test_integration_connection(state: State<'_, Db>, id: String) -> Result<Value, String> {
-    let connection = IntegrationConnectionOperations::get_integration_connection_by_id(&*state, &id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Integration connection not found".to_string())?;
+    let connection =
+        IntegrationConnectionOperations::get_integration_connection_by_id(&*state, &id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Integration connection not found".to_string())?;
 
     let token = connection.access_token.clone().unwrap_or_default();
     if token.is_empty() {
@@ -171,7 +189,10 @@ pub fn test_integration_connection(state: State<'_, Db>, id: String) -> Result<V
 
     let client = Client::new();
     let (url, method) = match connection.integration_id.as_str() {
-        "gmail" => ("https://gmail.googleapis.com/gmail/v1/users/me/profile", "GET"),
+        "gmail" => (
+            "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+            "GET",
+        ),
         "google_calendar" => (
             "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1",
             "GET",
@@ -246,10 +267,14 @@ pub struct GoogleCalendarListItem {
 }
 
 #[tauri::command]
-pub fn list_google_calendars(state: State<'_, Db>, connection_id: String) -> Result<Vec<GoogleCalendarListItem>, String> {
-    let connection = IntegrationConnectionOperations::get_integration_connection_by_id(&*state, &connection_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Integration connection not found".to_string())?;
+pub fn list_google_calendars(
+    state: State<'_, Db>,
+    connection_id: String,
+) -> Result<Vec<GoogleCalendarListItem>, String> {
+    let connection =
+        IntegrationConnectionOperations::get_integration_connection_by_id(&*state, &connection_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Integration connection not found".to_string())?;
 
     if connection.integration_id != "google_calendar" {
         return Err("Connection is not a Google Calendar integration.".to_string());
@@ -311,8 +336,6 @@ pub fn list_google_calendars(state: State<'_, Db>, connection_id: String) -> Res
 
     Ok(items)
 }
-
-
 
 fn handle_oauth_callback(
     stream: &mut TcpStream,
@@ -397,7 +420,10 @@ fn handle_oauth_callback(
     };
 
     let expires_at = token.expires_in.map(|seconds| {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
         now + seconds * 1000
     });
 
@@ -409,12 +435,17 @@ fn handle_oauth_callback(
 
     let existing = IntegrationConnectionOperations::get_integration_connections(db)
         .ok()
-        .and_then(|connections| connections.into_iter().find(|item| item.integration_id == integration_id));
+        .and_then(|connections| {
+            connections
+                .into_iter()
+                .find(|item| item.integration_id == integration_id)
+        });
 
-    let refresh_token = token
-        .refresh_token
-        .clone()
-        .or_else(|| existing.as_ref().and_then(|item| item.refresh_token.clone()));
+    let refresh_token = token.refresh_token.clone().or_else(|| {
+        existing
+            .as_ref()
+            .and_then(|item| item.refresh_token.clone())
+    });
 
     let scopes_value = token.scope.clone().or_else(|| Some(scopes.join(" ")));
 
@@ -499,8 +530,7 @@ fn get_google_access_token(db: &Db, connection: &IntegrationConnection) -> Resul
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
-    let needs_refresh = token.trim().is_empty()
-        || (expires_at > 0 && expires_at <= now + 60_000);
+    let needs_refresh = token.trim().is_empty() || (expires_at > 0 && expires_at <= now + 60_000);
 
     if needs_refresh {
         let refresh_token = connection

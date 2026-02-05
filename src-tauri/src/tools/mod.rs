@@ -33,6 +33,22 @@ pub struct ToolMetadata {
     pub args_schema: Value,
     pub result_schema: Value,
     pub requires_approval: bool,
+    #[serde(default)]
+    pub result_mode: ToolResultMode,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolResultMode {
+    Inline,
+    Persist,
+    Auto,
+}
+
+impl Default for ToolResultMode {
+    fn default() -> Self {
+        Self::Auto
+    }
 }
 
 #[derive(Clone)]

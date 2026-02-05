@@ -1,5 +1,5 @@
-use crate::files::{FileManager, VersionMetadata, VersionHistory};
-use serde::{Serialize, Deserialize};
+use crate::files::{FileManager, VersionHistory, VersionMetadata};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VersionResult {
@@ -37,9 +37,13 @@ pub struct CleanupVersionsResult {
 
 /// Create a new version of a file
 #[tauri::command]
-pub fn create_file_version(file_path: String, comment: Option<String>, file_manager: tauri::State<'_, FileManager>) -> VersionResult {
+pub fn create_file_version(
+    file_path: String,
+    comment: Option<String>,
+    file_manager: tauri::State<'_, FileManager>,
+) -> VersionResult {
     // FileManager is now passed as a state parameter
-    
+
     match file_manager.create_version(&file_path, comment) {
         Ok(version) => VersionResult {
             success: true,
@@ -56,9 +60,12 @@ pub fn create_file_version(file_path: String, comment: Option<String>, file_mana
 
 /// Get version history for a file
 #[tauri::command]
-pub fn get_file_version_history(file_path: String, file_manager: tauri::State<'_, FileManager>) -> VersionHistoryResult {
+pub fn get_file_version_history(
+    file_path: String,
+    file_manager: tauri::State<'_, FileManager>,
+) -> VersionHistoryResult {
     // FileManager is now passed as a state parameter
-    
+
     match file_manager.get_version_history(&file_path) {
         Ok(history) => VersionHistoryResult {
             success: true,
@@ -75,9 +82,13 @@ pub fn get_file_version_history(file_path: String, file_manager: tauri::State<'_
 
 /// Restore a specific version of a file
 #[tauri::command]
-pub fn restore_file_version(file_path: String, version_id: String, file_manager: tauri::State<'_, FileManager>) -> RestoreVersionResult {
+pub fn restore_file_version(
+    file_path: String,
+    version_id: String,
+    file_manager: tauri::State<'_, FileManager>,
+) -> RestoreVersionResult {
     // FileManager is now passed as a state parameter
-    
+
     match file_manager.restore_version(&file_path, &version_id) {
         Ok(path) => RestoreVersionResult {
             success: true,
@@ -94,9 +105,13 @@ pub fn restore_file_version(file_path: String, version_id: String, file_manager:
 
 /// Delete a specific version of a file
 #[tauri::command]
-pub fn delete_file_version(file_path: String, version_id: String, file_manager: tauri::State<'_, FileManager>) -> DeleteVersionResult {
+pub fn delete_file_version(
+    file_path: String,
+    version_id: String,
+    file_manager: tauri::State<'_, FileManager>,
+) -> DeleteVersionResult {
     // FileManager is now passed as a state parameter
-    
+
     match file_manager.delete_version(&file_path, &version_id) {
         Ok(_) => DeleteVersionResult {
             success: true,
@@ -111,9 +126,13 @@ pub fn delete_file_version(file_path: String, version_id: String, file_manager: 
 
 /// Clean up old versions, keeping only the specified number of most recent versions
 #[tauri::command]
-pub fn cleanup_file_versions(file_path: String, keep_count: usize, file_manager: tauri::State<'_, FileManager>) -> CleanupVersionsResult {
+pub fn cleanup_file_versions(
+    file_path: String,
+    keep_count: usize,
+    file_manager: tauri::State<'_, FileManager>,
+) -> CleanupVersionsResult {
     // FileManager is now passed as a state parameter
-    
+
     match file_manager.cleanup_versions(&file_path, keep_count) {
         Ok(count) => CleanupVersionsResult {
             success: true,

@@ -1,6 +1,10 @@
 use crate::db::Db;
-use crate::tools::vault::{ensure_inside_root, get_vault_root, normalize_relative_path, reject_symlink_components};
-use crate::tools::{ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry};
+use crate::tools::vault::{
+    ensure_inside_root, get_vault_root, normalize_relative_path, reject_symlink_components,
+};
+use crate::tools::{
+    ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode,
+};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -47,11 +51,15 @@ pub fn register_search_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
             "additionalProperties": false
         }),
         requires_approval: false,
+        result_mode: ToolResultMode::Auto,
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
         let query = require_string_arg(&args, "query")?;
-        let literal = args.get("literal").and_then(|v| v.as_bool()).unwrap_or(false);
+        let literal = args
+            .get("literal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let case_sensitive = args
             .get("case_sensitive")
             .and_then(|v| v.as_bool())
@@ -60,7 +68,10 @@ pub fn register_search_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
             .get("max_results")
             .and_then(|v| v.as_u64())
             .unwrap_or(200) as usize;
-        let path = args.get("path").and_then(|v| v.as_str()).map(|v| v.to_string());
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string());
 
         let root = get_vault_root(&db)?;
         let search_target = if let Some(path) = path {
@@ -110,7 +121,8 @@ pub fn register_search_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
         let mut results: Vec<Value> = Vec::new();
         let mut reached_limit = false;
         for line in reader.lines() {
-            let line = line.map_err(|err| ToolError::new(format!("Failed to read rg output: {err}")))?;
+            let line =
+                line.map_err(|err| ToolError::new(format!("Failed to read rg output: {err}")))?;
             let value: Value = match serde_json::from_str(&line) {
                 Ok(value) => value,
                 Err(_) => continue,
