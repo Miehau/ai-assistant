@@ -41,6 +41,8 @@ struct PricingData {
 
 static PRICING: OnceLock<HashMap<String, PricingEntry>> = OnceLock::new();
 static CANCEL_REGISTRY: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+const LLM_HTTP_TIMEOUT_SECS: u64 = 120;
+const LLM_HTTP_CONNECT_TIMEOUT_SECS: u64 = 15;
 
 fn get_pricing() -> &'static HashMap<String, PricingEntry> {
     PRICING.get_or_init(|| {
@@ -79,6 +81,20 @@ fn cancel_token(message_id: &str) -> bool {
     } else {
         false
     }
+}
+
+fn build_http_client() -> Client {
+    Client::builder()
+        .timeout(Duration::from_secs(LLM_HTTP_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(LLM_HTTP_CONNECT_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_else(|error| {
+            log::warn!(
+                "[agent] failed to build HTTP client with timeouts, falling back to defaults: {}",
+                error
+            );
+            Client::new()
+        })
 }
 
 fn calculate_estimated_cost(model: &str, prompt_tokens: i32, completion_tokens: i32) -> f64 {
@@ -149,12 +165,18 @@ fn estimate_prompt_tokens(messages: &[LlmMessage]) -> i32 {
         .sum()
 }
 
-fn stream_response_chunks(bus: &EventBus, conversation_id: &str, message_id: &str, content: &str) {
-    if content.is_empty() {
+fn stream_response_chunks(
+    bus: &EventBus,
+    conversation_id: &str,
+    message_id: &str,
+    content: &str,
+    cancel_token: &Arc<AtomicBool>,
+) {
+    if content.is_empty() || cancel_token.load(Ordering::Relaxed) {
         return;
     }
 
-    let chunk_size = if content.len() > 8000 { 200 } else { 120 };
+    let chunk_size = if content.len() > 8000 { 400 } else { 240 };
     let total_chunks = (content.len() + chunk_size - 1) / chunk_size;
     let sleep_ms = if total_chunks <= 1 {
         0
@@ -168,8 +190,14 @@ fn stream_response_chunks(bus: &EventBus, conversation_id: &str, message_id: &st
 
     let mut chunk = String::new();
     for ch in content.chars() {
+        if cancel_token.load(Ordering::Relaxed) {
+            return;
+        }
         chunk.push(ch);
         if chunk.len() >= chunk_size {
+            if cancel_token.load(Ordering::Relaxed) {
+                return;
+            }
             let timestamp_ms = Utc::now().timestamp_millis();
             bus.publish(AgentEvent::new_with_timestamp(
                 EVENT_ASSISTANT_STREAM_CHUNK,
@@ -188,7 +216,7 @@ fn stream_response_chunks(bus: &EventBus, conversation_id: &str, message_id: &st
         }
     }
 
-    if !chunk.is_empty() {
+    if !chunk.is_empty() && !cancel_token.load(Ordering::Relaxed) {
         let timestamp_ms = Utc::now().timestamp_millis();
         bus.publish(AgentEvent::new_with_timestamp(
             EVENT_ASSISTANT_STREAM_CHUNK,
@@ -380,47 +408,52 @@ pub fn agent_send_message(
     let cancel_token_for_thread = register_cancel_token(&assistant_message_id);
 
     std::thread::spawn(move || {
-        let client = Client::new();
-        let mut draft = String::new();
-        let mut usage_accumulator = Usage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-        };
-        let mut waiting_for_human_input = false;
-        let openai_api_key = ModelOperations::get_api_key(&db, "openai")
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let anthropic_api_key = ModelOperations::get_api_key(&db, "anthropic")
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let deepseek_api_key = ModelOperations::get_api_key(&db, "deepseek")
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        let panic_bus = bus.clone();
+        let panic_conversation_id = conversation_id_for_thread.clone();
+        let panic_message_id = assistant_message_id_for_thread.clone();
 
-        let custom_backend_config = if provider == "custom" {
-            custom_backend_id
-                .as_ref()
-                .and_then(|id| CustomBackendOperations::get_custom_backend_by_id(&db, id).ok())
+        let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let client = build_http_client();
+            let mut draft = String::new();
+            let mut usage_accumulator = Usage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+            };
+            let mut waiting_for_human_input = false;
+            let openai_api_key = ModelOperations::get_api_key(&db, "openai")
+                .ok()
                 .flatten()
-                .map(|backend| (backend.url, backend.api_key))
-        } else if provider == "ollama" {
-            Some((
-                "http://localhost:11434/v1/chat/completions".to_string(),
-                None,
-            ))
-        } else {
-            None
-        };
+                .unwrap_or_default();
+            let anthropic_api_key = ModelOperations::get_api_key(&db, "anthropic")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let deepseek_api_key = ModelOperations::get_api_key(&db, "deepseek")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
 
-        let messages_for_usage = messages.clone();
+            let custom_backend_config = if provider == "custom" {
+                custom_backend_id
+                    .as_ref()
+                    .and_then(|id| CustomBackendOperations::get_custom_backend_by_id(&db, id).ok())
+                    .flatten()
+                    .map(|backend| (backend.url, backend.api_key))
+            } else if provider == "ollama" {
+                Some((
+                    "http://localhost:11434/v1/chat/completions".to_string(),
+                    None,
+                ))
+            } else {
+                None
+            };
 
-        let mut tool_execution_inputs: Vec<MessageToolExecutionInput> = Vec::new();
-        let mut call_llm = |messages: &[LlmMessage],
-                            system_prompt: Option<&str>,
-                            output_format: Option<Value>| {
+            let messages_for_usage = messages.clone();
+
+            let mut tool_execution_inputs: Vec<MessageToolExecutionInput> = Vec::new();
+            let mut call_llm = |messages: &[LlmMessage],
+                                system_prompt: Option<&str>,
+                                output_format: Option<Value>| {
             let prepared_messages = if provider == "anthropic" || provider == "claude_cli" {
                 messages.to_vec()
             } else {
@@ -581,12 +614,14 @@ pub fn agent_send_message(
 
         let mut final_response = draft.clone();
         let mut stream_started = false;
+        let mut cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
 
         let stream_supported = supports_streaming(&provider);
         let use_responder = controller_ok
             && stream_supported
             && !tool_execution_inputs.is_empty()
-            && !waiting_for_human_input;
+            && !waiting_for_human_input
+            && !cancelled;
 
         if use_responder {
             let responder_prompt = build_responder_prompt(
@@ -622,20 +657,26 @@ pub fn agent_send_message(
                 prepared
             };
 
-            let stream_timestamp = Utc::now().timestamp_millis();
-            bus.publish(AgentEvent::new_with_timestamp(
-                EVENT_ASSISTANT_STREAM_STARTED,
-                json!({
-                    "conversation_id": conversation_id_for_thread,
-                    "message_id": assistant_message_id_for_thread,
-                    "timestamp_ms": stream_timestamp
-                }),
-                stream_timestamp,
-            ));
-            stream_started = true;
+            if !cancel_token_for_thread.load(Ordering::Relaxed) {
+                let stream_timestamp = Utc::now().timestamp_millis();
+                bus.publish(AgentEvent::new_with_timestamp(
+                    EVENT_ASSISTANT_STREAM_STARTED,
+                    json!({
+                        "conversation_id": conversation_id_for_thread,
+                        "message_id": assistant_message_id_for_thread,
+                        "timestamp_ms": stream_timestamp
+                    }),
+                    stream_timestamp,
+                ));
+                stream_started = true;
+            }
 
             let mut streamed_text = String::new();
+            let cancel_token_for_chunks = cancel_token_for_thread.clone();
             let mut on_chunk = |chunk: &str| {
+                if cancel_token_for_chunks.load(Ordering::Relaxed) {
+                    return;
+                }
                 streamed_text.push_str(chunk);
                 let timestamp_ms = Utc::now().timestamp_millis();
                 bus.publish(AgentEvent::new_with_timestamp(
@@ -747,19 +788,26 @@ pub fn agent_send_message(
                 usage_accumulator.prompt_tokens += usage.prompt_tokens;
                 usage_accumulator.completion_tokens += usage.completion_tokens;
             }
+            cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
+            if cancelled {
+                final_response.clear();
+                tool_execution_inputs.clear();
+            }
         }
 
-        if !stream_started {
-            let stream_timestamp = Utc::now().timestamp_millis();
-            bus.publish(AgentEvent::new_with_timestamp(
-                EVENT_ASSISTANT_STREAM_STARTED,
-                json!({
-                    "conversation_id": conversation_id_for_thread,
-                    "message_id": assistant_message_id_for_thread,
-                    "timestamp_ms": stream_timestamp
-                }),
-                stream_timestamp,
-            ));
+        if !stream_started && !cancelled {
+            if !cancel_token_for_thread.load(Ordering::Relaxed) {
+                let stream_timestamp = Utc::now().timestamp_millis();
+                bus.publish(AgentEvent::new_with_timestamp(
+                    EVENT_ASSISTANT_STREAM_STARTED,
+                    json!({
+                        "conversation_id": conversation_id_for_thread,
+                        "message_id": assistant_message_id_for_thread,
+                        "timestamp_ms": stream_timestamp
+                    }),
+                    stream_timestamp,
+                ));
+            }
 
             if !final_response.is_empty() {
                 stream_response_chunks(
@@ -767,12 +815,19 @@ pub fn agent_send_message(
                     &conversation_id_for_thread,
                     &assistant_message_id_for_thread,
                     &final_response,
+                    &cancel_token_for_thread,
                 );
+            }
+            cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
+            if cancelled {
+                final_response.clear();
+                tool_execution_inputs.clear();
             }
         }
 
-        let should_persist_assistant_message =
-            !final_response.is_empty() || !tool_execution_inputs.is_empty();
+        let should_persist_assistant_message = !cancelled
+            && !cancel_token_for_thread.load(Ordering::Relaxed)
+            && (!final_response.is_empty() || !tool_execution_inputs.is_empty());
 
         if should_persist_assistant_message {
             let _ = MessageOperations::save_message(
@@ -844,7 +899,9 @@ pub fn agent_send_message(
                 })
             };
 
-        if let Some(usage) = usage {
+        if let Some(usage) =
+            usage.filter(|_| !cancelled && !cancel_token_for_thread.load(Ordering::Relaxed))
+        {
             let estimated_cost = calculate_estimated_cost(
                 &model_for_thread,
                 usage.prompt_tokens,
@@ -896,19 +953,40 @@ pub fn agent_send_message(
             }
         }
 
-        let timestamp_ms = Utc::now().timestamp_millis();
-        bus.publish(AgentEvent::new_with_timestamp(
-            EVENT_ASSISTANT_STREAM_COMPLETED,
-            json!({
-                "conversation_id": conversation_id_for_thread,
-                "message_id": assistant_message_id_for_thread,
-                "content": final_response,
-                "timestamp_ms": timestamp_ms
-            }),
-            timestamp_ms,
-        ));
+            let timestamp_ms = Utc::now().timestamp_millis();
+            bus.publish(AgentEvent::new_with_timestamp(
+                EVENT_ASSISTANT_STREAM_COMPLETED,
+                json!({
+                    "conversation_id": conversation_id_for_thread,
+                    "message_id": assistant_message_id_for_thread,
+                    "content": if cancelled { String::new() } else { final_response },
+                    "timestamp_ms": timestamp_ms
+                }),
+                timestamp_ms,
+            ));
 
-        remove_cancel_token(&assistant_message_id_for_thread);
+            remove_cancel_token(&assistant_message_id_for_thread);
+        }));
+
+        if worker_result.is_err() {
+            log::error!(
+                "[agent] worker panicked: conversation_id={} message_id={}",
+                panic_conversation_id,
+                panic_message_id
+            );
+            let timestamp_ms = Utc::now().timestamp_millis();
+            panic_bus.publish(AgentEvent::new_with_timestamp(
+                EVENT_ASSISTANT_STREAM_COMPLETED,
+                json!({
+                    "conversation_id": panic_conversation_id,
+                    "message_id": panic_message_id,
+                    "content": "Agent error: internal worker panic",
+                    "timestamp_ms": timestamp_ms
+                }),
+                timestamp_ms,
+            ));
+            remove_cancel_token(&panic_message_id);
+        }
     });
 
     Ok(AgentSendMessageResult {
@@ -977,7 +1055,7 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
         },
     ];
 
-    let client = Client::new();
+    let client = build_http_client();
     let mut title = match provider.as_str() {
         "openai" => {
             let api_key = ModelOperations::get_api_key(&db, "openai")

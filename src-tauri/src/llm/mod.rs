@@ -4,6 +4,8 @@ use serde_json::Value;
 use std::io::{BufRead, BufReader};
 use std::process::Command;
 
+const PROVIDER_ERROR_BODY_MAX_CHARS: usize = 2_000;
+
 #[derive(Clone, Debug)]
 pub struct Usage {
     pub prompt_tokens: i32,
@@ -19,6 +21,19 @@ pub struct StreamResult {
 pub struct LlmMessage {
     pub role: String,
     pub content: Value,
+}
+
+fn compact_error_body(body: String) -> String {
+    let normalized = body.trim().replace('\n', " ");
+    if normalized.chars().count() <= PROVIDER_ERROR_BODY_MAX_CHARS {
+        return normalized;
+    }
+
+    let truncated: String = normalized
+        .chars()
+        .take(PROVIDER_ERROR_BODY_MAX_CHARS)
+        .collect();
+    format!("{truncated}... [truncated]")
 }
 
 pub fn complete_openai(
@@ -54,7 +69,7 @@ pub fn complete_openai_compatible(
     let response = request.send().map_err(|e| e.to_string())?;
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let body = compact_error_body(response.text().unwrap_or_default());
         return Err(format!("Provider error: {status} - {body}"));
     }
 
@@ -103,7 +118,9 @@ pub fn complete_openai_compatible(
         "[llm] provider=openai_compatible model={} content_len={} usage={:?}",
         model,
         content.len(),
-        usage.as_ref().map(|u| (u.prompt_tokens, u.completion_tokens))
+        usage
+            .as_ref()
+            .map(|u| (u.prompt_tokens, u.completion_tokens))
     );
 
     Ok(StreamResult { content, usage })
@@ -159,7 +176,7 @@ where
     let response = request.send().map_err(|e| e.to_string())?;
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let body = compact_error_body(response.text().unwrap_or_default());
         return Err(format!("Provider error: {status} - {body}"));
     }
 
@@ -291,7 +308,7 @@ pub fn complete_anthropic_with_output_format(
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().unwrap_or_default();
+            let body = compact_error_body(response.text().unwrap_or_default());
             return Err(format!("Anthropic error: {status} - {body}"));
         }
 
@@ -340,7 +357,9 @@ pub fn complete_anthropic_with_output_format(
         "[llm] provider=anthropic model={} content_len={} usage={:?}",
         model,
         content.len(),
-        usage.as_ref().map(|u| (u.prompt_tokens, u.completion_tokens))
+        usage
+            .as_ref()
+            .map(|u| (u.prompt_tokens, u.completion_tokens))
     );
 
     Ok(StreamResult { content, usage })
@@ -383,7 +402,7 @@ where
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().unwrap_or_default();
+        let body = compact_error_body(response.text().unwrap_or_default());
         return Err(format!("Anthropic error: {status} - {body}"));
     }
 
@@ -559,7 +578,10 @@ pub fn complete_claude_cli(
     }
 
     let content = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(StreamResult { content, usage: None })
+    Ok(StreamResult {
+        content,
+        usage: None,
+    })
 }
 
 fn value_to_string(value: &Value) -> String {

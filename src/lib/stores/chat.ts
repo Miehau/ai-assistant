@@ -80,6 +80,8 @@ let streamingAssistantMessageId: string | null = null;
 let streamingChunkBuffer = '';
 let streamingFlushPending = false;
 let pendingAssistantMessageId: string | null = null;
+let requestWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+const cancelledAssistantMessageIds = new Set<string>();
 const TOOL_ACTIVITY_LIMIT = 8;
 const toolCallsByMessageId = new Map<string, Map<string, ToolCallRecord>>();
 
@@ -255,6 +257,39 @@ function flushStreamingChunks() {
   streamingFlushPending = false;
 }
 
+function clearRequestWatchdog() {
+  if (requestWatchdogTimer !== null) {
+    clearTimeout(requestWatchdogTimer);
+    requestWatchdogTimer = null;
+  }
+}
+
+function startRequestWatchdog(messageId: string) {
+  clearRequestWatchdog();
+  requestWatchdogTimer = setTimeout(() => {
+    const isStillPending =
+      pendingAssistantMessageId === messageId || streamingAssistantMessageId === messageId;
+    if (!isStillPending) {
+      return;
+    }
+
+    console.error('Agent request watchdog timeout for message:', messageId);
+    cancelledAssistantMessageIds.delete(messageId);
+    resetStreamingState();
+  }, 180_000);
+}
+
+function resetStreamingState() {
+  clearRequestWatchdog();
+  streamingAssistantMessageId = null;
+  pendingAssistantMessageId = null;
+  isStreaming.set(false);
+  streamingMessage.set('');
+  streamingChunkBuffer = '';
+  streamingFlushPending = false;
+  isLoading.set(false);
+}
+
 export async function startAgentEvents() {
   if (stopAgentEventBridge) return;
 
@@ -276,6 +311,9 @@ export async function startAgentEvents() {
   stopAgentEventBridge = await startAgentEventBridge((event: AgentEvent) => {
     if (event.event_type === AGENT_EVENT_TYPES.MESSAGE_SAVED) {
       const payload = event.payload as MessageSavedPayload;
+      if (payload.role !== 'user' && cancelledAssistantMessageIds.has(payload.message_id)) {
+        return;
+      }
       const currentConversation = conversationService.getCurrentConversation();
       if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
@@ -388,14 +426,11 @@ export async function startAgentEvents() {
       conversationService.applyConversationDeleted(payload.conversation_id);
       messages.set([]);
       isFirstMessage.set(true);
-      isStreaming.set(false);
-      streamingMessage.set('');
-      streamingAssistantMessageId = null;
-      pendingAssistantMessageId = null;
-      isLoading.set(false);
+      resetStreamingState();
       pendingToolApprovals.set([]);
       toolActivity.set([]);
       toolCallsByMessageId.clear();
+      cancelledAssistantMessageIds.clear();
       agentPhase.set(null);
       agentPlan.set(null);
       agentPlanSteps.set([]);
@@ -403,6 +438,9 @@ export async function startAgentEvents() {
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_STARTED) {
       const payload = event.payload as AssistantStreamStartedPayload;
+      if (cancelledAssistantMessageIds.has(payload.message_id)) {
+        return;
+      }
       const currentConversation = conversationService.getCurrentConversation();
       if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
@@ -416,12 +454,14 @@ export async function startAgentEvents() {
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_CHUNK) {
       const payload = event.payload as AssistantStreamChunkPayload;
-      const currentConversation = conversationService.getCurrentConversation();
-      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
+      if (cancelledAssistantMessageIds.has(payload.message_id)) {
         return;
       }
-
       if (streamingAssistantMessageId !== payload.message_id) {
+        return;
+      }
+      const currentConversation = conversationService.getCurrentConversation();
+      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
       }
 
@@ -439,12 +479,23 @@ export async function startAgentEvents() {
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_COMPLETED) {
       const payload = event.payload as AssistantStreamCompletedPayload;
-      const currentConversation = conversationService.getCurrentConversation();
-      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
+      const isCurrentMessage =
+        streamingAssistantMessageId === payload.message_id ||
+        pendingAssistantMessageId === payload.message_id;
+      if (!isCurrentMessage && !cancelledAssistantMessageIds.has(payload.message_id)) {
         return;
       }
 
-      if (streamingAssistantMessageId !== payload.message_id) {
+      if (cancelledAssistantMessageIds.has(payload.message_id)) {
+        cancelledAssistantMessageIds.delete(payload.message_id);
+        if (isCurrentMessage) {
+          resetStreamingState();
+        }
+        return;
+      }
+
+      const currentConversation = conversationService.getCurrentConversation();
+      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
       }
 
@@ -483,17 +534,14 @@ export async function startAgentEvents() {
         });
       }
 
-      streamingAssistantMessageId = null;
-      pendingAssistantMessageId = null;
-      isStreaming.set(false);
-      streamingMessage.set('');
-      streamingChunkBuffer = '';
-      streamingFlushPending = false;
-      isLoading.set(false);
+      resetStreamingState();
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_COMPLETED) {
       const payload = event.payload as ToolExecutionCompletedPayload;
+      if (payload.message_id && cancelledAssistantMessageIds.has(payload.message_id)) {
+        return;
+      }
       const currentConversation = conversationService.getCurrentConversation();
       if (payload.conversation_id && currentConversation?.id !== payload.conversation_id) {
         return;
@@ -546,6 +594,9 @@ export async function startAgentEvents() {
 
     if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED) {
       const payload = event.payload as ToolExecutionProposedPayload;
+      if (payload.message_id && cancelledAssistantMessageIds.has(payload.message_id)) {
+        return;
+      }
       const currentConversation = conversationService.getCurrentConversation();
       if (payload.conversation_id && currentConversation?.id !== payload.conversation_id) {
         return;
@@ -837,6 +888,8 @@ function generateMessageId(): string {
 }
 
 export async function sendMessage() {
+  if (get(isLoading)) return;
+
   // Get current values from stores using get() instead of subscribe
   const currentMessageValue = get(currentMessage);
   const attachmentsValue = [...get(attachments)];
@@ -893,7 +946,9 @@ export async function sendMessage() {
     // Generate assistant message ID before streaming
     const assistantMessageId = generateMessageId();
     const userMessageId = generateMessageId();
+    cancelledAssistantMessageIds.delete(assistantMessageId);
     pendingAssistantMessageId = assistantMessageId;
+    startRequestWatchdog(assistantMessageId);
 
     await invoke('agent_send_message', {
       payload: {
@@ -939,18 +994,14 @@ export async function cancelCurrentAgentRequest() {
     return;
   }
 
+  cancelledAssistantMessageIds.add(messageId);
+
   try {
     await invoke('agent_cancel', { message_id: messageId });
   } catch (error) {
     console.error('Failed to cancel agent request:', error);
   } finally {
-    streamingAssistantMessageId = null;
-    pendingAssistantMessageId = null;
-    isStreaming.set(false);
-    streamingMessage.set('');
-    streamingChunkBuffer = '';
-    streamingFlushPending = false;
-    isLoading.set(false);
+    resetStreamingState();
   }
 }
 
@@ -960,10 +1011,8 @@ export function clearConversation() {
   // Reset first message flag
   isFirstMessage.set(true);
   // Clear streaming state
-  isStreaming.set(false);
-  streamingMessage.set('');
-  streamingAssistantMessageId = null;
-  pendingAssistantMessageId = null;
+  resetStreamingState();
+  cancelledAssistantMessageIds.clear();
   pendingToolApprovals.set([]);
   toolActivity.set([]);
   toolCallsByMessageId.clear();
