@@ -41,6 +41,12 @@
     (isLoading || $isStreaming) &&
     !($isStreaming && $streamingMessage && $streamingMessage.length > 0);
 
+  function shouldRenderMessage(msg: Message): boolean {
+    if (msg.type === "sent") return true;
+    if (msg.content.trim().length > 0) return true;
+    return Boolean(msg.attachments && msg.attachments.length > 0);
+  }
+
   let lastScrollHeight = 0;
   let lastScrollTop = 0;
   let scrollTimeout: NodeJS.Timeout | null = null;
@@ -289,32 +295,34 @@
         {/if}
       {/each}
     {/if}
-    {#if i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
-      <div
-        in:fly={{ y: 10, duration: 150, easing: backOut }}
-        out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
-        class="w-full message-container"
-      >
-        <ChatMessage
-          type={msg.type}
-          content={msg.content}
-          attachments={msg.attachments}
-          messageId={msg.id}
-          conversationId={conversationId}
-          agentActivity={msg.agentActivity}
-        />
-      </div>
-    {:else}
-      <div class="w-full message-container">
-        <ChatMessage
-          type={msg.type}
-          content={msg.content}
-          attachments={msg.attachments}
-          messageId={msg.id}
-          conversationId={conversationId}
-          agentActivity={msg.agentActivity}
-        />
-      </div>
+    {#if shouldRenderMessage(msg)}
+      {#if i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
+        <div
+          in:fly={{ y: 10, duration: 150, easing: backOut }}
+          out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
+          class="w-full message-container"
+        >
+          <ChatMessage
+            type={msg.type}
+            content={msg.content}
+            attachments={msg.attachments}
+            messageId={msg.id}
+            conversationId={conversationId}
+            agentActivity={msg.agentActivity}
+          />
+        </div>
+      {:else}
+        <div class="w-full message-container">
+          <ChatMessage
+            type={msg.type}
+            content={msg.content}
+            attachments={msg.attachments}
+            messageId={msg.id}
+            conversationId={conversationId}
+            agentActivity={msg.agentActivity}
+          />
+        </div>
+      {/if}
     {/if}
   {/each}
 

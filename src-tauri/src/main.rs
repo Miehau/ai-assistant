@@ -1,16 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod db;
-mod commands;
-mod setup_default_values;
-mod files;
-mod events;
-mod integrations;
-mod oauth;
-mod llm;
-mod tools;
 mod agent;
+mod commands;
+mod db;
+mod events;
+mod files;
+mod integrations;
+mod llm;
+mod oauth;
+mod setup_default_values;
 mod tool_outputs;
+mod tools;
 
 use db::Db;
 use events::EventBus;
@@ -30,14 +30,18 @@ fn main() {
     init_logging();
     tauri::Builder::default()
         .setup(|app| {
-            let app_dir = app.path_resolver().app_data_dir().expect("Failed to get app data dir");
+            let app_dir = app
+                .path_resolver()
+                .app_data_dir()
+                .expect("Failed to get app data dir");
             fs::create_dir_all(&app_dir).expect("Failed to create app directory");
             let db_path = app_dir.join("app.db");
             let mut db = Db::new(db_path.to_str().unwrap()).expect("Failed to create database");
-            db.run_migrations().expect("Failed to run database migrations");
-            
+            db.run_migrations()
+                .expect("Failed to run database migrations");
+
             setup_default_values::initialize(&mut db).expect("Failed to initialize default values");
-            
+
             // Initialize the file manager
             let file_manager = FileManager::new().expect("Failed to create file manager");
 
@@ -50,7 +54,7 @@ fn main() {
                     let _ = app_handle.emit_all("agent_event", event);
                 }
             });
-            
+
             let mut tool_registry = tools::ToolRegistry::new();
             tools::register_file_tools(&mut tool_registry, db.clone())
                 .expect("Failed to register file tools");
@@ -176,6 +180,7 @@ fn main() {
             commands::check_ollama_status,
             // Tool approval commands
             commands::resolve_tool_execution_approval,
+            commands::list_pending_tool_approvals,
             commands::list_tools,
             commands::set_tool_approval_override,
         ])

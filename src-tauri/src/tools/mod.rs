@@ -5,27 +5,26 @@ use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
 use uuid::Uuid;
 
+mod approvals;
 mod files;
+mod integrations;
 mod prefs;
 mod search;
+mod tool_outputs;
 mod vault;
 mod web;
-mod integrations;
-mod tool_outputs;
-mod approvals;
 
+pub use approvals::{
+    get_conversation_tool_approval_override, get_tool_approval_override,
+    load_conversation_tool_approval_overrides, load_tool_approval_overrides,
+    set_conversation_tool_approval_override, set_tool_approval_override,
+};
 pub use files::register_file_tools;
+pub use integrations::register_integration_tools;
 pub use prefs::register_pref_tools;
 pub use search::register_search_tool;
-pub use web::register_web_tools;
-pub use integrations::register_integration_tools;
 pub use tool_outputs::register_tool_output_tools;
-pub use approvals::{
-    get_tool_approval_override,
-    load_tool_approval_overrides,
-    set_tool_approval_override,
-    PREF_TOOL_APPROVAL_OVERRIDES,
-};
+pub use web::register_web_tools;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolMetadata {
@@ -43,7 +42,8 @@ pub struct ToolDefinition {
     pub preview: Option<Arc<ToolPreviewHandler>>,
 }
 
-pub type ToolHandler = dyn Fn(Value, ToolExecutionContext) -> Result<Value, ToolError> + Send + Sync;
+pub type ToolHandler =
+    dyn Fn(Value, ToolExecutionContext) -> Result<Value, ToolError> + Send + Sync;
 pub type ToolPreviewHandler =
     dyn Fn(Value, ToolExecutionContext) -> Result<Value, ToolError> + Send + Sync;
 
@@ -89,7 +89,10 @@ impl ToolRegistry {
     }
 
     pub fn list_metadata(&self) -> Vec<ToolMetadata> {
-        self.tools.values().map(|tool| tool.metadata.clone()).collect()
+        self.tools
+            .values()
+            .map(|tool| tool.metadata.clone())
+            .collect()
     }
 
     pub fn prompt_json(&self) -> Value {
@@ -112,13 +115,43 @@ impl ToolRegistry {
 
 #[derive(Clone)]
 pub struct ApprovalStore {
-    pending: Arc<Mutex<HashMap<String, mpsc::Sender<ToolApprovalDecision>>>>,
+    pending: Arc<Mutex<HashMap<String, PendingApprovalEntry>>>,
 }
 
 #[derive(Clone, Debug)]
 pub enum ToolApprovalDecision {
     Approved,
     Denied,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PendingToolApproval {
+    pub approval_id: String,
+    pub execution_id: String,
+    pub tool_name: String,
+    pub args: Value,
+    pub preview: Option<Value>,
+    pub iteration: u32,
+    pub conversation_id: Option<String>,
+    pub message_id: Option<String>,
+    pub timestamp_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingToolApprovalInput {
+    pub execution_id: String,
+    pub tool_name: String,
+    pub args: Value,
+    pub preview: Option<Value>,
+    pub iteration: u32,
+    pub conversation_id: Option<String>,
+    pub message_id: Option<String>,
+    pub timestamp_ms: i64,
+}
+
+struct PendingApprovalEntry {
+    sender: mpsc::Sender<ToolApprovalDecision>,
+    request: PendingToolApproval,
 }
 
 impl ApprovalStore {
@@ -128,18 +161,38 @@ impl ApprovalStore {
         }
     }
 
-    pub fn create_request(&self) -> (String, mpsc::Receiver<ToolApprovalDecision>) {
+    pub fn create_request(
+        &self,
+        input: PendingToolApprovalInput,
+    ) -> (String, mpsc::Receiver<ToolApprovalDecision>) {
         let (tx, rx) = mpsc::channel();
         let approval_id = Uuid::new_v4().to_string();
+        let request = PendingToolApproval {
+            approval_id: approval_id.clone(),
+            execution_id: input.execution_id,
+            tool_name: input.tool_name,
+            args: input.args,
+            preview: input.preview,
+            iteration: input.iteration,
+            conversation_id: input.conversation_id,
+            message_id: input.message_id,
+            timestamp_ms: input.timestamp_ms,
+        };
         let mut pending = self.pending.lock().unwrap();
-        pending.insert(approval_id.clone(), tx);
+        pending.insert(
+            approval_id.clone(),
+            PendingApprovalEntry {
+                sender: tx,
+                request,
+            },
+        );
         (approval_id, rx)
     }
 
     pub fn resolve(&self, approval_id: &str, approved: bool) -> Result<(), String> {
         let sender = {
             let mut pending = self.pending.lock().unwrap();
-            pending.remove(approval_id)
+            pending.remove(approval_id).map(|entry| entry.sender)
         };
 
         let sender = sender.ok_or_else(|| format!("Unknown approval id: {approval_id}"))?;
@@ -164,6 +217,19 @@ impl ApprovalStore {
             Err(format!("Unknown approval id: {approval_id}"))
         }
     }
+
+    pub fn list_pending(&self) -> Vec<PendingToolApproval> {
+        let pending = self.pending.lock().unwrap();
+        pending
+            .values()
+            .map(|entry| entry.request.clone())
+            .collect()
+    }
+
+    pub fn get_pending(&self, approval_id: &str) -> Option<PendingToolApproval> {
+        let pending = self.pending.lock().unwrap();
+        pending.get(approval_id).map(|entry| entry.request.clone())
+    }
 }
 
 #[cfg(test)]
@@ -184,7 +250,11 @@ mod tests {
         db
     }
 
-    fn call_tool(registry: &ToolRegistry, name: &str, args: serde_json::Value) -> serde_json::Value {
+    fn call_tool(
+        registry: &ToolRegistry,
+        name: &str,
+        args: serde_json::Value,
+    ) -> serde_json::Value {
         let tool = registry.get(name).expect("missing tool");
         let ctx = ToolExecutionContext;
         (tool.handler)(args, ctx).expect("tool execution failed")
@@ -217,11 +287,7 @@ mod tests {
             }),
         );
 
-        let read = call_tool(
-            &registry,
-            "files.read",
-            json!({ "path": "notes/test.md" }),
-        );
+        let read = call_tool(&registry, "files.read", json!({ "path": "notes/test.md" }));
         assert!(read
             .get("content")
             .and_then(|v| v.as_str())
@@ -248,11 +314,7 @@ mod tests {
             }),
         );
 
-        let read_updated = call_tool(
-            &registry,
-            "files.read",
-            json!({ "path": "notes/test.md" }),
-        );
+        let read_updated = call_tool(&registry, "files.read", json!({ "path": "notes/test.md" }));
         let updated_content = read_updated
             .get("content")
             .and_then(|v| v.as_str())

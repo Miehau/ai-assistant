@@ -41,6 +41,10 @@ import type {
 } from '$lib/types/customBackend';
 import type { Attachment, FileMetadata } from '$lib/types/attachments';
 import type { ToolMetadata } from '$lib/types/tools';
+import type {
+  ToolExecutionApprovalScope,
+  ToolExecutionProposedPayload
+} from '$lib/types/events';
 
 interface CacheEntry<T> {
   data: T;
@@ -424,6 +428,22 @@ class BackendClient {
 
   async listTools(): Promise<ToolMetadata[]> {
     return invoke('list_tools', {});
+  }
+
+  async listPendingToolApprovals(): Promise<ToolExecutionProposedPayload[]> {
+    return invoke('list_pending_tool_approvals', {});
+  }
+
+  async resolveToolExecutionApproval(
+    approvalId: string,
+    approved: boolean,
+    scope?: ToolExecutionApprovalScope
+  ): Promise<void> {
+    return invoke('resolve_tool_execution_approval', {
+      approval_id: approvalId,
+      approved,
+      scope
+    });
   }
 
   async setToolApprovalOverride(

@@ -29,7 +29,21 @@ export interface MessageSavedPayload {
   role: 'user' | 'assistant';
   content: string;
   attachments: EventAttachment[];
+  tool_executions?: EventToolExecution[];
   timestamp_ms: number;
+}
+
+export interface EventToolExecution {
+  id: string;
+  message_id: string;
+  tool_name: string;
+  parameters: Record<string, unknown>;
+  result: unknown;
+  success: boolean;
+  duration_ms: number;
+  timestamp_ms: number;
+  error?: string | null;
+  iteration_number: number;
 }
 
 export type AgentEventPayloadMap = {
@@ -138,11 +152,14 @@ export interface ToolExecutionProposedPayload {
   timestamp_ms: number;
 }
 
+export type ToolExecutionApprovalScope = 'once' | 'conversation' | 'always';
+
 export interface ToolExecutionDecisionPayload {
   execution_id: string;
   approval_id: string;
   tool_name: string;
   iteration: number;
+  scope?: ToolExecutionApprovalScope;
   conversation_id?: string;
   message_id?: string;
   timestamp_ms: number;

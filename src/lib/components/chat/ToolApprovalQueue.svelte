@@ -1,10 +1,21 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button";
-  import type { ToolExecutionProposedPayload } from "$lib/types/events";
+  import type {
+    ToolExecutionApprovalScope,
+    ToolExecutionProposedPayload
+  } from "$lib/types/events";
   import { resolveToolApproval } from "$lib/stores/chat";
 
   export let approvals: ToolExecutionProposedPayload[] = [];
   export let containerClass = "";
+
+  function approve(approvalId: string, scope: ToolExecutionApprovalScope) {
+    resolveToolApproval(approvalId, true, scope);
+  }
+
+  function deny(approvalId: string) {
+    resolveToolApproval(approvalId, false);
+  }
 
   function formatPreview(preview: ToolExecutionProposedPayload["preview"]): string {
     if (!preview) return "";
@@ -82,14 +93,28 @@
             <div class="flex items-center gap-2">
               <Button
                 size="sm"
-                onclick={() => resolveToolApproval(approval.approval_id, true)}
+                onclick={() => approve(approval.approval_id, "once")}
               >
-                Approve
+                Approve once (recommended)
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onclick={() => resolveToolApproval(approval.approval_id, false)}
+                onclick={() => approve(approval.approval_id, "conversation")}
+              >
+                Approve for this conversation
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={() => approve(approval.approval_id, "always")}
+              >
+                Always approve this tool
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={() => deny(approval.approval_id)}
               >
                 Deny
               </Button>

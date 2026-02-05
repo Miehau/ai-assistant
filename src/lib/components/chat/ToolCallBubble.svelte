@@ -19,7 +19,7 @@
   }
 
   function toolStatusLabel(): string {
-    if (call.success === true) return "success";
+    if (call.success === true) return "executed";
     if (call.success === false) return "failed";
     return "running";
   }

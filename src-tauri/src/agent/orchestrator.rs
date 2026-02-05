@@ -1,43 +1,22 @@
 use crate::agent::prompts::CONTROLLER_PROMPT;
 use crate::db::{
-    AgentConfig,
-    AgentSession,
-    AgentSessionOperations,
-    MessageToolExecutionInput,
-    PhaseKind,
-    Plan,
-    PlanStep,
-    StepAction,
-    StepResult,
-    StepStatus,
-    ToolExecutionRecord,
+    AgentConfig, AgentSession, AgentSessionOperations, MessageToolExecutionInput, PhaseKind, Plan,
+    PlanStep, ResumeTarget, StepAction, StepResult, StepStatus, ToolExecutionRecord,
 };
 use crate::events::{
-    AgentEvent,
-    EventBus,
-    EVENT_AGENT_COMPLETED,
-    EVENT_AGENT_PHASE_CHANGED,
-    EVENT_AGENT_PLAN_ADJUSTED,
-    EVENT_AGENT_PLAN_CREATED,
-    EVENT_AGENT_STEP_COMPLETED,
-    EVENT_AGENT_STEP_PROPOSED,
-    EVENT_AGENT_STEP_STARTED,
-    EVENT_TOOL_EXECUTION_APPROVED,
-    EVENT_TOOL_EXECUTION_COMPLETED,
-    EVENT_TOOL_EXECUTION_DENIED,
-    EVENT_TOOL_EXECUTION_PROPOSED,
+    AgentEvent, EventBus, EVENT_AGENT_COMPLETED, EVENT_AGENT_PHASE_CHANGED,
+    EVENT_AGENT_PLAN_ADJUSTED, EVENT_AGENT_PLAN_CREATED, EVENT_AGENT_STEP_COMPLETED,
+    EVENT_AGENT_STEP_PROPOSED, EVENT_AGENT_STEP_STARTED, EVENT_TOOL_EXECUTION_APPROVED,
+    EVENT_TOOL_EXECUTION_COMPLETED, EVENT_TOOL_EXECUTION_DENIED, EVENT_TOOL_EXECUTION_PROPOSED,
     EVENT_TOOL_EXECUTION_STARTED,
 };
 use crate::llm::{json_schema_output_format, LlmMessage, StreamResult};
-use crate::tools::{
-    get_tool_approval_override,
-    load_tool_approval_overrides,
-    ApprovalStore,
-    ToolApprovalDecision,
-    ToolExecutionContext,
-    ToolRegistry,
-};
 use crate::tool_outputs::{store_tool_output, ToolOutputRecord};
+use crate::tools::{
+    get_conversation_tool_approval_override, get_tool_approval_override,
+    load_conversation_tool_approval_overrides, load_tool_approval_overrides, ApprovalStore,
+    PendingToolApprovalInput, ToolApprovalDecision, ToolExecutionContext, ToolRegistry,
+};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -58,7 +37,7 @@ pub struct DynamicController {
     assistant_message_id: String,
     pending_tool_executions: Vec<MessageToolExecutionInput>,
     last_step_result: Option<StepResult>,
-    tool_calls_made: u32,
+    tool_calls_in_current_step: u32,
 }
 
 impl DynamicController {
@@ -90,8 +69,7 @@ impl DynamicController {
             completed_at: None,
         };
 
-        AgentSessionOperations::save_agent_session(&db, &session)
-            .map_err(|e| e.to_string())?;
+        AgentSessionOperations::save_agent_session(&db, &session).map_err(|e| e.to_string())?;
 
         Ok(Self {
             db,
@@ -105,8 +83,36 @@ impl DynamicController {
             assistant_message_id,
             pending_tool_executions: Vec::new(),
             last_step_result: None,
-            tool_calls_made: 0,
+            tool_calls_in_current_step: 0,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_session(
+        db: crate::db::Db,
+        event_bus: EventBus,
+        tool_registry: ToolRegistry,
+        approvals: ApprovalStore,
+        cancel_flag: Arc<AtomicBool>,
+        session: AgentSession,
+        messages: Vec<LlmMessage>,
+        base_system_prompt: Option<String>,
+        assistant_message_id: String,
+    ) -> Self {
+        Self {
+            db,
+            event_bus,
+            tool_registry,
+            approvals,
+            cancel_flag,
+            session,
+            messages,
+            base_system_prompt,
+            assistant_message_id,
+            pending_tool_executions: Vec::new(),
+            last_step_result: None,
+            tool_calls_in_current_step: 0,
+        }
     }
 
     pub fn run<F>(&mut self, user_message: &str, call_llm: &mut F) -> Result<String, String>
@@ -124,13 +130,20 @@ impl DynamicController {
                 return Err("Exceeded maximum LLM turns".to_string());
             }
             turns += 1;
+            self.tool_calls_in_current_step = 0;
 
             let decision = self.call_controller(call_llm, user_message, turns)?;
             match decision {
                 ControllerAction::NextStep { step } => {
                     self.ensure_plan(user_message)?;
-                    if let Some(response) = self.execute_step(call_llm, step)? {
-                        return self.finish(response);
+                    match self.execute_step(call_llm, step)? {
+                        StepExecutionOutcome::Continue => {}
+                        StepExecutionOutcome::Complete(response) => {
+                            return self.finish(response);
+                        }
+                        StepExecutionOutcome::NeedsHumanInput(question) => {
+                            return Ok(question);
+                        }
                     }
                 }
                 ControllerAction::Complete { message } => {
@@ -144,13 +157,29 @@ impl DynamicController {
                     })?;
                     return Err(detail);
                 }
+                ControllerAction::AskUser {
+                    question,
+                    context,
+                    resume_to,
+                } => {
+                    self.set_phase(PhaseKind::NeedsHumanInput {
+                        question: question.clone(),
+                        context,
+                        resume_to,
+                    })?;
+                    return Ok(question);
+                }
             }
         }
     }
 
     fn finish(&mut self, response: String) -> Result<String, String> {
-        AgentSessionOperations::update_agent_session_completed(&self.db, &self.session.id, &response)
-            .map_err(|e| e.to_string())?;
+        AgentSessionOperations::update_agent_session_completed(
+            &self.db,
+            &self.session.id,
+            &response,
+        )
+        .map_err(|e| e.to_string())?;
         self.event_bus.publish(AgentEvent::new_with_timestamp(
             EVENT_AGENT_COMPLETED,
             json!({
@@ -196,10 +225,11 @@ impl DynamicController {
         &mut self,
         call_llm: &mut F,
         step: ControllerStep,
-    ) -> Result<Option<String>, String>
+    ) -> Result<StepExecutionOutcome, String>
     where
         F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
+        self.tool_calls_in_current_step = 0;
         let plan = self.session.plan.as_mut().ok_or("Missing plan")?;
         let step_id = format!("step-{}", Uuid::new_v4());
         let sequence = plan.steps.len();
@@ -214,6 +244,9 @@ impl DynamicController {
             },
             ControllerStep::Think { description } => StepAction::Think {
                 prompt: description.clone(),
+            },
+            ControllerStep::AskUser { question, .. } => StepAction::AskUser {
+                question: question.clone(),
             },
         };
 
@@ -280,6 +313,17 @@ impl DynamicController {
 
         let respond_message = match &step {
             ControllerStep::Respond { message, .. } => Some(message.clone()),
+            ControllerStep::AskUser { question, .. } => Some(question.clone()),
+            _ => None,
+        };
+        let is_respond = matches!(&step, ControllerStep::Respond { .. });
+        let ask_user_payload = match &step {
+            ControllerStep::AskUser {
+                question,
+                context,
+                resume_to,
+                ..
+            } => Some((question.clone(), context.clone(), resume_to.clone())),
             _ => None,
         };
 
@@ -287,17 +331,15 @@ impl DynamicController {
             ControllerStep::Tool { tool, args, .. } => {
                 self.execute_tool(&step_id, &tool, normalize_tool_args(args))?
             }
-            ControllerStep::Respond { message, .. } => {
-                StepResult {
-                    step_id: step_id.clone(),
-                    success: true,
-                    output: Some(json!({ "message": message })),
-                    error: None,
-                    tool_executions: Vec::new(),
-                    duration_ms: 0,
-                    completed_at: Utc::now(),
-                }
-            }
+            ControllerStep::Respond { message, .. } => StepResult {
+                step_id: step_id.clone(),
+                success: true,
+                output: Some(json!({ "message": message })),
+                error: None,
+                tool_executions: Vec::new(),
+                duration_ms: 0,
+                completed_at: Utc::now(),
+            },
             ControllerStep::Think { description } => {
                 let output = self.call_think(call_llm, &description)?;
                 StepResult {
@@ -310,6 +352,15 @@ impl DynamicController {
                     completed_at: Utc::now(),
                 }
             }
+            ControllerStep::AskUser { question, .. } => StepResult {
+                step_id: step_id.clone(),
+                success: true,
+                output: Some(json!({ "question": question })),
+                error: None,
+                tool_executions: Vec::new(),
+                duration_ms: 0,
+                completed_at: Utc::now(),
+            },
         };
 
         let status = if result.success {
@@ -327,8 +378,7 @@ impl DynamicController {
             step.result = Some(result.clone());
         }
         self.update_step_status(&step_id, status.clone())?;
-        AgentSessionOperations::save_step_result(&self.db, &result)
-            .map_err(|e| e.to_string())?;
+        AgentSessionOperations::save_step_result(&self.db, &result).map_err(|e| e.to_string())?;
 
         self.event_bus.publish(AgentEvent::new_with_timestamp(
             EVENT_AGENT_STEP_COMPLETED,
@@ -345,21 +395,40 @@ impl DynamicController {
         let result_error = result.error.clone();
         self.last_step_result = Some(result.clone());
         self.session.step_results.push(result);
-        self.set_phase(PhaseKind::Controller)?;
+        if ask_user_payload.is_none() {
+            self.set_phase(PhaseKind::Controller)?;
+        }
 
         if let Some(error) = result_error.as_deref() {
             if error == "Tool execution denied by approval"
                 || error == "Tool approval timed out"
                 || error == "Tool execution cancelled"
             {
-                return Ok(Some(
+                return Ok(StepExecutionOutcome::Complete(
                     "Okay, stopping since the tool request wasn't approved. Let me know how you'd like to continue."
                         .to_string(),
                 ));
             }
         }
 
-        Ok(respond_message)
+        if let Some((question, context, resume_to)) = ask_user_payload {
+            self.set_phase(PhaseKind::NeedsHumanInput {
+                question: question.clone(),
+                context,
+                resume_to,
+            })?;
+            return Ok(StepExecutionOutcome::NeedsHumanInput(
+                respond_message.unwrap_or(question),
+            ));
+        }
+
+        if is_respond {
+            return Ok(StepExecutionOutcome::Complete(
+                respond_message.unwrap_or_default(),
+            ));
+        }
+
+        Ok(StepExecutionOutcome::Continue)
     }
 
     fn execute_tool(
@@ -368,9 +437,14 @@ impl DynamicController {
         tool_name: &str,
         args: Value,
     ) -> Result<StepResult, String> {
-        if self.tool_calls_made >= self.session.config.max_tool_calls_per_step {
+        if self.tool_calls_in_current_step >= self.session.config.max_tool_calls_per_step {
             return Err("Exceeded tool call limit".to_string());
         }
+        let iteration = self.tool_calls_in_current_step + 1;
+        self.set_phase(PhaseKind::Executing {
+            step_id: step_id.to_string(),
+            tool_iteration: iteration,
+        })?;
 
         let tool = self
             .tool_registry
@@ -382,12 +456,27 @@ impl DynamicController {
 
         let execution_id = Uuid::new_v4().to_string();
         let mut tool_executions = Vec::new();
-        let requires_approval = match get_tool_approval_override(&self.db, tool_name) {
+        let requires_approval = match get_conversation_tool_approval_override(
+            &self.db,
+            &self.session.conversation_id,
+            tool_name,
+        ) {
             Ok(Some(value)) => value,
-            Ok(None) => tool.metadata.requires_approval,
+            Ok(None) => match get_tool_approval_override(&self.db, tool_name) {
+                Ok(Some(value)) => value,
+                Ok(None) => tool.metadata.requires_approval,
+                Err(err) => {
+                    log::warn!(
+                        "Failed to load global tool approval override for {}: {}",
+                        tool_name,
+                        err
+                    );
+                    tool.metadata.requires_approval
+                }
+            },
             Err(err) => {
                 log::warn!(
-                    "Failed to load tool approval override for {}: {}",
+                    "Failed to load conversation tool approval override for {}: {}",
                     tool_name,
                     err
                 );
@@ -397,22 +486,33 @@ impl DynamicController {
 
         if requires_approval {
             let preview = match tool.preview.as_ref() {
-                Some(preview_fn) => Some(preview_fn(args.clone(), ToolExecutionContext)
-                    .map_err(|err| err.message)?),
+                Some(preview_fn) => Some(
+                    preview_fn(args.clone(), ToolExecutionContext).map_err(|err| err.message)?,
+                ),
                 None => None,
             };
-            let (approval_id, approval_rx) = self.approvals.create_request();
+            let timestamp_ms = Utc::now().timestamp_millis();
+            let (approval_id, approval_rx) =
+                self.approvals.create_request(PendingToolApprovalInput {
+                    execution_id: execution_id.clone(),
+                    tool_name: tool_name.to_string(),
+                    args: args.clone(),
+                    preview: preview.clone(),
+                    iteration,
+                    conversation_id: Some(self.session.conversation_id.clone()),
+                    message_id: Some(self.assistant_message_id.clone()),
+                    timestamp_ms,
+                });
             log::info!(
                 "[tool] approval requested: tool={} execution_id={} approval_id={} iteration={} session_id={} conversation_id={} message_id={}",
                 tool_name,
                 execution_id,
                 approval_id,
-                self.tool_calls_made + 1,
+                iteration,
                 self.session.id,
                 self.session.conversation_id,
                 self.assistant_message_id
             );
-            let timestamp_ms = Utc::now().timestamp_millis();
             self.event_bus.publish(AgentEvent::new_with_timestamp(
                 EVENT_TOOL_EXECUTION_PROPOSED,
                 json!({
@@ -421,7 +521,7 @@ impl DynamicController {
                     "tool_name": tool_name,
                     "args": args.clone(),
                     "preview": preview,
-                    "iteration": self.tool_calls_made + 1,
+                    "iteration": iteration,
                     "conversation_id": self.session.conversation_id,
                     "message_id": self.assistant_message_id,
                     "timestamp_ms": timestamp_ms,
@@ -461,7 +561,7 @@ impl DynamicController {
                         tool_name,
                         execution_id,
                         approval_id,
-                        self.tool_calls_made + 1,
+                        iteration,
                         self.session.id,
                         self.session.conversation_id,
                         self.assistant_message_id
@@ -472,7 +572,7 @@ impl DynamicController {
                             "execution_id": execution_id.clone(),
                             "approval_id": approval_id,
                             "tool_name": tool_name,
-                            "iteration": self.tool_calls_made + 1,
+                            "iteration": iteration,
                             "conversation_id": self.session.conversation_id,
                             "message_id": self.assistant_message_id,
                             "timestamp_ms": timestamp_ms,
@@ -489,7 +589,7 @@ impl DynamicController {
                         tool_name,
                         execution_id,
                         approval_id,
-                        self.tool_calls_made + 1,
+                        iteration,
                         self.session.id,
                         self.session.conversation_id,
                         self.assistant_message_id
@@ -500,7 +600,7 @@ impl DynamicController {
                             "execution_id": execution_id,
                             "approval_id": approval_id,
                             "tool_name": tool_name,
-                            "iteration": self.tool_calls_made + 1,
+                            "iteration": iteration,
                             "conversation_id": self.session.conversation_id,
                             "message_id": self.assistant_message_id,
                             "timestamp_ms": timestamp_ms,
@@ -515,21 +615,22 @@ impl DynamicController {
                         success: false,
                         error: Some(denied_error.clone()),
                         duration_ms: 0,
-                        iteration: (self.tool_calls_made + 1) as usize,
+                        iteration: iteration as usize,
                         timestamp_ms,
                     });
-                    self.pending_tool_executions.push(MessageToolExecutionInput {
-                        id: execution_id,
-                        message_id: self.assistant_message_id.clone(),
-                        tool_name: tool_name.to_string(),
-                        parameters: args,
-                        result: json!(null),
-                        success: false,
-                        duration_ms: 0,
-                        timestamp_ms,
-                        error: Some(denied_error.clone()),
-                        iteration_number: (self.tool_calls_made + 1) as i64,
-                    });
+                    self.pending_tool_executions
+                        .push(MessageToolExecutionInput {
+                            id: execution_id,
+                            message_id: self.assistant_message_id.clone(),
+                            tool_name: tool_name.to_string(),
+                            parameters: args,
+                            result: json!(null),
+                            success: false,
+                            duration_ms: 0,
+                            timestamp_ms,
+                            error: Some(denied_error.clone()),
+                            iteration_number: iteration as i64,
+                        });
                     return Ok(StepResult {
                         step_id: step_id.to_string(),
                         success: false,
@@ -547,37 +648,37 @@ impl DynamicController {
             return Err("Cancelled".to_string());
         }
 
-        self.tool_calls_made += 1;
+        self.tool_calls_in_current_step += 1;
         let args_summary = summarize_tool_args(&args, 500);
-            log::info!(
-                "[tool] execution started: tool={} execution_id={} requires_approval={} iteration={} session_id={} conversation_id={} message_id={} args={}",
-                tool_name,
-                execution_id,
-                requires_approval,
-                self.tool_calls_made,
-                self.session.id,
-                self.session.conversation_id,
-                self.assistant_message_id,
-                args_summary
+        log::info!(
+            "[tool] execution started: tool={} execution_id={} requires_approval={} iteration={} session_id={} conversation_id={} message_id={} args={}",
+            tool_name,
+            execution_id,
+            requires_approval,
+            self.tool_calls_in_current_step,
+            self.session.id,
+            self.session.conversation_id,
+            self.assistant_message_id,
+            args_summary
         );
         let timestamp_ms = Utc::now().timestamp_millis();
         self.event_bus.publish(AgentEvent::new_with_timestamp(
             EVENT_TOOL_EXECUTION_STARTED,
             json!({
                 "execution_id": execution_id.clone(),
-                    "tool_name": tool_name,
-                    "args": args.clone(),
-                    "requires_approval": requires_approval,
-                    "iteration": self.tool_calls_made,
-                    "conversation_id": self.session.conversation_id,
-                    "message_id": self.assistant_message_id,
-                    "timestamp_ms": timestamp_ms,
-                }),
+                "tool_name": tool_name,
+                "args": args.clone(),
+                "requires_approval": requires_approval,
+                "iteration": self.tool_calls_in_current_step,
+                "conversation_id": self.session.conversation_id,
+                "message_id": self.assistant_message_id,
+                "timestamp_ms": timestamp_ms,
+            }),
             timestamp_ms,
         ));
 
         let start = Instant::now();
-        let result = (tool.handler)(args.clone(), ToolExecutionContext);
+        let result = self.execute_tool_with_timeout(tool, args.clone());
         let duration_ms = start.elapsed().as_millis() as i64;
         let completed_at = Utc::now();
         let timestamp_ms = completed_at.timestamp_millis();
@@ -619,8 +720,7 @@ impl DynamicController {
                     }
                 }
             }
-            Err(err) => {
-                let error_message = err.message.clone();
+            Err(error_message) => {
                 let message = json!({
                     "message": error_message,
                     "success": false
@@ -648,7 +748,7 @@ impl DynamicController {
                     "result": result_for_event,
                     "success": true,
                     "duration_ms": duration_ms,
-                    "iteration": self.tool_calls_made,
+                    "iteration": self.tool_calls_in_current_step,
                     "conversation_id": self.session.conversation_id,
                     "message_id": self.assistant_message_id,
                     "timestamp_ms": timestamp_ms,
@@ -677,7 +777,7 @@ impl DynamicController {
                     "success": false,
                     "error": error_message,
                     "duration_ms": duration_ms,
-                    "iteration": self.tool_calls_made,
+                    "iteration": self.tool_calls_in_current_step,
                     "conversation_id": self.session.conversation_id,
                     "message_id": self.assistant_message_id,
                     "timestamp_ms": timestamp_ms,
@@ -694,22 +794,23 @@ impl DynamicController {
             success,
             error: error.clone(),
             duration_ms,
-            iteration: self.tool_calls_made as usize,
+            iteration: self.tool_calls_in_current_step as usize,
             timestamp_ms,
         });
 
-        self.pending_tool_executions.push(MessageToolExecutionInput {
-            id: execution_id,
-            message_id: self.assistant_message_id.clone(),
-            tool_name: tool_name.to_string(),
-            parameters: args,
-            result: output.clone().unwrap_or_else(|| json!(null)),
-            success,
-            duration_ms,
-            timestamp_ms,
-            error: error.clone(),
-            iteration_number: self.tool_calls_made as i64,
-        });
+        self.pending_tool_executions
+            .push(MessageToolExecutionInput {
+                id: execution_id,
+                message_id: self.assistant_message_id.clone(),
+                tool_name: tool_name.to_string(),
+                parameters: args,
+                result: output.clone().unwrap_or_else(|| json!(null)),
+                success,
+                duration_ms,
+                timestamp_ms,
+                error: error.clone(),
+                iteration_number: self.tool_calls_in_current_step as i64,
+            });
 
         Ok(StepResult {
             step_id: step_id.to_string(),
@@ -720,6 +821,50 @@ impl DynamicController {
             duration_ms,
             completed_at,
         })
+    }
+
+    fn execute_tool_with_timeout(
+        &self,
+        tool: &crate::tools::ToolDefinition,
+        args: Value,
+    ) -> Result<Value, String> {
+        let timeout_ms = self.session.config.tool_execution_timeout_ms;
+        if timeout_ms == 0 {
+            return (tool.handler)(args, ToolExecutionContext).map_err(|err| err.message);
+        }
+
+        let handler = tool.handler.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send((handler)(args, ToolExecutionContext));
+        });
+
+        let timeout = Duration::from_millis(timeout_ms);
+        let started = Instant::now();
+        loop {
+            if self.is_cancelled() {
+                return Err("Tool execution cancelled".to_string());
+            }
+
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                return Err(format!("Tool execution timed out after {timeout_ms} ms"));
+            }
+            let remaining = timeout.saturating_sub(elapsed);
+            let wait_for = if remaining > Duration::from_millis(200) {
+                Duration::from_millis(200)
+            } else {
+                remaining
+            };
+
+            match rx.recv_timeout(wait_for) {
+                Ok(result) => return result.map_err(|err| err.message),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("Tool execution worker disconnected".to_string());
+                }
+            }
+        }
     }
 
     fn call_think<F>(&mut self, call_llm: &mut F, prompt: &str) -> Result<String, String>
@@ -748,9 +893,16 @@ impl DynamicController {
     {
         let tool_list = {
             let overrides = load_tool_approval_overrides(&self.db).unwrap_or_default();
+            let conversation_overrides =
+                load_conversation_tool_approval_overrides(&self.db, &self.session.conversation_id)
+                    .unwrap_or_default();
             let mut tools = self.tool_registry.list_metadata();
             tools.retain(|tool| tool.name != "gcal.list_calendars");
             for tool in &mut tools {
+                if let Some(value) = conversation_overrides.get(&tool.name) {
+                    tool.requires_approval = *value;
+                    continue;
+                }
                 if let Some(value) = overrides.get(&tool.name) {
                     tool.requires_approval = *value;
                 }
@@ -759,7 +911,10 @@ impl DynamicController {
         };
         let prompt = CONTROLLER_PROMPT
             .replace("{user_message}", user_message)
-            .replace("{recent_messages}", &self.render_history(self.messages.len()))
+            .replace(
+                "{recent_messages}",
+                &self.render_history(self.messages.len()),
+            )
             .replace("{state_summary}", &self.render_state_summary())
             .replace("{last_tool_output}", &self.render_last_tool_output())
             .replace("{limits}", &self.render_limits(turns))
@@ -858,9 +1013,9 @@ impl DynamicController {
             .session
             .config
             .max_tool_calls_per_step
-            .saturating_sub(self.tool_calls_made);
+            .saturating_sub(self.tool_calls_in_current_step);
         format!(
-            "Remaining turns: {}. Remaining tool calls: {}.",
+            "Remaining turns: {}. Remaining tool calls in current step: {}.",
             remaining_turns, remaining_tools
         )
     }
@@ -897,14 +1052,32 @@ impl DynamicController {
     pub fn take_tool_executions(&mut self) -> Vec<MessageToolExecutionInput> {
         std::mem::take(&mut self.pending_tool_executions)
     }
+
+    pub fn is_waiting_for_human_input(&self) -> bool {
+        matches!(self.session.phase, PhaseKind::NeedsHumanInput { .. })
+    }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ControllerAction {
-    NextStep { step: ControllerStep },
-    Complete { message: String },
-    GuardrailStop { reason: String, message: Option<String> },
+    NextStep {
+        step: ControllerStep,
+    },
+    Complete {
+        message: String,
+    },
+    GuardrailStop {
+        reason: String,
+        message: Option<String>,
+    },
+    AskUser {
+        question: String,
+        #[serde(default)]
+        context: Option<String>,
+        #[serde(default = "default_resume_target")]
+        resume_to: ResumeTarget,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -923,6 +1096,14 @@ enum ControllerStep {
     Think {
         description: String,
     },
+    AskUser {
+        description: String,
+        question: String,
+        #[serde(default)]
+        context: Option<String>,
+        #[serde(default = "default_resume_target")]
+        resume_to: ResumeTarget,
+    },
 }
 
 impl ControllerStep {
@@ -931,8 +1112,19 @@ impl ControllerStep {
             ControllerStep::Tool { description, .. } => description,
             ControllerStep::Respond { description, .. } => description,
             ControllerStep::Think { description } => description,
+            ControllerStep::AskUser { description, .. } => description,
         }
     }
+}
+
+enum StepExecutionOutcome {
+    Continue,
+    Complete(String),
+    NeedsHumanInput(String),
+}
+
+fn default_resume_target() -> ResumeTarget {
+    ResumeTarget::Reflecting
 }
 
 fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
@@ -966,8 +1158,41 @@ fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
                 }
             }
 
+            if action == Some("ask_user") {
+                if let Some(step_value) = value.get("step") {
+                    let mut step = step_value.clone();
+                    if step.get("type").is_none() {
+                        if let Value::Object(map) = &mut step {
+                            map.insert("type".to_string(), Value::String("ask_user".to_string()));
+                        }
+                    }
+                    if let Ok(step) = serde_json::from_value::<ControllerStep>(step) {
+                        return Ok(ControllerAction::NextStep { step });
+                    }
+                }
+
+                if let Some(question) = value.get("question").and_then(|val| val.as_str()) {
+                    return Ok(ControllerAction::AskUser {
+                        question: question.to_string(),
+                        context: value
+                            .get("context")
+                            .and_then(|val| val.as_str())
+                            .map(|val| val.to_string()),
+                        resume_to: parse_resume_target(value.get("resume_to")),
+                    });
+                }
+            }
+
             Err(format!("Invalid controller output: {err}"))
         }
+    }
+}
+
+fn parse_resume_target(value: Option<&Value>) -> ResumeTarget {
+    match value.and_then(|value| value.as_str()) {
+        Some("controller") => ResumeTarget::Controller,
+        Some("reflecting") => ResumeTarget::Reflecting,
+        _ => default_resume_target(),
     }
 }
 
@@ -979,7 +1204,7 @@ fn controller_output_format() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["next_step", "complete", "guardrail_stop"]
+                "enum": ["next_step", "complete", "guardrail_stop", "ask_user"]
             },
             "step": {
                 "type": "object",
@@ -987,17 +1212,39 @@ fn controller_output_format() -> Value {
                 "properties": {
                     "type": {
                         "type": "string",
-                        "enum": ["tool", "respond", "think"]
+                        "enum": ["tool", "respond", "think", "ask_user"]
                     },
                     "description": { "type": "string" },
                     "tool": { "type": "string" },
-                    "args": { "type": "string" },
-                    "message": { "type": "string" }
+                    "args": {
+                        "oneOf": [
+                            { "type": "string" },
+                            { "type": "object" },
+                            { "type": "array" },
+                            { "type": "number" },
+                            { "type": "integer" },
+                            { "type": "boolean" },
+                            { "type": "null" }
+                        ]
+                    },
+                    "message": { "type": "string" },
+                    "question": { "type": "string" },
+                    "context": { "type": "string" },
+                    "resume_to": {
+                        "type": "string",
+                        "enum": ["reflecting", "controller"]
+                    }
                 },
                 "additionalProperties": false
             },
             "message": { "type": "string" },
-            "reason": { "type": "string" }
+            "reason": { "type": "string" },
+            "question": { "type": "string" },
+            "context": { "type": "string" },
+            "resume_to": {
+                "type": "string",
+                "enum": ["reflecting", "controller"]
+            }
         },
         "additionalProperties": false
     }))

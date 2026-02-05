@@ -9,20 +9,29 @@ import { titleGeneratorService } from '$lib/services/titleGenerator';
 import { modelService, apiKeyService } from '$lib/models';
 import { customBackendService } from '$lib/services/customBackendService.svelte';
 import { ollamaService } from '$lib/services/ollamaService.svelte';
+import { backend } from '$lib/backend/client';
 import { v4 as uuidv4 } from 'uuid';
 import { branchStore } from '$lib/stores/branches';
 import { startAgentEventBridge } from '$lib/services/eventBridge';
 import { AGENT_EVENT_TYPES } from '$lib/types/events';
 import type { AgentEvent, Attachment, ToolCallRecord } from '$lib/types';
 import type {
+  AssistantStreamChunkPayload,
+  AssistantStreamCompletedPayload,
+  AssistantStreamStartedPayload,
   AgentPhaseChangedPayload,
   AgentPlanPayload,
   AgentStepCompletedPayload,
   AgentStepProposedPayload,
   AgentStepStartedPayload,
+  ConversationDeletedPayload,
+  ConversationUpdatedPayload,
+  MessageSavedPayload,
   ToolExecutionCompletedPayload,
+  ToolExecutionApprovalScope,
+  ToolExecutionDecisionPayload,
   ToolExecutionProposedPayload,
-  ToolExecutionStartedPayload,
+  UsageUpdatedPayload,
 } from '$lib/types/events';
 import type { AgentPlan, AgentPlanStep, PhaseKind } from '$lib/types/agent';
 import { currentConversationUsage } from '$lib/stores/tokenUsage';
@@ -122,10 +131,116 @@ function upsertToolCall(
   );
 }
 
+function ensureAssistantMessageForToolExecution(messageId: string, timestamp: number) {
+  messages.update((msgs) => {
+    if (msgs.some((msg) => msg.id === messageId)) {
+      return msgs;
+    }
+
+    return [
+      ...msgs,
+      {
+        id: messageId,
+        type: 'received',
+        content: '',
+        timestamp,
+        tool_calls: getToolCallsForMessage(messageId),
+      },
+    ];
+  });
+}
+
 function updatePlanStep(stepId: string, updates: Partial<AgentPlanStep>) {
   agentPlanSteps.update((steps) =>
     steps.map((step) => (step.id === stepId ? { ...step, ...updates } : step))
   );
+}
+
+function isNeedsHumanInputPhase(phase: unknown): boolean {
+  if (!phase) return false;
+  if (typeof phase === 'string') {
+    return phase.toLowerCase() === 'needshumaninput' || phase.toLowerCase() === 'needs_human_input';
+  }
+  if (typeof phase === 'object') {
+    const keys = Object.keys(phase as Record<string, unknown>);
+    return keys.some((key) => key === 'NeedsHumanInput' || key === 'needs_human_input');
+  }
+  return false;
+}
+
+function finalizeRunningToolCalls(reason: string, timestamp: number) {
+  for (const [messageId, entries] of toolCallsByMessageId.entries()) {
+    for (const [executionId, entry] of entries.entries()) {
+      if (entry.success !== undefined) continue;
+      entries.set(executionId, {
+        ...entry,
+        success: false,
+        error: reason,
+        completed_at: timestamp,
+      });
+    }
+
+    messages.update((msgs) =>
+      msgs.map((msg) =>
+        msg.id === messageId ? { ...msg, tool_calls: getToolCallsForMessage(messageId) } : msg
+      )
+    );
+  }
+
+  toolActivity.update((entries) =>
+    entries.map((entry) =>
+      entry.status === 'running'
+        ? {
+            ...entry,
+            status: 'failed',
+            completed_at: timestamp,
+            error: reason,
+          }
+        : entry
+    )
+  );
+}
+
+function upsertToolActivityFromExecution(execution: {
+  execution_id: string;
+  tool_name: string;
+  success: boolean;
+  duration_ms: number;
+  timestamp_ms: number;
+  error?: string | null;
+}) {
+  const status: ToolActivityEntry['status'] = execution.success ? 'completed' : 'failed';
+  toolActivity.update((entries) => {
+    let updated = false;
+    const next = entries.map((entry) => {
+      if (entry.execution_id !== execution.execution_id) {
+        return entry;
+      }
+      updated = true;
+      return {
+        ...entry,
+        tool_name: execution.tool_name,
+        status,
+        completed_at: execution.timestamp_ms,
+        duration_ms: execution.duration_ms,
+        error: execution.error ?? undefined,
+      };
+    });
+
+    if (!updated) {
+      next.unshift({
+        execution_id: execution.execution_id,
+        tool_name: execution.tool_name,
+        status,
+        started_at: execution.timestamp_ms,
+        completed_at: execution.timestamp_ms,
+        duration_ms: execution.duration_ms,
+        error: execution.error ?? undefined,
+      });
+    }
+
+    return next.slice(0, TOOL_ACTIVITY_LIMIT);
+  });
 }
 
 function flushStreamingChunks() {
@@ -142,73 +257,135 @@ function flushStreamingChunks() {
 
 export async function startAgentEvents() {
   if (stopAgentEventBridge) return;
+
+  try {
+    const currentConversation = conversationService.getCurrentConversation();
+    const pendingApprovals = await backend.listPendingToolApprovals();
+    pendingToolApprovals.set(
+      pendingApprovals.filter((approval) => {
+        if (!approval.conversation_id) {
+          return true;
+        }
+        return currentConversation?.id === approval.conversation_id;
+      })
+    );
+  } catch (error) {
+    console.error('Failed to load pending tool approvals:', error);
+  }
+
   stopAgentEventBridge = await startAgentEventBridge((event: AgentEvent) => {
     if (event.event_type === AGENT_EVENT_TYPES.MESSAGE_SAVED) {
+      const payload = event.payload as MessageSavedPayload;
       const currentConversation = conversationService.getCurrentConversation();
-      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
       }
 
-      messages.update((msgs) => {
-        if (msgs.some((msg) => msg.id === event.payload.message_id)) {
-          return msgs;
+      const isAssistant = payload.role !== 'user';
+      if (isAssistant && payload.tool_executions && payload.tool_executions.length > 0) {
+        for (const execution of payload.tool_executions) {
+          upsertToolCall(payload.message_id, execution.id, {
+            tool_name: execution.tool_name,
+            args: execution.parameters ?? {},
+            result: execution.result,
+            success: execution.success,
+            error: execution.error ?? undefined,
+            duration_ms: execution.duration_ms,
+            completed_at: execution.timestamp_ms,
+          });
+
+          upsertToolActivityFromExecution({
+            execution_id: execution.id,
+            tool_name: execution.tool_name,
+            success: execution.success,
+            duration_ms: execution.duration_ms,
+            timestamp_ms: execution.timestamp_ms,
+            error: execution.error,
+          });
         }
+      }
 
-        const attachments: Attachment[] = event.payload.attachments.map((attachment) => ({
-          name: attachment.name,
-          data: attachment.data,
-          attachment_type: attachment.attachment_type as Attachment['attachment_type'],
-          description: attachment.description,
-          transcript: attachment.transcript,
-        }));
+      const attachments: Attachment[] = payload.attachments.map((attachment) => ({
+        name: attachment.name,
+        data: attachment.data,
+        attachment_type: attachment.attachment_type as Attachment['attachment_type'],
+        description: attachment.description,
+        transcript: attachment.transcript,
+      }));
+      const toolCalls = isAssistant ? getToolCallsForMessage(payload.message_id) : undefined;
+      const hasToolCalls = Boolean(toolCalls && toolCalls.length > 0);
+      const hasContent = payload.content.trim().length > 0;
+      const hasAttachments = attachments.length > 0;
+      const shouldStoreAssistantMessage = hasContent || hasToolCalls || hasAttachments;
+      if (isAssistant && !shouldStoreAssistantMessage) {
+        messages.update((msgs) => msgs.filter((msg) => msg.id !== payload.message_id));
+        return;
+      }
 
-        const isAssistant = event.payload.role !== 'user';
+      const content = payload.content;
+
+      messages.update((msgs) => {
+        const existingIndex = msgs.findIndex((msg) => msg.id === payload.message_id);
         const newMessage: Message = {
-          id: event.payload.message_id,
+          id: payload.message_id,
           type: isAssistant ? 'received' : 'sent',
-          content: event.payload.content,
+          content,
           attachments: attachments.length ? attachments : undefined,
-          timestamp: event.payload.timestamp_ms,
-          tool_calls: isAssistant
-            ? getToolCallsForMessage(event.payload.message_id)
-            : undefined,
+          timestamp: payload.timestamp_ms,
+          tool_calls: isAssistant ? toolCalls : undefined,
         };
 
-        return [...msgs, newMessage];
+        if (existingIndex === -1) {
+          return [...msgs, newMessage];
+        }
+
+        const existing = msgs[existingIndex];
+        const updated: Message = {
+          ...existing,
+          ...newMessage,
+          attachments: newMessage.attachments ?? existing.attachments,
+          tool_calls: isAssistant ? toolCalls ?? existing.tool_calls : existing.tool_calls,
+        };
+        const next = [...msgs];
+        next[existingIndex] = updated;
+        return next;
       });
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.USAGE_UPDATED) {
+      const payload = event.payload as UsageUpdatedPayload;
       const currentConversation = conversationService.getCurrentConversation();
-      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
       }
 
       currentConversationUsage.set({
-        conversation_id: event.payload.conversation_id,
-        total_prompt_tokens: event.payload.total_prompt_tokens,
-        total_completion_tokens: event.payload.total_completion_tokens,
-        total_tokens: event.payload.total_tokens,
-        total_cost: event.payload.total_cost,
-        message_count: event.payload.message_count,
-        last_updated: new Date(event.payload.timestamp_ms).toISOString(),
+        conversation_id: payload.conversation_id,
+        total_prompt_tokens: payload.total_prompt_tokens,
+        total_completion_tokens: payload.total_completion_tokens,
+        total_tokens: payload.total_tokens,
+        total_cost: payload.total_cost,
+        message_count: payload.message_count,
+        last_updated: new Date(payload.timestamp_ms).toISOString(),
       });
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.CONVERSATION_UPDATED) {
+      const payload = event.payload as ConversationUpdatedPayload;
       conversationService.applyConversationUpdate(
-        event.payload.conversation_id,
-        event.payload.name
+        payload.conversation_id,
+        payload.name
       );
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.CONVERSATION_DELETED) {
+      const payload = event.payload as ConversationDeletedPayload;
       const currentConversation = conversationService.getCurrentConversation();
-      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
       }
 
-      conversationService.applyConversationDeleted(event.payload.conversation_id);
+      conversationService.applyConversationDeleted(payload.conversation_id);
       messages.set([]);
       isFirstMessage.set(true);
       isStreaming.set(false);
@@ -225,28 +402,30 @@ export async function startAgentEvents() {
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_STARTED) {
+      const payload = event.payload as AssistantStreamStartedPayload;
       const currentConversation = conversationService.getCurrentConversation();
-      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
       }
 
-      streamingAssistantMessageId = event.payload.message_id;
+      streamingAssistantMessageId = payload.message_id;
       isStreaming.set(true);
       streamingMessage.set('');
       isLoading.set(true);
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_CHUNK) {
+      const payload = event.payload as AssistantStreamChunkPayload;
       const currentConversation = conversationService.getCurrentConversation();
-      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
       }
 
-      if (streamingAssistantMessageId !== event.payload.message_id) {
+      if (streamingAssistantMessageId !== payload.message_id) {
         return;
       }
 
-      streamingChunkBuffer += event.payload.chunk;
+      streamingChunkBuffer += payload.chunk;
 
       if (!streamingFlushPending) {
         streamingFlushPending = true;
@@ -259,33 +438,48 @@ export async function startAgentEvents() {
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.ASSISTANT_STREAM_COMPLETED) {
+      const payload = event.payload as AssistantStreamCompletedPayload;
       const currentConversation = conversationService.getCurrentConversation();
-      if (!currentConversation || currentConversation.id !== event.payload.conversation_id) {
+      if (!currentConversation || currentConversation.id !== payload.conversation_id) {
         return;
       }
 
-      if (streamingAssistantMessageId !== event.payload.message_id) {
+      if (streamingAssistantMessageId !== payload.message_id) {
         return;
       }
 
-      const toolCalls = getToolCallsForMessage(event.payload.message_id);
-      const content = event.payload.content?.trim() ?? "";
-      const shouldCreateMessage = content.length > 0 || (toolCalls && toolCalls.length > 0);
+      const toolCalls = getToolCallsForMessage(payload.message_id);
+      const hasToolCalls = Boolean(toolCalls && toolCalls.length > 0);
+      const hasContent = payload.content.trim().length > 0;
 
-      if (shouldCreateMessage) {
+      if (!hasContent && !hasToolCalls) {
+        messages.update((msgs) => msgs.filter((msg) => msg.id !== payload.message_id));
+      } else {
+        const content = payload.content;
         messages.update((msgs) => {
-          if (msgs.some((msg) => msg.id === event.payload.message_id)) {
-            return msgs;
-          }
-
+          const existingIndex = msgs.findIndex((msg) => msg.id === payload.message_id);
           const newMessage: Message = {
-            id: event.payload.message_id,
+            id: payload.message_id,
             type: 'received',
-            content: content.length > 0 ? event.payload.content : "Tool results available below.",
-            timestamp: event.payload.timestamp_ms,
+            content,
+            timestamp: payload.timestamp_ms,
+            tool_calls: toolCalls,
           };
 
-          return [...msgs, newMessage];
+          if (existingIndex === -1) {
+            return [...msgs, newMessage];
+          }
+
+          const existing = msgs[existingIndex];
+          const updated: Message = {
+            ...existing,
+            ...newMessage,
+            attachments: existing.attachments,
+            tool_calls: toolCalls ?? existing.tool_calls,
+          };
+          const next = [...msgs];
+          next[existingIndex] = updated;
+          return next;
         });
       }
 
@@ -298,33 +492,6 @@ export async function startAgentEvents() {
       isLoading.set(false);
     }
 
-    if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_STARTED) {
-      const payload = event.payload as ToolExecutionStartedPayload;
-      const currentConversation = conversationService.getCurrentConversation();
-      if (payload.conversation_id && currentConversation?.id !== payload.conversation_id) {
-        return;
-      }
-
-      if (payload.message_id) {
-        upsertToolCall(payload.message_id, payload.execution_id, {
-          tool_name: payload.tool_name,
-          args: payload.args ?? {},
-          started_at: payload.timestamp_ms,
-        });
-      }
-
-      toolActivity.update((entries) => {
-        const next = entries.filter((entry) => entry.execution_id !== payload.execution_id);
-        next.unshift({
-          execution_id: payload.execution_id,
-          tool_name: payload.tool_name,
-          status: 'running',
-          started_at: payload.timestamp_ms,
-        });
-        return next.slice(0, TOOL_ACTIVITY_LIMIT);
-      });
-    }
-
     if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_COMPLETED) {
       const payload = event.payload as ToolExecutionCompletedPayload;
       const currentConversation = conversationService.getCurrentConversation();
@@ -333,6 +500,7 @@ export async function startAgentEvents() {
       }
 
       if (payload.message_id) {
+        ensureAssistantMessageForToolExecution(payload.message_id, payload.timestamp_ms);
         upsertToolCall(payload.message_id, payload.execution_id, {
           tool_name: payload.tool_name,
           result: payload.result,
@@ -344,7 +512,7 @@ export async function startAgentEvents() {
       }
 
       toolActivity.update((entries) => {
-        const status = payload.success ? 'completed' : 'failed';
+        const status: ToolActivityEntry['status'] = payload.success ? 'completed' : 'failed';
         let updated = false;
         const next = entries.map((entry) => {
           if (entry.execution_id !== payload.execution_id) {
@@ -377,16 +545,17 @@ export async function startAgentEvents() {
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED) {
+      const payload = event.payload as ToolExecutionProposedPayload;
       const currentConversation = conversationService.getCurrentConversation();
-      if (event.payload.conversation_id && currentConversation?.id !== event.payload.conversation_id) {
+      if (payload.conversation_id && currentConversation?.id !== payload.conversation_id) {
         return;
       }
 
       pendingToolApprovals.update((approvals) => {
-        if (approvals.some((entry) => entry.approval_id === event.payload.approval_id)) {
+        if (approvals.some((entry) => entry.approval_id === payload.approval_id)) {
           return approvals;
         }
-        return [...approvals, event.payload];
+        return [...approvals, payload];
       });
     }
 
@@ -394,14 +563,23 @@ export async function startAgentEvents() {
       event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_APPROVED ||
       event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_DENIED
     ) {
+      const payload = event.payload as ToolExecutionDecisionPayload;
       pendingToolApprovals.update((approvals) =>
-        approvals.filter((entry) => entry.approval_id !== event.payload.approval_id)
+        approvals.filter((entry) => entry.approval_id !== payload.approval_id)
       );
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.AGENT_PHASE_CHANGED) {
       const payload = event.payload as AgentPhaseChangedPayload;
       agentPhase.set(payload.phase as PhaseKind);
+      if (isNeedsHumanInputPhase(payload.phase)) {
+        finalizeRunningToolCalls('Awaiting user input', Date.now());
+        isLoading.set(false);
+        isStreaming.set(false);
+        streamingMessage.set('');
+        streamingAssistantMessageId = null;
+        pendingAssistantMessageId = null;
+      }
     }
 
     if (
@@ -799,12 +977,13 @@ export function clearConversation() {
   branchStore.reset();
 }
 
-export async function resolveToolApproval(approvalId: string, approved: boolean) {
+export async function resolveToolApproval(
+  approvalId: string,
+  approved: boolean,
+  scope?: ToolExecutionApprovalScope
+) {
   try {
-    await invoke('resolve_tool_execution_approval', {
-      approval_id: approvalId,
-      approved,
-    });
+    await backend.resolveToolExecutionApproval(approvalId, approved, scope);
   } catch (error) {
     console.error('Failed to resolve tool approval:', error);
   }

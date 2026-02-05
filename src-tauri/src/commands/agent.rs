@@ -1,51 +1,29 @@
-use crate::db::{
-    BranchOperations,
-    ConversationOperations,
-    CustomBackendOperations,
-    Db,
-    IncomingAttachment,
-    MessageAttachment,
-    MessageOperations,
-    MessageToolExecution,
-    MessageToolExecutionInput,
-    ModelOperations,
-    SaveMessageUsageInput,
-    UsageOperations,
-};
-use crate::agent::DynamicController;
 use crate::agent::prompts::RESPONDER_PROMPT;
+use crate::agent::DynamicController;
+use crate::db::{
+    AgentSessionOperations, BranchOperations, ConversationOperations, CustomBackendOperations, Db,
+    IncomingAttachment, MessageAttachment, MessageOperations, MessageToolExecution,
+    MessageToolExecutionInput, ModelOperations, PhaseKind, SaveMessageUsageInput, UsageOperations,
+};
 use crate::events::{
-    AgentEvent,
-    EventBus,
-    EVENT_ASSISTANT_STREAM_CHUNK,
-    EVENT_ASSISTANT_STREAM_COMPLETED,
-    EVENT_ASSISTANT_STREAM_STARTED,
-    EVENT_CONVERSATION_UPDATED,
-    EVENT_MESSAGE_SAVED,
-    EVENT_MESSAGE_USAGE_SAVED,
-    EVENT_USAGE_UPDATED,
+    AgentEvent, EventBus, EVENT_ASSISTANT_STREAM_CHUNK, EVENT_ASSISTANT_STREAM_COMPLETED,
+    EVENT_ASSISTANT_STREAM_STARTED, EVENT_CONVERSATION_UPDATED, EVENT_MESSAGE_SAVED,
+    EVENT_MESSAGE_USAGE_SAVED, EVENT_USAGE_UPDATED,
 };
 use crate::llm::{
-    complete_anthropic,
-    complete_anthropic_with_output_format,
-    complete_claude_cli,
-    complete_openai,
-    complete_openai_compatible,
-    stream_anthropic,
-    stream_openai,
-    stream_openai_compatible,
-    LlmMessage,
-    Usage,
+    complete_anthropic, complete_anthropic_with_output_format, complete_claude_cli,
+    complete_openai, complete_openai_compatible, stream_anthropic, stream_openai,
+    stream_openai_compatible, LlmMessage, Usage,
 };
 use crate::tools::{ApprovalStore, ToolRegistry};
 use chrono::Utc;
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use tauri::State;
 use uuid::Uuid;
 
@@ -171,12 +149,7 @@ fn estimate_prompt_tokens(messages: &[LlmMessage]) -> i32 {
         .sum()
 }
 
-fn stream_response_chunks(
-    bus: &EventBus,
-    conversation_id: &str,
-    message_id: &str,
-    content: &str,
-) {
+fn stream_response_chunks(bus: &EventBus, conversation_id: &str, message_id: &str, content: &str) {
     if content.is_empty() {
         return;
     }
@@ -318,11 +291,10 @@ pub fn agent_send_message(
         timestamp_ms,
     ));
 
-    let assistant_message_id = assistant_message_id
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let assistant_message_id = assistant_message_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let history = MessageOperations::get_messages(&*state, &conversation_id)
-        .map_err(|e| e.to_string())?;
+    let history =
+        MessageOperations::get_messages(&*state, &conversation_id).map_err(|e| e.to_string())?;
 
     let main_branch = BranchOperations::get_or_create_main_branch(&*state, &conversation_id)
         .map_err(|e| e.to_string())?;
@@ -381,9 +353,9 @@ pub fn agent_send_message(
             }
         }
         "custom" => {
-            let backend_id = custom_backend_id.clone().ok_or_else(|| {
-                "Custom provider requires custom_backend_id".to_string()
-            })?;
+            let backend_id = custom_backend_id
+                .clone()
+                .ok_or_else(|| "Custom provider requires custom_backend_id".to_string())?;
             let backend = CustomBackendOperations::get_custom_backend_by_id(&*state, &backend_id)
                 .map_err(|e| e.to_string())?;
             if backend.is_none() {
@@ -414,6 +386,7 @@ pub fn agent_send_message(
             prompt_tokens: 0,
             completion_tokens: 0,
         };
+        let mut waiting_for_human_input = false;
         let openai_api_key = ModelOperations::get_api_key(&db, "openai")
             .ok()
             .flatten()
@@ -434,7 +407,10 @@ pub fn agent_send_message(
                 .flatten()
                 .map(|backend| (backend.url, backend.api_key))
         } else if provider == "ollama" {
-            Some(("http://localhost:11434/v1/chat/completions".to_string(), None))
+            Some((
+                "http://localhost:11434/v1/chat/completions".to_string(),
+                None,
+            ))
         } else {
             None
         };
@@ -442,120 +418,146 @@ pub fn agent_send_message(
         let messages_for_usage = messages.clone();
 
         let mut tool_execution_inputs: Vec<MessageToolExecutionInput> = Vec::new();
-        let mut call_llm =
-            |messages: &[LlmMessage], system_prompt: Option<&str>, output_format: Option<Value>| {
-                let prepared_messages = if provider == "anthropic" || provider == "claude_cli" {
-                    messages.to_vec()
-                } else {
-                    let mut prepared = messages.to_vec();
-                    if let Some(system_prompt) = system_prompt {
-                        if !system_prompt.trim().is_empty() {
-                            prepared.insert(
-                                0,
-                                LlmMessage {
-                                    role: "system".to_string(),
-                                    content: json!(system_prompt),
-                                },
-                            );
-                        }
-                    }
-                    prepared
-                };
-
-                let result = match provider.as_str() {
-                    "openai" => {
-                        if openai_api_key.is_empty() {
-                            Err("Missing OpenAI API key".to_string())
-                        } else {
-                            complete_openai(
-                                &client,
-                                &openai_api_key,
-                                "https://api.openai.com/v1/chat/completions",
-                                &model_for_thread,
-                                &prepared_messages,
-                            )
-                        }
-                    }
-                    "anthropic" => {
-                        if anthropic_api_key.is_empty() {
-                            Err("Missing Anthropic API key".to_string())
-                        } else {
-                            complete_anthropic_with_output_format(
-                                &client,
-                                &anthropic_api_key,
-                                &model_for_thread,
-                                system_prompt,
-                                &prepared_messages,
-                                output_format,
-                            )
-                        }
-                    }
-                    "deepseek" => {
-                        if deepseek_api_key.is_empty() {
-                            Err("Missing DeepSeek API key".to_string())
-                        } else {
-                            complete_openai_compatible(
-                                &client,
-                                Some(&deepseek_api_key),
-                                "https://api.deepseek.com/chat/completions",
-                                &model_for_thread,
-                                &prepared_messages,
-                            )
-                        }
-                    }
-                    "claude_cli" => complete_claude_cli(
-                        &model_for_thread,
-                        system_prompt,
-                        &prepared_messages,
-                        output_format,
-                    ),
-                    "custom" | "ollama" => {
-                        let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
-                        if url.is_empty() {
-                            Err("Missing custom backend URL".to_string())
-                        } else {
-                            complete_openai_compatible(
-                                &client,
-                                api_key.as_deref(),
-                                &url,
-                                &model_for_thread,
-                                &prepared_messages,
-                            )
-                        }
-                    }
-                    _ => Err(format!("Unsupported provider: {provider}")),
-                };
-
-                if let Ok(ref stream_result) = result {
-                    if let Some(usage) = stream_result.usage.as_ref() {
-                        usage_accumulator.prompt_tokens += usage.prompt_tokens;
-                        usage_accumulator.completion_tokens += usage.completion_tokens;
-                    } else {
-                        usage_accumulator.prompt_tokens += estimate_prompt_tokens(&prepared_messages);
-                        usage_accumulator.completion_tokens += estimate_tokens(&stream_result.content);
+        let mut call_llm = |messages: &[LlmMessage],
+                            system_prompt: Option<&str>,
+                            output_format: Option<Value>| {
+            let prepared_messages = if provider == "anthropic" || provider == "claude_cli" {
+                messages.to_vec()
+            } else {
+                let mut prepared = messages.to_vec();
+                if let Some(system_prompt) = system_prompt {
+                    if !system_prompt.trim().is_empty() {
+                        prepared.insert(
+                            0,
+                            LlmMessage {
+                                role: "system".to_string(),
+                                content: json!(system_prompt),
+                            },
+                        );
                     }
                 }
-
-                result
+                prepared
             };
 
+            let result = match provider.as_str() {
+                "openai" => {
+                    if openai_api_key.is_empty() {
+                        Err("Missing OpenAI API key".to_string())
+                    } else {
+                        complete_openai(
+                            &client,
+                            &openai_api_key,
+                            "https://api.openai.com/v1/chat/completions",
+                            &model_for_thread,
+                            &prepared_messages,
+                        )
+                    }
+                }
+                "anthropic" => {
+                    if anthropic_api_key.is_empty() {
+                        Err("Missing Anthropic API key".to_string())
+                    } else {
+                        complete_anthropic_with_output_format(
+                            &client,
+                            &anthropic_api_key,
+                            &model_for_thread,
+                            system_prompt,
+                            &prepared_messages,
+                            output_format,
+                        )
+                    }
+                }
+                "deepseek" => {
+                    if deepseek_api_key.is_empty() {
+                        Err("Missing DeepSeek API key".to_string())
+                    } else {
+                        complete_openai_compatible(
+                            &client,
+                            Some(&deepseek_api_key),
+                            "https://api.deepseek.com/chat/completions",
+                            &model_for_thread,
+                            &prepared_messages,
+                        )
+                    }
+                }
+                "claude_cli" => complete_claude_cli(
+                    &model_for_thread,
+                    system_prompt,
+                    &prepared_messages,
+                    output_format,
+                ),
+                "custom" | "ollama" => {
+                    let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
+                    if url.is_empty() {
+                        Err("Missing custom backend URL".to_string())
+                    } else {
+                        complete_openai_compatible(
+                            &client,
+                            api_key.as_deref(),
+                            &url,
+                            &model_for_thread,
+                            &prepared_messages,
+                        )
+                    }
+                }
+                _ => Err(format!("Unsupported provider: {provider}")),
+            };
+
+            if let Ok(ref stream_result) = result {
+                if let Some(usage) = stream_result.usage.as_ref() {
+                    usage_accumulator.prompt_tokens += usage.prompt_tokens;
+                    usage_accumulator.completion_tokens += usage.completion_tokens;
+                } else {
+                    usage_accumulator.prompt_tokens += estimate_prompt_tokens(&prepared_messages);
+                    usage_accumulator.completion_tokens += estimate_tokens(&stream_result.content);
+                }
+            }
+
+            result
+        };
+
         let mut controller_ok = false;
-        let mut controller = match DynamicController::new(
-            db.clone(),
-            bus.clone(),
-            tool_registry_for_thread.clone(),
-            approvals_for_thread.clone(),
-            cancel_token_for_thread.clone(),
-            messages,
-            system_prompt_for_thread.clone(),
-            conversation_id_for_thread.clone(),
-            user_message_id_for_thread.clone(),
-            assistant_message_id_for_thread.clone(),
-        ) {
-            Ok(controller) => Some(controller),
-            Err(error) => {
-                draft = format!("Agent setup error: {}", error);
-                None
+        let existing_session =
+            AgentSessionOperations::find_incomplete_session(&db, &conversation_id_for_thread)
+                .ok()
+                .flatten()
+                .filter(|session| matches!(session.phase, PhaseKind::NeedsHumanInput { .. }));
+
+        let mut controller = if let Some(session) = existing_session {
+            log::info!(
+                "[agent] resuming session {} for conversation {}",
+                session.id,
+                conversation_id_for_thread
+            );
+            Some(DynamicController::from_session(
+                db.clone(),
+                bus.clone(),
+                tool_registry_for_thread.clone(),
+                approvals_for_thread.clone(),
+                cancel_token_for_thread.clone(),
+                session,
+                messages,
+                system_prompt_for_thread.clone(),
+                assistant_message_id_for_thread.clone(),
+            ))
+        } else {
+            match DynamicController::new(
+                db.clone(),
+                bus.clone(),
+                tool_registry_for_thread.clone(),
+                approvals_for_thread.clone(),
+                cancel_token_for_thread.clone(),
+                messages,
+                system_prompt_for_thread.clone(),
+                conversation_id_for_thread.clone(),
+                user_message_id_for_thread.clone(),
+                assistant_message_id_for_thread.clone(),
+            ) {
+                Ok(controller) => Some(controller),
+                Err(error) => {
+                    draft = format!("Agent setup error: {}", error);
+                    None
+                }
             }
         };
 
@@ -564,6 +566,7 @@ pub fn agent_send_message(
                 Ok(response) => {
                     draft = response;
                     controller_ok = true;
+                    waiting_for_human_input = controller.is_waiting_for_human_input();
                 }
                 Err(error) => {
                     if error == "Cancelled" {
@@ -576,15 +579,14 @@ pub fn agent_send_message(
             tool_execution_inputs = controller.take_tool_executions();
         }
 
-        if draft.trim().is_empty() && !tool_execution_inputs.is_empty() {
-            draft = "Tool results available below.".to_string();
-        }
-
         let mut final_response = draft.clone();
         let mut stream_started = false;
 
         let stream_supported = supports_streaming(&provider);
-        let use_responder = controller_ok && stream_supported && !tool_execution_inputs.is_empty();
+        let use_responder = controller_ok
+            && stream_supported
+            && !tool_execution_inputs.is_empty()
+            && !waiting_for_human_input;
 
         if use_responder {
             let responder_prompt = build_responder_prompt(
@@ -603,7 +605,8 @@ pub fn agent_send_message(
                 .as_deref()
                 .filter(|prompt| !prompt.trim().is_empty());
 
-            let prepared_responder_messages = if provider == "anthropic" || provider == "claude_cli" {
+            let prepared_responder_messages = if provider == "anthropic" || provider == "claude_cli"
+            {
                 responder_messages.clone()
             } else {
                 let mut prepared = responder_messages.clone();
@@ -768,7 +771,10 @@ pub fn agent_send_message(
             }
         }
 
-        if !final_response.is_empty() {
+        let should_persist_assistant_message =
+            !final_response.is_empty() || !tool_execution_inputs.is_empty();
+
+        if should_persist_assistant_message {
             let _ = MessageOperations::save_message(
                 &db,
                 &conversation_id_for_thread,
@@ -777,6 +783,24 @@ pub fn agent_send_message(
                 &[],
                 Some(assistant_message_id_for_thread.clone()),
             );
+
+            let tool_execution_payload: Vec<Value> = tool_execution_inputs
+                .iter()
+                .map(|input| {
+                    json!({
+                        "id": input.id,
+                        "message_id": input.message_id,
+                        "tool_name": input.tool_name,
+                        "parameters": input.parameters,
+                        "result": input.result,
+                        "success": input.success,
+                        "duration_ms": input.duration_ms,
+                        "timestamp_ms": input.timestamp_ms,
+                        "error": input.error,
+                        "iteration_number": input.iteration_number
+                    })
+                })
+                .collect();
 
             if !tool_execution_inputs.is_empty() {
                 for input in tool_execution_inputs {
@@ -801,23 +825,24 @@ pub fn agent_send_message(
                     "role": "assistant",
                     "content": final_response,
                     "attachments": [],
+                    "tool_executions": tool_execution_payload,
                     "timestamp_ms": timestamp_ms
                 }),
                 timestamp_ms,
             ));
-
         }
 
-        let usage = if usage_accumulator.prompt_tokens > 0 || usage_accumulator.completion_tokens > 0 {
-            Some(usage_accumulator)
-        } else if final_response.is_empty() {
-            None
-        } else {
-            Some(Usage {
-                prompt_tokens: estimate_prompt_tokens(&messages_for_usage),
-                completion_tokens: estimate_tokens(&final_response),
-            })
-        };
+        let usage =
+            if usage_accumulator.prompt_tokens > 0 || usage_accumulator.completion_tokens > 0 {
+                Some(usage_accumulator)
+            } else if final_response.is_empty() {
+                None
+            } else {
+                Some(Usage {
+                    prompt_tokens: estimate_prompt_tokens(&messages_for_usage),
+                    completion_tokens: estimate_tokens(&final_response),
+                })
+            };
 
         if let Some(usage) = usage {
             let estimated_cost = calculate_estimated_cost(
@@ -851,7 +876,9 @@ pub fn agent_send_message(
                 ));
             }
 
-            if let Ok(summary) = UsageOperations::update_conversation_usage(&db, &conversation_id_for_thread) {
+            if let Ok(summary) =
+                UsageOperations::update_conversation_usage(&db, &conversation_id_for_thread)
+            {
                 let timestamp_ms = summary.last_updated.timestamp_millis();
                 bus.publish(AgentEvent::new_with_timestamp(
                     EVENT_USAGE_UPDATED,
@@ -994,11 +1021,15 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
         "claude_cli" => complete_claude_cli(&model, Some(system_prompt), &messages, None),
         "custom" | "ollama" => {
             let (url, api_key) = if provider == "ollama" {
-                ("http://localhost:11434/v1/chat/completions".to_string(), None)
+                (
+                    "http://localhost:11434/v1/chat/completions".to_string(),
+                    None,
+                )
             } else {
-                let backend_id = payload.custom_backend_id.clone().ok_or_else(|| {
-                    "Custom provider requires custom_backend_id".to_string()
-                })?;
+                let backend_id = payload
+                    .custom_backend_id
+                    .clone()
+                    .ok_or_else(|| "Custom provider requires custom_backend_id".to_string())?;
                 let backend = CustomBackendOperations::get_custom_backend_by_id(&db, &backend_id)
                     .map_err(|e| e.to_string())?
                     .ok_or_else(|| "Custom backend not found".to_string())?;
@@ -1012,7 +1043,11 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
     .map_err(|e| e.to_string())?
     .content;
 
-    title = title.trim().trim_matches('"').trim_matches('\'').to_string();
+    title = title
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string();
     if title.is_empty() {
         title = "New Conversation".to_string();
     }
@@ -1115,8 +1150,8 @@ fn format_tool_executions(executions: &[MessageToolExecution]) -> String {
     for exec in executions {
         let params = serde_json::to_string_pretty(&exec.parameters)
             .unwrap_or_else(|_| exec.parameters.to_string());
-        let result = serde_json::to_string_pretty(&exec.result)
-            .unwrap_or_else(|_| exec.result.to_string());
+        let result =
+            serde_json::to_string_pretty(&exec.result).unwrap_or_else(|_| exec.result.to_string());
         let params = truncate_for_prompt(&params, MAX_TOOL_ARGS_CHARS);
         let result = truncate_for_prompt(&result, MAX_TOOL_RESULT_CHARS);
         let error = exec
@@ -1139,7 +1174,10 @@ fn format_tool_executions(executions: &[MessageToolExecution]) -> String {
 }
 
 fn supports_streaming(provider: &str) -> bool {
-    matches!(provider, "openai" | "anthropic" | "deepseek" | "custom" | "ollama")
+    matches!(
+        provider,
+        "openai" | "anthropic" | "deepseek" | "custom" | "ollama"
+    )
 }
 
 fn build_responder_prompt(
@@ -1150,7 +1188,11 @@ fn build_responder_prompt(
 ) -> String {
     let recent_messages = render_recent_messages(messages, messages.len());
     let tool_outputs = render_tool_outputs(tool_execution_inputs);
-    let draft_text = if draft.trim().is_empty() { "None" } else { draft };
+    let draft_text = if draft.trim().is_empty() {
+        "None"
+    } else {
+        draft
+    };
     let recent_text = if recent_messages.trim().is_empty() {
         "None"
     } else {

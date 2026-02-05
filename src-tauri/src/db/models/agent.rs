@@ -50,11 +50,22 @@ pub enum PhaseKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResumeTarget {
+    #[serde(alias = "Controller")]
+    Controller,
+    #[serde(alias = "Clarifying")]
     Clarifying,
+    #[serde(alias = "Planning")]
     Planning { revision: u32 },
+    #[serde(alias = "ProposingStep")]
     ProposingStep { step_index: usize },
-    Executing { step_id: String, tool_iteration: u32 },
+    #[serde(alias = "Executing")]
+    Executing {
+        step_id: String,
+        tool_iteration: u32,
+    },
+    #[serde(alias = "Reflecting")]
     Reflecting,
 }
 
@@ -73,7 +84,6 @@ impl PhaseKind {
             PhaseKind::GuardrailStop { .. } => "guardrail_stop",
         }
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,10 +110,19 @@ pub struct PlanStep {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StepAction {
-    ToolCall { tool: String, args: serde_json::Value },
-    AskUser { question: String },
-    Think { prompt: String },
-    Respond { message: String },
+    ToolCall {
+        tool: String,
+        args: serde_json::Value,
+    },
+    AskUser {
+        question: String,
+    },
+    Think {
+        prompt: String,
+    },
+    Respond {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
