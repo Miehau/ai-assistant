@@ -316,17 +316,15 @@ pub fn complete_openai_compatible_with_output_format_with_options(
         "[llm] provider=openai_compatible model={} content_len={} usage={:?}",
         model,
         content.len(),
-        usage
-            .as_ref()
-            .map(|u| {
-                (
-                    u.prompt_tokens,
-                    u.completion_tokens,
-                    u.cached_prompt_tokens,
-                    u.cache_read_input_tokens,
-                    u.cache_creation_input_tokens,
-                )
-            })
+        usage.as_ref().map(|u| {
+            (
+                u.prompt_tokens,
+                u.completion_tokens,
+                u.cached_prompt_tokens,
+                u.cache_read_input_tokens,
+                u.cache_creation_input_tokens,
+            )
+        })
     );
 
     Ok(StreamResult { content, usage })
@@ -699,17 +697,15 @@ pub fn complete_anthropic_with_output_format_with_options(
         "[llm] provider=anthropic model={} content_len={} usage={:?}",
         model,
         content.len(),
-        usage
-            .as_ref()
-            .map(|u| {
-                (
-                    u.prompt_tokens,
-                    u.completion_tokens,
-                    u.cached_prompt_tokens,
-                    u.cache_read_input_tokens,
-                    u.cache_creation_input_tokens,
-                )
-            })
+        usage.as_ref().map(|u| {
+            (
+                u.prompt_tokens,
+                u.completion_tokens,
+                u.cached_prompt_tokens,
+                u.cache_read_input_tokens,
+                u.cache_creation_input_tokens,
+            )
+        })
     );
 
     Ok(StreamResult { content, usage })
@@ -988,7 +984,8 @@ mod tests {
             role: "user".to_string(),
             content: json!("hello"),
         }];
-        let body = build_openai_compatible_body("gpt-5-mini", &messages, true, true, Some(&options));
+        let body =
+            build_openai_compatible_body("gpt-5-mini", &messages, true, true, Some(&options));
 
         assert_eq!(
             body.get("prompt_cache_key").and_then(|v| v.as_str()),
@@ -1066,9 +1063,8 @@ mod tests {
             prompt_cache_retention: None,
             anthropic_cache_breakpoints: vec![0],
         };
-        let message = "a".repeat(
-            ANTHROPIC_CACHE_BLOCK_MAX_CHARS * (ANTHROPIC_CACHE_INTERVAL_BLOCKS + 2),
-        );
+        let message =
+            "a".repeat(ANTHROPIC_CACHE_BLOCK_MAX_CHARS * (ANTHROPIC_CACHE_INTERVAL_BLOCKS + 2));
         let messages = vec![LlmMessage {
             role: "user".to_string(),
             content: json!(message),

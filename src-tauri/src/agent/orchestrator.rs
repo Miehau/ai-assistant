@@ -46,6 +46,7 @@ pub struct DynamicController {
     pending_tool_executions: Vec<MessageToolExecutionInput>,
     last_step_result: Option<StepResult>,
     tool_calls_in_current_step: u32,
+    requested_user_input: bool,
 }
 
 impl DynamicController {
@@ -92,35 +93,8 @@ impl DynamicController {
             pending_tool_executions: Vec::new(),
             last_step_result: None,
             tool_calls_in_current_step: 0,
+            requested_user_input: false,
         })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_session(
-        db: crate::db::Db,
-        event_bus: EventBus,
-        tool_registry: ToolRegistry,
-        approvals: ApprovalStore,
-        cancel_flag: Arc<AtomicBool>,
-        session: AgentSession,
-        messages: Vec<LlmMessage>,
-        base_system_prompt: Option<String>,
-        assistant_message_id: String,
-    ) -> Self {
-        Self {
-            db,
-            event_bus,
-            tool_registry,
-            approvals,
-            cancel_flag,
-            session,
-            messages,
-            base_system_prompt,
-            assistant_message_id,
-            pending_tool_executions: Vec::new(),
-            last_step_result: None,
-            tool_calls_in_current_step: 0,
-        }
     }
 
     pub fn run<F>(&mut self, user_message: &str, call_llm: &mut F) -> Result<String, String>
@@ -152,9 +126,6 @@ impl DynamicController {
                         StepExecutionOutcome::Complete(response) => {
                             return self.finish(response);
                         }
-                        StepExecutionOutcome::NeedsHumanInput(question) => {
-                            return Ok(question);
-                        }
                     }
                 }
                 ControllerAction::Complete { message } => {
@@ -173,12 +144,9 @@ impl DynamicController {
                     context,
                     resume_to,
                 } => {
-                    self.set_phase(PhaseKind::NeedsHumanInput {
-                        question: question.clone(),
-                        context,
-                        resume_to,
-                    })?;
-                    return Ok(question);
+                    self.requested_user_input = true;
+                    let _ = (&context, &resume_to);
+                    return self.finish(question);
                 }
             }
         }
@@ -191,6 +159,12 @@ impl DynamicController {
             &response,
         )
         .map_err(|e| e.to_string())?;
+        let now = Utc::now();
+        self.session.phase = PhaseKind::Complete {
+            final_response: response.clone(),
+        };
+        self.session.updated_at = now;
+        self.session.completed_at = Some(now);
         self.event_bus.publish(AgentEvent::new_with_timestamp(
             EVENT_AGENT_COMPLETED,
             json!({
@@ -423,12 +397,10 @@ impl DynamicController {
         }
 
         if let Some((question, context, resume_to)) = ask_user_payload {
-            self.set_phase(PhaseKind::NeedsHumanInput {
-                question: question.clone(),
-                context,
-                resume_to,
-            })?;
-            return Ok(StepExecutionOutcome::NeedsHumanInput(
+            self.requested_user_input = true;
+            let _ = context;
+            let _ = resume_to;
+            return Ok(StepExecutionOutcome::Complete(
                 respond_message.unwrap_or(question),
             ));
         }
@@ -986,7 +958,10 @@ impl DynamicController {
             })
             .collect::<Vec<_>>();
 
-        let total_chars = rendered.iter().map(|entry| entry.chars().count()).sum::<usize>();
+        let total_chars = rendered
+            .iter()
+            .map(|entry| entry.chars().count())
+            .sum::<usize>();
         if total_chars <= CONTROLLER_HISTORY_MAX_CHARS {
             return rendered.join("\n");
         }
@@ -1106,8 +1081,8 @@ impl DynamicController {
         std::mem::take(&mut self.pending_tool_executions)
     }
 
-    pub fn is_waiting_for_human_input(&self) -> bool {
-        matches!(self.session.phase, PhaseKind::NeedsHumanInput { .. })
+    pub fn requested_user_input(&self) -> bool {
+        self.requested_user_input
     }
 }
 
@@ -1174,7 +1149,6 @@ impl ControllerStep {
 enum StepExecutionOutcome {
     Continue,
     Complete(String),
-    NeedsHumanInput(String),
 }
 
 fn default_resume_target() -> ResumeTarget {

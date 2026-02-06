@@ -250,7 +250,7 @@ impl ApprovalStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        register_file_tools, register_search_tool, ToolDefinition, ToolExecutionContext, ToolError,
+        register_file_tools, register_search_tool, ToolDefinition, ToolError, ToolExecutionContext,
         ToolMetadata, ToolRegistry, ToolResultMode,
     };
     use crate::db::{Db, PreferenceOperations};

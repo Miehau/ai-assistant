@@ -218,13 +218,15 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Gmail account."
+                    },
                     "query": { "type": "string" },
                     "label_ids": { "type": "array", "items": { "type": "string" } },
                     "max_results": { "type": "integer", "minimum": 1, "maximum": 500 },
                     "page_token": { "type": "string" }
-                },
-                "required": ["connection_id"]
+                }
             }),
             result_schema: json!({
                 "type": "object",
@@ -287,12 +289,15 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Gmail account."
+                    },
                     "thread_id": { "type": "string" },
                     "mode": { "type": "string", "enum": ["latest", "all"] },
                     "max_messages": { "type": "integer", "minimum": 1, "maximum": 50 }
                 },
-                "required": ["connection_id", "thread_id"]
+                "required": ["thread_id"]
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: false,
@@ -350,9 +355,11 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" }
-                },
-                "required": ["connection_id"]
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Gmail account."
+                    }
+                }
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: false,
@@ -392,14 +399,17 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Gmail account."
+                    },
                     "to": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                     "cc": { "type": "array", "items": { "type": "string" } },
                     "bcc": { "type": "array", "items": { "type": "string" } },
                     "subject": { "type": "string" },
                     "body": { "type": "string" }
                 },
-                "required": ["connection_id", "to", "subject", "body"]
+                "required": ["to", "subject", "body"]
             }),
             result_schema: json!({
                 "type": "object",
@@ -672,10 +682,12 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Google Calendar account."
+                    },
                     "max_results": { "type": "integer", "minimum": 1, "maximum": 250 }
-                },
-                "required": ["connection_id"]
+                }
             }),
             result_schema: json!({
                 "type": "object",
@@ -799,15 +811,17 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Google Calendar account."
+                    },
                     "calendar_id": { "type": "string" },
                     "calendar_ids": { "type": "array", "items": { "type": "string" } },
                     "time_min": { "type": "string" },
                     "time_max": { "type": "string" },
                     "query": { "type": "string" },
                     "max_results": { "type": "integer", "minimum": 1, "maximum": 2500 }
-                },
-                "required": ["connection_id"]
+                }
             }),
             result_schema: json!({
                 "type": "object",
@@ -928,7 +942,10 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Google Calendar account."
+                    },
                     "calendar_id": { "type": "string" },
                     "summary": { "type": "string" },
                     "description": { "type": "string" },
@@ -937,7 +954,7 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
                     "time_zone": { "type": "string" },
                     "attendees": { "type": "array", "items": { "type": "string" } }
                 },
-                "required": ["connection_id", "summary", "start", "end"]
+                "required": ["summary", "start", "end"]
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: true,
@@ -1017,7 +1034,10 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Google Calendar account."
+                    },
                     "event_id": { "type": "string" },
                     "calendar_id": { "type": "string" },
                     "summary": { "type": "string" },
@@ -1028,7 +1048,7 @@ fn register_google_calendar_tools(registry: &mut ToolRegistry, db: Db) -> Result
                     "time_zone": { "type": "string" },
                     "attendees": { "type": "array", "items": { "type": "string" } }
                 },
-                "required": ["connection_id", "event_id"]
+                "required": ["event_id"]
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: true,
@@ -1144,11 +1164,13 @@ fn register_todoist_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Todoist account."
+                    },
                     "project_id": { "type": "string" },
                     "filter": { "type": "string" }
-                },
-                "required": ["connection_id"]
+                }
             }),
             result_schema: json!({ "type": "array" }),
             requires_approval: true,
@@ -1194,7 +1216,10 @@ fn register_todoist_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Todoist account."
+                    },
                     "content": { "type": "string" },
                     "description": { "type": "string" },
                     "project_id": { "type": "string" },
@@ -1204,7 +1229,7 @@ fn register_todoist_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
                     "due_date": { "type": "string" },
                     "due_datetime": { "type": "string" }
                 },
-                "required": ["connection_id", "content"]
+                "required": ["content"]
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: true,
@@ -1271,10 +1296,13 @@ fn register_todoist_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
             args_schema: json!({
                 "type": "object",
                 "properties": {
-                    "connection_id": { "type": "string" },
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Todoist account."
+                    },
                     "task_id": { "type": "string" }
                 },
-                "required": ["connection_id", "task_id"]
+                "required": ["task_id"]
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: true,
@@ -1314,4 +1342,117 @@ fn register_todoist_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Str
     registry.register(create_task)?;
     registry.register(complete_task)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{register_gmail_tools, register_google_calendar_tools, register_todoist_tools};
+    use crate::db::Db;
+    use crate::tools::ToolRegistry;
+    use serde_json::{json, Value};
+    use uuid::Uuid;
+
+    fn setup_db() -> Db {
+        let db_path =
+            std::env::temp_dir().join(format!("integration-tools-schema-{}.db", Uuid::new_v4()));
+        let mut db = Db::new(db_path.to_str().expect("valid db path")).expect("db init failed");
+        db.run_migrations().expect("db migrations failed");
+        db
+    }
+
+    fn required_fields(tool_schema: &Value) -> Vec<String> {
+        tool_schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn integration_tool_schemas_do_not_require_connection_id() {
+        let db = setup_db();
+        let mut registry = ToolRegistry::new();
+        register_gmail_tools(&mut registry, db.clone()).expect("gmail tools registration failed");
+        register_google_calendar_tools(&mut registry, db.clone())
+            .expect("gcal tools registration failed");
+        register_todoist_tools(&mut registry, db).expect("todoist tools registration failed");
+
+        let tool_names = [
+            "gmail.list_threads",
+            "gmail.get_thread",
+            "gmail.list_labels",
+            "gmail.send_message",
+            "gcal.list_calendars",
+            "gcal.list_events",
+            "gcal.create_event",
+            "gcal.update_event",
+            "todoist.list_tasks",
+            "todoist.create_task",
+            "todoist.complete_task",
+        ];
+
+        for tool_name in tool_names {
+            let tool = registry.get(tool_name).expect("missing tool");
+            let required = required_fields(&tool.metadata.args_schema);
+            assert!(
+                !required.iter().any(|field| field == "connection_id"),
+                "tool {} should not require connection_id",
+                tool_name
+            );
+        }
+    }
+
+    #[test]
+    fn integration_tool_validation_allows_omitting_connection_id() {
+        let db = setup_db();
+        let mut registry = ToolRegistry::new();
+        register_gmail_tools(&mut registry, db.clone()).expect("gmail tools registration failed");
+        register_google_calendar_tools(&mut registry, db.clone())
+            .expect("gcal tools registration failed");
+        register_todoist_tools(&mut registry, db).expect("todoist tools registration failed");
+
+        let cases = [
+            ("gmail.list_threads", json!({})),
+            ("gmail.get_thread", json!({ "thread_id": "thread-123" })),
+            (
+                "gmail.send_message",
+                json!({
+                    "to": ["user@example.com"],
+                    "subject": "Subject",
+                    "body": "Body"
+                }),
+            ),
+            ("gcal.list_events", json!({})),
+            (
+                "gcal.create_event",
+                json!({
+                    "summary": "Standup",
+                    "start": "2026-01-01T10:00:00Z",
+                    "end": "2026-01-01T10:30:00Z"
+                }),
+            ),
+            ("gcal.update_event", json!({ "event_id": "event-123" })),
+            ("todoist.list_tasks", json!({})),
+            ("todoist.create_task", json!({ "content": "Ship fix" })),
+            ("todoist.complete_task", json!({ "task_id": "task-123" })),
+        ];
+
+        for (tool_name, args) in cases {
+            let tool = registry.get(tool_name).expect("missing tool");
+            registry
+                .validate_args(&tool.metadata, &args)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "schema validation failed for {}: {}",
+                        tool_name, err.message
+                    )
+                });
+        }
+    }
 }

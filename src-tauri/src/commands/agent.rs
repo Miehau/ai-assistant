@@ -1,9 +1,9 @@
 use crate::agent::prompts::RESPONDER_PROMPT;
 use crate::agent::DynamicController;
 use crate::db::{
-    AgentSessionOperations, BranchOperations, ConversationOperations, CustomBackendOperations, Db,
-    IncomingAttachment, MessageAttachment, MessageOperations, MessageToolExecution,
-    MessageToolExecutionInput, ModelOperations, PhaseKind, SaveMessageUsageInput, UsageOperations,
+    BranchOperations, ConversationOperations, CustomBackendOperations, Db, IncomingAttachment,
+    MessageAttachment, MessageOperations, MessageToolExecution, MessageToolExecutionInput,
+    ModelOperations, SaveMessageUsageInput, UsageOperations,
 };
 use crate::events::{
     AgentEvent, EventBus, EVENT_ASSISTANT_STREAM_CHUNK, EVENT_ASSISTANT_STREAM_COMPLETED,
@@ -530,7 +530,7 @@ pub fn agent_send_message(
             };
             let mut controller_cache_diagnostics = CacheDiagnostics::default();
             let mut responder_cache_diagnostics = CacheDiagnostics::default();
-            let mut waiting_for_human_input = false;
+            let mut requested_user_input = false;
             let openai_api_key = ModelOperations::get_api_key(&db, "openai")
                 .ok()
                 .flatten()
@@ -577,143 +577,121 @@ pub fn agent_send_message(
             let mut call_llm = |messages: &[LlmMessage],
                                 system_prompt: Option<&str>,
                                 output_format: Option<Value>| {
-            let prepared_messages = if provider == "anthropic" || provider == "claude_cli" {
-                messages.to_vec()
-            } else {
-                let mut prepared = messages.to_vec();
-                if let Some(system_prompt) = system_prompt {
-                    if !system_prompt.trim().is_empty() {
-                        prepared.insert(
-                            0,
-                            LlmMessage {
-                                role: "system".to_string(),
-                                content: json!(system_prompt),
-                            },
-                        );
-                    }
-                }
-                prepared
-            };
-
-            let result = match provider.as_str() {
-                "openai" => {
-                    if openai_api_key.is_empty() {
-                        Err("Missing OpenAI API key".to_string())
-                    } else {
-                        complete_openai_with_options(
-                            &client,
-                            &openai_api_key,
-                            "https://api.openai.com/v1/chat/completions",
-                            &model_for_thread,
-                            &prepared_messages,
-                            Some(&controller_request_options),
-                        )
-                    }
-                }
-                "anthropic" => {
-                    if anthropic_api_key.is_empty() {
-                        Err("Missing Anthropic API key".to_string())
-                    } else {
-                        complete_anthropic_with_output_format_with_options(
-                            &client,
-                            &anthropic_api_key,
-                            &model_for_thread,
-                            system_prompt,
-                            &prepared_messages,
-                            output_format,
-                            Some(&controller_request_options),
-                        )
-                    }
-                }
-                "deepseek" => {
-                    if deepseek_api_key.is_empty() {
-                        Err("Missing DeepSeek API key".to_string())
-                    } else {
-                        complete_openai_compatible_with_options(
-                            &client,
-                            Some(&deepseek_api_key),
-                            "https://api.deepseek.com/chat/completions",
-                            &model_for_thread,
-                            &prepared_messages,
-                            Some(&controller_request_options),
-                        )
-                    }
-                }
-                "claude_cli" => complete_claude_cli(
-                    &model_for_thread,
-                    system_prompt,
-                    &prepared_messages,
-                    output_format,
-                ),
-                "custom" | "ollama" => {
-                    let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
-                    if url.is_empty() {
-                        Err("Missing custom backend URL".to_string())
-                    } else {
-                        complete_openai_compatible_with_options(
-                            &client,
-                            api_key.as_deref(),
-                            &url,
-                            &model_for_thread,
-                            &prepared_messages,
-                            Some(&controller_request_options),
-                        )
-                    }
-                }
-                _ => Err(format!("Unsupported provider: {provider}")),
-            };
-
-            if let Ok(ref stream_result) = result {
-                if let Some(usage) = stream_result.usage.as_ref() {
-                    usage_accumulator.prompt_tokens += usage.prompt_tokens;
-                    usage_accumulator.completion_tokens += usage.completion_tokens;
-                    usage_accumulator.cached_prompt_tokens += usage.cached_prompt_tokens;
-                    usage_accumulator.cache_read_input_tokens += usage.cache_read_input_tokens;
-                    usage_accumulator.cache_creation_input_tokens +=
-                        usage.cache_creation_input_tokens;
-                    record_cache_diagnostics(
-                        &provider,
-                        &model_for_thread,
-                        "controller",
-                        usage,
-                        &controller_request_options,
-                        &mut controller_cache_diagnostics,
-                    );
+                let prepared_messages = if provider == "anthropic" || provider == "claude_cli" {
+                    messages.to_vec()
                 } else {
-                    usage_accumulator.prompt_tokens += estimate_prompt_tokens(&prepared_messages);
-                    usage_accumulator.completion_tokens += estimate_tokens(&stream_result.content);
+                    let mut prepared = messages.to_vec();
+                    if let Some(system_prompt) = system_prompt {
+                        if !system_prompt.trim().is_empty() {
+                            prepared.insert(
+                                0,
+                                LlmMessage {
+                                    role: "system".to_string(),
+                                    content: json!(system_prompt),
+                                },
+                            );
+                        }
+                    }
+                    prepared
+                };
+
+                let result = match provider.as_str() {
+                    "openai" => {
+                        if openai_api_key.is_empty() {
+                            Err("Missing OpenAI API key".to_string())
+                        } else {
+                            complete_openai_with_options(
+                                &client,
+                                &openai_api_key,
+                                "https://api.openai.com/v1/chat/completions",
+                                &model_for_thread,
+                                &prepared_messages,
+                                Some(&controller_request_options),
+                            )
+                        }
+                    }
+                    "anthropic" => {
+                        if anthropic_api_key.is_empty() {
+                            Err("Missing Anthropic API key".to_string())
+                        } else {
+                            complete_anthropic_with_output_format_with_options(
+                                &client,
+                                &anthropic_api_key,
+                                &model_for_thread,
+                                system_prompt,
+                                &prepared_messages,
+                                output_format,
+                                Some(&controller_request_options),
+                            )
+                        }
+                    }
+                    "deepseek" => {
+                        if deepseek_api_key.is_empty() {
+                            Err("Missing DeepSeek API key".to_string())
+                        } else {
+                            complete_openai_compatible_with_options(
+                                &client,
+                                Some(&deepseek_api_key),
+                                "https://api.deepseek.com/chat/completions",
+                                &model_for_thread,
+                                &prepared_messages,
+                                Some(&controller_request_options),
+                            )
+                        }
+                    }
+                    "claude_cli" => complete_claude_cli(
+                        &model_for_thread,
+                        system_prompt,
+                        &prepared_messages,
+                        output_format,
+                    ),
+                    "custom" | "ollama" => {
+                        let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
+                        if url.is_empty() {
+                            Err("Missing custom backend URL".to_string())
+                        } else {
+                            complete_openai_compatible_with_options(
+                                &client,
+                                api_key.as_deref(),
+                                &url,
+                                &model_for_thread,
+                                &prepared_messages,
+                                Some(&controller_request_options),
+                            )
+                        }
+                    }
+                    _ => Err(format!("Unsupported provider: {provider}")),
+                };
+
+                if let Ok(ref stream_result) = result {
+                    if let Some(usage) = stream_result.usage.as_ref() {
+                        usage_accumulator.prompt_tokens += usage.prompt_tokens;
+                        usage_accumulator.completion_tokens += usage.completion_tokens;
+                        usage_accumulator.cached_prompt_tokens += usage.cached_prompt_tokens;
+                        usage_accumulator.cache_read_input_tokens += usage.cache_read_input_tokens;
+                        usage_accumulator.cache_creation_input_tokens +=
+                            usage.cache_creation_input_tokens;
+                        record_cache_diagnostics(
+                            &provider,
+                            &model_for_thread,
+                            "controller",
+                            usage,
+                            &controller_request_options,
+                            &mut controller_cache_diagnostics,
+                        );
+                    } else {
+                        usage_accumulator.prompt_tokens +=
+                            estimate_prompt_tokens(&prepared_messages);
+                        usage_accumulator.completion_tokens +=
+                            estimate_tokens(&stream_result.content);
+                    }
                 }
-            }
 
-            result
-        };
+                result
+            };
 
-        let mut controller_ok = false;
-        let existing_session =
-            AgentSessionOperations::find_incomplete_session(&db, &conversation_id_for_thread)
-                .ok()
-                .flatten()
-                .filter(|session| matches!(session.phase, PhaseKind::NeedsHumanInput { .. }));
-
-        let mut controller = if let Some(session) = existing_session {
-            log::info!(
-                "[agent] resuming session {} for conversation {}",
-                session.id,
-                conversation_id_for_thread
-            );
-            Some(DynamicController::from_session(
-                db.clone(),
-                bus.clone(),
-                tool_registry_for_thread.clone(),
-                approvals_for_thread.clone(),
-                cancel_token_for_thread.clone(),
-                session,
-                messages,
-                system_prompt_for_thread.clone(),
-                assistant_message_id_for_thread.clone(),
-            ))
-        } else {
-            match DynamicController::new(
+            let mut controller_ok = false;
+            let mut controller = match DynamicController::new(
                 db.clone(),
                 bus.clone(),
                 tool_registry_for_thread.clone(),
@@ -730,185 +708,184 @@ pub fn agent_send_message(
                     draft = format!("Agent setup error: {}", error);
                     None
                 }
-            }
-        };
-
-        if let Some(ref mut controller) = controller {
-            match controller.run(&content, &mut call_llm) {
-                Ok(response) => {
-                    draft = response;
-                    controller_ok = true;
-                    waiting_for_human_input = controller.is_waiting_for_human_input();
-                }
-                Err(error) => {
-                    if error == "Cancelled" {
-                        draft.clear();
-                    } else {
-                        draft = format!("Agent error: {}", error);
-                    }
-                }
-            }
-            tool_execution_inputs = controller.take_tool_executions();
-        }
-
-        let mut final_response = draft.clone();
-        let mut stream_started = false;
-        let mut cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
-
-        let stream_supported = supports_streaming(&provider);
-        let use_responder = controller_ok
-            && stream_supported
-            && !tool_execution_inputs.is_empty()
-            && !waiting_for_human_input
-            && !cancelled;
-
-        if use_responder {
-            let responder_prompt = build_responder_prompt(
-                &content,
-                &messages_for_usage,
-                &tool_execution_inputs,
-                &draft,
-            );
-
-            let responder_messages = vec![LlmMessage {
-                role: "user".to_string(),
-                content: json!(responder_prompt),
-            }];
-
-            let responder_system_prompt = system_prompt_for_thread
-                .as_deref()
-                .filter(|prompt| !prompt.trim().is_empty());
-
-            let prepared_responder_messages = if provider == "anthropic" || provider == "claude_cli"
-            {
-                responder_messages.clone()
-            } else {
-                let mut prepared = responder_messages.clone();
-                if let Some(system_prompt) = responder_system_prompt {
-                    prepared.insert(
-                        0,
-                        LlmMessage {
-                            role: "system".to_string(),
-                            content: json!(system_prompt),
-                        },
-                    );
-                }
-                prepared
             };
 
-            if !cancel_token_for_thread.load(Ordering::Relaxed) {
-                let stream_timestamp = Utc::now().timestamp_millis();
-                bus.publish(AgentEvent::new_with_timestamp(
-                    EVENT_ASSISTANT_STREAM_STARTED,
-                    json!({
-                        "conversation_id": conversation_id_for_thread,
-                        "message_id": assistant_message_id_for_thread,
-                        "timestamp_ms": stream_timestamp
-                    }),
-                    stream_timestamp,
-                ));
-                stream_started = true;
+            if let Some(ref mut controller) = controller {
+                match controller.run(&content, &mut call_llm) {
+                    Ok(response) => {
+                        draft = response;
+                        controller_ok = true;
+                        requested_user_input = controller.requested_user_input();
+                    }
+                    Err(error) => {
+                        if error == "Cancelled" {
+                            draft.clear();
+                        } else {
+                            draft = format!("Agent error: {}", error);
+                        }
+                    }
+                }
+                tool_execution_inputs = controller.take_tool_executions();
             }
 
-            let mut streamed_text = String::new();
-            let cancel_token_for_chunks = cancel_token_for_thread.clone();
-            let mut on_chunk = |chunk: &str| {
-                if cancel_token_for_chunks.load(Ordering::Relaxed) {
-                    return;
-                }
-                streamed_text.push_str(chunk);
-                let timestamp_ms = Utc::now().timestamp_millis();
-                bus.publish(AgentEvent::new_with_timestamp(
-                    EVENT_ASSISTANT_STREAM_CHUNK,
-                    json!({
-                        "conversation_id": conversation_id_for_thread,
-                        "message_id": assistant_message_id_for_thread,
-                        "chunk": chunk,
-                        "timestamp_ms": timestamp_ms
-                    }),
-                    timestamp_ms,
-                ));
-            };
+            let mut final_response = draft.clone();
+            let mut stream_started = false;
+            let mut cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
 
-            let stream_result = match provider.as_str() {
-                "openai" => {
-                    if openai_api_key.is_empty() {
-                        Err("Missing OpenAI API key".to_string())
-                    } else {
-                        stream_openai_with_options(
-                            &client,
-                            &openai_api_key,
-                            "https://api.openai.com/v1/chat/completions",
-                            &model_for_thread,
-                            &prepared_responder_messages,
-                            Some(&responder_request_options),
-                            &mut on_chunk,
-                        )
-                    }
-                }
-                "anthropic" => {
-                    if anthropic_api_key.is_empty() {
-                        Err("Missing Anthropic API key".to_string())
-                    } else {
-                        stream_anthropic_with_options(
-                            &client,
-                            &anthropic_api_key,
-                            &model_for_thread,
-                            responder_system_prompt,
-                            &responder_messages,
-                            Some(&responder_request_options),
-                            &mut on_chunk,
-                        )
-                    }
-                }
-                "deepseek" => {
-                    if deepseek_api_key.is_empty() {
-                        Err("Missing DeepSeek API key".to_string())
-                    } else {
-                        stream_openai_compatible_with_options(
-                            &client,
-                            Some(&deepseek_api_key),
-                            "https://api.deepseek.com/chat/completions",
-                            &model_for_thread,
-                            &prepared_responder_messages,
-                            false,
-                            Some(&responder_request_options),
-                            &mut on_chunk,
-                        )
-                    }
-                }
-                "custom" | "ollama" => {
-                    let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
-                    if url.is_empty() {
-                        Err("Missing custom backend URL".to_string())
-                    } else {
-                        stream_openai_compatible_with_options(
-                            &client,
-                            api_key.as_deref(),
-                            &url,
-                            &model_for_thread,
-                            &prepared_responder_messages,
-                            false,
-                            Some(&responder_request_options),
-                            &mut on_chunk,
-                        )
-                    }
-                }
-                _ => Err(format!("Unsupported provider: {provider}")),
-            };
+            let stream_supported = supports_streaming(&provider);
+            let use_responder = controller_ok
+                && stream_supported
+                && !tool_execution_inputs.is_empty()
+                && !requested_user_input
+                && !cancelled;
 
-            let mut responder_usage: Option<Usage> = None;
-            match stream_result {
-                Ok(result) => {
-                    if !result.content.trim().is_empty() {
-                        final_response = result.content;
+            if use_responder {
+                let responder_prompt = build_responder_prompt(
+                    &content,
+                    &messages_for_usage,
+                    &tool_execution_inputs,
+                    &draft,
+                );
+
+                let responder_messages = vec![LlmMessage {
+                    role: "user".to_string(),
+                    content: json!(responder_prompt),
+                }];
+
+                let responder_system_prompt = system_prompt_for_thread
+                    .as_deref()
+                    .filter(|prompt| !prompt.trim().is_empty());
+
+                let prepared_responder_messages =
+                    if provider == "anthropic" || provider == "claude_cli" {
+                        responder_messages.clone()
                     } else {
-                        final_response = streamed_text;
-                    }
-                    responder_usage = result.usage;
+                        let mut prepared = responder_messages.clone();
+                        if let Some(system_prompt) = responder_system_prompt {
+                            prepared.insert(
+                                0,
+                                LlmMessage {
+                                    role: "system".to_string(),
+                                    content: json!(system_prompt),
+                                },
+                            );
+                        }
+                        prepared
+                    };
+
+                if !cancel_token_for_thread.load(Ordering::Relaxed) {
+                    let stream_timestamp = Utc::now().timestamp_millis();
+                    bus.publish(AgentEvent::new_with_timestamp(
+                        EVENT_ASSISTANT_STREAM_STARTED,
+                        json!({
+                            "conversation_id": conversation_id_for_thread,
+                            "message_id": assistant_message_id_for_thread,
+                            "timestamp_ms": stream_timestamp
+                        }),
+                        stream_timestamp,
+                    ));
+                    stream_started = true;
                 }
-                Err(error) => {
-                    log::error!(
+
+                let mut streamed_text = String::new();
+                let cancel_token_for_chunks = cancel_token_for_thread.clone();
+                let mut on_chunk = |chunk: &str| {
+                    if cancel_token_for_chunks.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    streamed_text.push_str(chunk);
+                    let timestamp_ms = Utc::now().timestamp_millis();
+                    bus.publish(AgentEvent::new_with_timestamp(
+                        EVENT_ASSISTANT_STREAM_CHUNK,
+                        json!({
+                            "conversation_id": conversation_id_for_thread,
+                            "message_id": assistant_message_id_for_thread,
+                            "chunk": chunk,
+                            "timestamp_ms": timestamp_ms
+                        }),
+                        timestamp_ms,
+                    ));
+                };
+
+                let stream_result = match provider.as_str() {
+                    "openai" => {
+                        if openai_api_key.is_empty() {
+                            Err("Missing OpenAI API key".to_string())
+                        } else {
+                            stream_openai_with_options(
+                                &client,
+                                &openai_api_key,
+                                "https://api.openai.com/v1/chat/completions",
+                                &model_for_thread,
+                                &prepared_responder_messages,
+                                Some(&responder_request_options),
+                                &mut on_chunk,
+                            )
+                        }
+                    }
+                    "anthropic" => {
+                        if anthropic_api_key.is_empty() {
+                            Err("Missing Anthropic API key".to_string())
+                        } else {
+                            stream_anthropic_with_options(
+                                &client,
+                                &anthropic_api_key,
+                                &model_for_thread,
+                                responder_system_prompt,
+                                &responder_messages,
+                                Some(&responder_request_options),
+                                &mut on_chunk,
+                            )
+                        }
+                    }
+                    "deepseek" => {
+                        if deepseek_api_key.is_empty() {
+                            Err("Missing DeepSeek API key".to_string())
+                        } else {
+                            stream_openai_compatible_with_options(
+                                &client,
+                                Some(&deepseek_api_key),
+                                "https://api.deepseek.com/chat/completions",
+                                &model_for_thread,
+                                &prepared_responder_messages,
+                                false,
+                                Some(&responder_request_options),
+                                &mut on_chunk,
+                            )
+                        }
+                    }
+                    "custom" | "ollama" => {
+                        let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
+                        if url.is_empty() {
+                            Err("Missing custom backend URL".to_string())
+                        } else {
+                            stream_openai_compatible_with_options(
+                                &client,
+                                api_key.as_deref(),
+                                &url,
+                                &model_for_thread,
+                                &prepared_responder_messages,
+                                false,
+                                Some(&responder_request_options),
+                                &mut on_chunk,
+                            )
+                        }
+                    }
+                    _ => Err(format!("Unsupported provider: {provider}")),
+                };
+
+                let mut responder_usage: Option<Usage> = None;
+                match stream_result {
+                    Ok(result) => {
+                        if !result.content.trim().is_empty() {
+                            final_response = result.content;
+                        } else {
+                            final_response = streamed_text;
+                        }
+                        responder_usage = result.usage;
+                    }
+                    Err(error) => {
+                        log::error!(
                         "[agent] responder stream failed: provider={} model={} conversation_id={} message_id={} error={}",
                         provider,
                         model_for_thread,
@@ -916,202 +893,203 @@ pub fn agent_send_message(
                         assistant_message_id_for_thread,
                         error
                     );
-                    final_response = draft.clone();
+                        final_response = draft.clone();
+                    }
+                }
+
+                if responder_usage.is_none() && !final_response.is_empty() {
+                    responder_usage = Some(Usage {
+                        prompt_tokens: estimate_prompt_tokens(&prepared_responder_messages),
+                        completion_tokens: estimate_tokens(&final_response),
+                        cached_prompt_tokens: 0,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    });
+                }
+
+                if let Some(usage) = responder_usage {
+                    usage_accumulator.prompt_tokens += usage.prompt_tokens;
+                    usage_accumulator.completion_tokens += usage.completion_tokens;
+                    usage_accumulator.cached_prompt_tokens += usage.cached_prompt_tokens;
+                    usage_accumulator.cache_read_input_tokens += usage.cache_read_input_tokens;
+                    usage_accumulator.cache_creation_input_tokens +=
+                        usage.cache_creation_input_tokens;
+                    record_cache_diagnostics(
+                        &provider,
+                        &model_for_thread,
+                        "responder",
+                        &usage,
+                        &responder_request_options,
+                        &mut responder_cache_diagnostics,
+                    );
+                }
+                cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
+                if cancelled {
+                    final_response.clear();
+                    tool_execution_inputs.clear();
                 }
             }
 
-            if responder_usage.is_none() && !final_response.is_empty() {
-                responder_usage = Some(Usage {
-                    prompt_tokens: estimate_prompt_tokens(&prepared_responder_messages),
-                    completion_tokens: estimate_tokens(&final_response),
-                    cached_prompt_tokens: 0,
-                    cache_read_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                });
+            if !stream_started && !cancelled {
+                if !cancel_token_for_thread.load(Ordering::Relaxed) {
+                    let stream_timestamp = Utc::now().timestamp_millis();
+                    bus.publish(AgentEvent::new_with_timestamp(
+                        EVENT_ASSISTANT_STREAM_STARTED,
+                        json!({
+                            "conversation_id": conversation_id_for_thread,
+                            "message_id": assistant_message_id_for_thread,
+                            "timestamp_ms": stream_timestamp
+                        }),
+                        stream_timestamp,
+                    ));
+                }
+
+                if !final_response.is_empty() {
+                    stream_response_chunks(
+                        &bus,
+                        &conversation_id_for_thread,
+                        &assistant_message_id_for_thread,
+                        &final_response,
+                        &cancel_token_for_thread,
+                    );
+                }
+                cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
+                if cancelled {
+                    final_response.clear();
+                    tool_execution_inputs.clear();
+                }
             }
 
-            if let Some(usage) = responder_usage {
-                usage_accumulator.prompt_tokens += usage.prompt_tokens;
-                usage_accumulator.completion_tokens += usage.completion_tokens;
-                usage_accumulator.cached_prompt_tokens += usage.cached_prompt_tokens;
-                usage_accumulator.cache_read_input_tokens += usage.cache_read_input_tokens;
-                usage_accumulator.cache_creation_input_tokens += usage.cache_creation_input_tokens;
-                record_cache_diagnostics(
-                    &provider,
-                    &model_for_thread,
-                    "responder",
-                    &usage,
-                    &responder_request_options,
-                    &mut responder_cache_diagnostics,
+            let should_persist_assistant_message = !cancelled
+                && !cancel_token_for_thread.load(Ordering::Relaxed)
+                && (!final_response.is_empty() || !tool_execution_inputs.is_empty());
+
+            if should_persist_assistant_message {
+                let _ = MessageOperations::save_message(
+                    &db,
+                    &conversation_id_for_thread,
+                    "assistant",
+                    &final_response,
+                    &[],
+                    Some(assistant_message_id_for_thread.clone()),
                 );
-            }
-            cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
-            if cancelled {
-                final_response.clear();
-                tool_execution_inputs.clear();
-            }
-        }
 
-        if !stream_started && !cancelled {
-            if !cancel_token_for_thread.load(Ordering::Relaxed) {
-                let stream_timestamp = Utc::now().timestamp_millis();
+                let tool_execution_payload: Vec<Value> = tool_execution_inputs
+                    .iter()
+                    .map(|input| {
+                        json!({
+                            "id": input.id,
+                            "message_id": input.message_id,
+                            "tool_name": input.tool_name,
+                            "parameters": input.parameters,
+                            "result": input.result,
+                            "success": input.success,
+                            "duration_ms": input.duration_ms,
+                            "timestamp_ms": input.timestamp_ms,
+                            "error": input.error,
+                            "iteration_number": input.iteration_number
+                        })
+                    })
+                    .collect();
+
+                if !tool_execution_inputs.is_empty() {
+                    for input in tool_execution_inputs {
+                        let _ = MessageOperations::save_tool_execution(&db, input);
+                    }
+                }
+
+                let _ = BranchOperations::create_message_tree_node(
+                    &db,
+                    &assistant_message_id_for_thread,
+                    Some(&user_message_id_for_thread),
+                    &main_branch_id_for_thread,
+                    false,
+                );
+
+                let timestamp_ms = Utc::now().timestamp_millis();
                 bus.publish(AgentEvent::new_with_timestamp(
-                    EVENT_ASSISTANT_STREAM_STARTED,
+                    EVENT_MESSAGE_SAVED,
                     json!({
                         "conversation_id": conversation_id_for_thread,
                         "message_id": assistant_message_id_for_thread,
-                        "timestamp_ms": stream_timestamp
+                        "role": "assistant",
+                        "content": final_response,
+                        "attachments": [],
+                        "tool_executions": tool_execution_payload,
+                        "timestamp_ms": timestamp_ms
                     }),
-                    stream_timestamp,
+                    timestamp_ms,
                 ));
             }
 
-            if !final_response.is_empty() {
-                stream_response_chunks(
-                    &bus,
-                    &conversation_id_for_thread,
-                    &assistant_message_id_for_thread,
-                    &final_response,
-                    &cancel_token_for_thread,
-                );
-            }
-            cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
-            if cancelled {
-                final_response.clear();
-                tool_execution_inputs.clear();
-            }
-        }
-
-        let should_persist_assistant_message = !cancelled
-            && !cancel_token_for_thread.load(Ordering::Relaxed)
-            && (!final_response.is_empty() || !tool_execution_inputs.is_empty());
-
-        if should_persist_assistant_message {
-            let _ = MessageOperations::save_message(
-                &db,
-                &conversation_id_for_thread,
-                "assistant",
-                &final_response,
-                &[],
-                Some(assistant_message_id_for_thread.clone()),
-            );
-
-            let tool_execution_payload: Vec<Value> = tool_execution_inputs
-                .iter()
-                .map(|input| {
-                    json!({
-                        "id": input.id,
-                        "message_id": input.message_id,
-                        "tool_name": input.tool_name,
-                        "parameters": input.parameters,
-                        "result": input.result,
-                        "success": input.success,
-                        "duration_ms": input.duration_ms,
-                        "timestamp_ms": input.timestamp_ms,
-                        "error": input.error,
-                        "iteration_number": input.iteration_number
+            let usage =
+                if usage_accumulator.prompt_tokens > 0 || usage_accumulator.completion_tokens > 0 {
+                    Some(usage_accumulator)
+                } else if final_response.is_empty() {
+                    None
+                } else {
+                    Some(Usage {
+                        prompt_tokens: estimate_prompt_tokens(&messages_for_usage),
+                        completion_tokens: estimate_tokens(&final_response),
+                        cached_prompt_tokens: 0,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
                     })
-                })
-                .collect();
+                };
 
-            if !tool_execution_inputs.is_empty() {
-                for input in tool_execution_inputs {
-                    let _ = MessageOperations::save_tool_execution(&db, input);
+            if let Some(usage) =
+                usage.filter(|_| !cancelled && !cancel_token_for_thread.load(Ordering::Relaxed))
+            {
+                let estimated_cost = calculate_estimated_cost(
+                    &model_for_thread,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                );
+                let save_usage = SaveMessageUsageInput {
+                    message_id: assistant_message_id_for_thread.clone(),
+                    model_name: model_for_thread.clone(),
+                    prompt_tokens: usage.prompt_tokens,
+                    completion_tokens: usage.completion_tokens,
+                    estimated_cost,
+                };
+
+                if let Ok(saved_usage) = UsageOperations::save_message_usage(&db, save_usage) {
+                    let timestamp_ms = saved_usage.created_at.timestamp_millis();
+                    bus.publish(AgentEvent::new_with_timestamp(
+                        EVENT_MESSAGE_USAGE_SAVED,
+                        json!({
+                            "id": saved_usage.id,
+                            "message_id": saved_usage.message_id,
+                            "model_name": saved_usage.model_name,
+                            "prompt_tokens": saved_usage.prompt_tokens,
+                            "completion_tokens": saved_usage.completion_tokens,
+                            "total_tokens": saved_usage.total_tokens,
+                            "estimated_cost": saved_usage.estimated_cost,
+                            "timestamp_ms": timestamp_ms
+                        }),
+                        timestamp_ms,
+                    ));
+                }
+
+                if let Ok(summary) =
+                    UsageOperations::update_conversation_usage(&db, &conversation_id_for_thread)
+                {
+                    let timestamp_ms = summary.last_updated.timestamp_millis();
+                    bus.publish(AgentEvent::new_with_timestamp(
+                        EVENT_USAGE_UPDATED,
+                        json!({
+                            "conversation_id": summary.conversation_id,
+                            "total_prompt_tokens": summary.total_prompt_tokens,
+                            "total_completion_tokens": summary.total_completion_tokens,
+                            "total_tokens": summary.total_tokens,
+                            "total_cost": summary.total_cost,
+                            "message_count": summary.message_count,
+                            "timestamp_ms": timestamp_ms
+                        }),
+                        timestamp_ms,
+                    ));
                 }
             }
-
-            let _ = BranchOperations::create_message_tree_node(
-                &db,
-                &assistant_message_id_for_thread,
-                Some(&user_message_id_for_thread),
-                &main_branch_id_for_thread,
-                false,
-            );
-
-            let timestamp_ms = Utc::now().timestamp_millis();
-            bus.publish(AgentEvent::new_with_timestamp(
-                EVENT_MESSAGE_SAVED,
-                json!({
-                    "conversation_id": conversation_id_for_thread,
-                    "message_id": assistant_message_id_for_thread,
-                    "role": "assistant",
-                    "content": final_response,
-                    "attachments": [],
-                    "tool_executions": tool_execution_payload,
-                    "timestamp_ms": timestamp_ms
-                }),
-                timestamp_ms,
-            ));
-        }
-
-        let usage =
-            if usage_accumulator.prompt_tokens > 0 || usage_accumulator.completion_tokens > 0 {
-                Some(usage_accumulator)
-            } else if final_response.is_empty() {
-                None
-            } else {
-                Some(Usage {
-                    prompt_tokens: estimate_prompt_tokens(&messages_for_usage),
-                    completion_tokens: estimate_tokens(&final_response),
-                    cached_prompt_tokens: 0,
-                    cache_read_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                })
-            };
-
-        if let Some(usage) =
-            usage.filter(|_| !cancelled && !cancel_token_for_thread.load(Ordering::Relaxed))
-        {
-            let estimated_cost = calculate_estimated_cost(
-                &model_for_thread,
-                usage.prompt_tokens,
-                usage.completion_tokens,
-            );
-            let save_usage = SaveMessageUsageInput {
-                message_id: assistant_message_id_for_thread.clone(),
-                model_name: model_for_thread.clone(),
-                prompt_tokens: usage.prompt_tokens,
-                completion_tokens: usage.completion_tokens,
-                estimated_cost,
-            };
-
-            if let Ok(saved_usage) = UsageOperations::save_message_usage(&db, save_usage) {
-                let timestamp_ms = saved_usage.created_at.timestamp_millis();
-                bus.publish(AgentEvent::new_with_timestamp(
-                    EVENT_MESSAGE_USAGE_SAVED,
-                    json!({
-                        "id": saved_usage.id,
-                        "message_id": saved_usage.message_id,
-                        "model_name": saved_usage.model_name,
-                        "prompt_tokens": saved_usage.prompt_tokens,
-                        "completion_tokens": saved_usage.completion_tokens,
-                        "total_tokens": saved_usage.total_tokens,
-                        "estimated_cost": saved_usage.estimated_cost,
-                        "timestamp_ms": timestamp_ms
-                    }),
-                    timestamp_ms,
-                ));
-            }
-
-            if let Ok(summary) =
-                UsageOperations::update_conversation_usage(&db, &conversation_id_for_thread)
-            {
-                let timestamp_ms = summary.last_updated.timestamp_millis();
-                bus.publish(AgentEvent::new_with_timestamp(
-                    EVENT_USAGE_UPDATED,
-                    json!({
-                        "conversation_id": summary.conversation_id,
-                        "total_prompt_tokens": summary.total_prompt_tokens,
-                        "total_completion_tokens": summary.total_completion_tokens,
-                        "total_tokens": summary.total_tokens,
-                        "total_cost": summary.total_cost,
-                        "message_count": summary.message_count,
-                        "timestamp_ms": timestamp_ms
-                    }),
-                    timestamp_ms,
-                ));
-            }
-        }
 
             let timestamp_ms = Utc::now().timestamp_millis();
             bus.publish(AgentEvent::new_with_timestamp(
@@ -1455,7 +1433,10 @@ fn render_recent_messages(messages: &[LlmMessage], limit: usize) -> String {
         .map(|message| format!("{}: {}", message.role, value_to_string(&message.content)))
         .collect::<Vec<_>>();
 
-    let total_chars = rendered.iter().map(|entry| entry.chars().count()).sum::<usize>();
+    let total_chars = rendered
+        .iter()
+        .map(|entry| entry.chars().count())
+        .sum::<usize>();
     if total_chars <= RESPONDER_HISTORY_MAX_CHARS {
         return rendered.join("\n");
     }
