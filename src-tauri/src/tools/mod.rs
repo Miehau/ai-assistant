@@ -105,10 +105,13 @@ impl ToolRegistry {
     }
 
     pub fn list_metadata(&self) -> Vec<ToolMetadata> {
-        self.tools
+        let mut metadata = self
+            .tools
             .values()
             .map(|tool| tool.metadata.clone())
-            .collect()
+            .collect::<Vec<_>>();
+        metadata.sort_by(|a, b| a.name.cmp(&b.name));
+        metadata
     }
 
     pub fn prompt_json(&self) -> Value {

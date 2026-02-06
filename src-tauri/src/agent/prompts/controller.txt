@@ -55,8 +55,11 @@ AVAILABLE TOOLS (JSON):
 
 ---
 
-LIMITS:
-{limits}
+RECENT MESSAGES:
+{recent_messages}
+
+USER REQUEST:
+{user_message}
 
 STATE SUMMARY:
 {state_summary}
@@ -64,8 +67,5 @@ STATE SUMMARY:
 LAST TOOL OUTPUT:
 {last_tool_output}
 
-RECENT MESSAGES:
-{recent_messages}
-
-USER REQUEST:
-{user_message}
+LIMITS:
+{limits}
