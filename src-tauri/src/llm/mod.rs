@@ -87,16 +87,27 @@ pub fn complete_openai_compatible_with_options(
     url: &str,
     model: &str,
     messages: &[LlmMessage],
-    _request_options: Option<&LlmRequestOptions>,
+    request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": false
+    });
+
+    if let Some(options) = request_options {
+        if let Some(key) = options.prompt_cache_key.as_ref() {
+            body["prompt_cache_key"] = serde_json::json!(key);
+        }
+        if let Some(retention) = options.prompt_cache_retention.as_ref() {
+            body["prompt_cache_retention"] = serde_json::json!(retention);
+        }
+    }
+
     let mut request = client
         .post(url)
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": messages,
-            "stream": false
-        }));
+        .json(&body);
 
     if let Some(key) = api_key {
         request = request.bearer_auth(key);
@@ -231,7 +242,7 @@ pub fn stream_openai_compatible_with_options<F>(
     model: &str,
     messages: &[LlmMessage],
     include_usage: bool,
-    _request_options: Option<&LlmRequestOptions>,
+    request_options: Option<&LlmRequestOptions>,
     on_chunk: &mut F,
 ) -> Result<StreamResult, String>
 where
@@ -247,6 +258,15 @@ where
         body["stream_options"] = serde_json::json!({
             "include_usage": true
         });
+    }
+
+    if let Some(options) = request_options {
+        if let Some(key) = options.prompt_cache_key.as_ref() {
+            body["prompt_cache_key"] = serde_json::json!(key);
+        }
+        if let Some(retention) = options.prompt_cache_retention.as_ref() {
+            body["prompt_cache_retention"] = serde_json::json!(retention);
+        }
     }
 
     let mut request = client

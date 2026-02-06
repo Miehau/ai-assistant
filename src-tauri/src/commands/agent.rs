@@ -45,6 +45,7 @@ static PRICING: OnceLock<HashMap<String, PricingEntry>> = OnceLock::new();
 static CANCEL_REGISTRY: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 const LLM_HTTP_TIMEOUT_SECS: u64 = 120;
 const LLM_HTTP_CONNECT_TIMEOUT_SECS: u64 = 15;
+const OPENAI_PROMPT_CACHE_RETENTION: &str = "24h";
 
 fn get_pricing() -> &'static HashMap<String, PricingEntry> {
     PRICING.get_or_init(|| {
@@ -167,8 +168,33 @@ fn estimate_prompt_tokens(messages: &[LlmMessage]) -> i32 {
         .sum()
 }
 
-fn llm_request_options(_conversation_id: &str, _phase: &str) -> LlmRequestOptions {
-    LlmRequestOptions::default()
+fn supports_openai_prompt_cache_retention(model: &str) -> bool {
+    let normalized = model.to_ascii_lowercase();
+    normalized.starts_with("gpt-5")
+}
+
+fn llm_request_options(
+    provider: &str,
+    conversation_id: &str,
+    phase: &str,
+    model: &str,
+) -> LlmRequestOptions {
+    if provider != "openai" {
+        return LlmRequestOptions::default();
+    }
+
+    let prompt_cache_key = format!("conversation:{conversation_id}:{phase}:v1");
+    let prompt_cache_retention = if supports_openai_prompt_cache_retention(model) {
+        Some(OPENAI_PROMPT_CACHE_RETENTION.to_string())
+    } else {
+        None
+    };
+
+    LlmRequestOptions {
+        prompt_cache_key: Some(prompt_cache_key),
+        prompt_cache_retention,
+        anthropic_cache_breakpoints: Vec::new(),
+    }
 }
 
 fn stream_response_chunks(
@@ -455,10 +481,18 @@ pub fn agent_send_message(
             };
 
             let messages_for_usage = messages.clone();
-            let controller_request_options =
-                llm_request_options(&conversation_id_for_thread, "controller");
-            let responder_request_options =
-                llm_request_options(&conversation_id_for_thread, "responder");
+            let controller_request_options = llm_request_options(
+                &provider,
+                &conversation_id_for_thread,
+                "controller",
+                &model_for_thread,
+            );
+            let responder_request_options = llm_request_options(
+                &provider,
+                &conversation_id_for_thread,
+                "responder",
+                &model_for_thread,
+            );
 
             let mut tool_execution_inputs: Vec<MessageToolExecutionInput> = Vec::new();
             let mut call_llm = |messages: &[LlmMessage],
