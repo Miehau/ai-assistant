@@ -157,8 +157,7 @@ fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
                 .unwrap_or(false)
                 || map.contains_key("properties");
             if is_object_schema {
-                map.entry("additionalProperties".to_string())
-                    .or_insert(Value::Bool(false));
+                map.insert("additionalProperties".to_string(), Value::Bool(false));
             }
 
             for entry in map.values_mut() {
