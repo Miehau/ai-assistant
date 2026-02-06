@@ -179,22 +179,30 @@ fn llm_request_options(
     phase: &str,
     model: &str,
 ) -> LlmRequestOptions {
-    if provider != "openai" {
-        return LlmRequestOptions::default();
+    if provider == "openai" {
+        let prompt_cache_key = format!("conversation:{conversation_id}:{phase}:v1");
+        let prompt_cache_retention = if supports_openai_prompt_cache_retention(model) {
+            Some(OPENAI_PROMPT_CACHE_RETENTION.to_string())
+        } else {
+            None
+        };
+
+        return LlmRequestOptions {
+            prompt_cache_key: Some(prompt_cache_key),
+            prompt_cache_retention,
+            anthropic_cache_breakpoints: Vec::new(),
+        };
     }
 
-    let prompt_cache_key = format!("conversation:{conversation_id}:{phase}:v1");
-    let prompt_cache_retention = if supports_openai_prompt_cache_retention(model) {
-        Some(OPENAI_PROMPT_CACHE_RETENTION.to_string())
-    } else {
-        None
-    };
-
-    LlmRequestOptions {
-        prompt_cache_key: Some(prompt_cache_key),
-        prompt_cache_retention,
-        anthropic_cache_breakpoints: Vec::new(),
+    if provider == "anthropic" {
+        return LlmRequestOptions {
+            prompt_cache_key: None,
+            prompt_cache_retention: None,
+            anthropic_cache_breakpoints: vec![0],
+        };
     }
+
+    LlmRequestOptions::default()
 }
 
 fn stream_response_chunks(

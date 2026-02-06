@@ -5,6 +5,8 @@ use std::io::{BufRead, BufReader};
 use std::process::Command;
 
 const PROVIDER_ERROR_BODY_MAX_CHARS: usize = 2_000;
+const ANTHROPIC_CACHE_BLOCK_MAX_CHARS: usize = 2_500;
+const ANTHROPIC_CACHE_INTERVAL_BLOCKS: usize = 16;
 
 #[derive(Clone, Debug)]
 pub struct Usage {
@@ -363,6 +365,149 @@ pub fn complete_anthropic(
     complete_anthropic_with_options(client, api_key, model, system, messages, None)
 }
 
+fn chunk_text_by_chars(input: &str, max_chars: usize) -> Vec<String> {
+    if input.is_empty() || max_chars == 0 {
+        return Vec::new();
+    }
+
+    let chars: Vec<char> = input.chars().collect();
+    chars
+        .chunks(max_chars)
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect()
+}
+
+fn split_anthropic_text_for_cache(input: &str) -> Vec<String> {
+    let marker = ["\nSTATE SUMMARY:\n", "\nLAST TOOL OUTPUT:\n", "\nLIMITS:\n"]
+        .iter()
+        .filter_map(|candidate| input.find(candidate).map(|idx| (idx, *candidate)))
+        .min_by_key(|(idx, _)| *idx);
+
+    if let Some((idx, _)) = marker {
+        let stable_prefix = &input[..idx];
+        let dynamic_suffix = &input[idx..];
+        let mut blocks = chunk_text_by_chars(stable_prefix, ANTHROPIC_CACHE_BLOCK_MAX_CHARS);
+        blocks.extend(chunk_text_by_chars(
+            dynamic_suffix,
+            ANTHROPIC_CACHE_BLOCK_MAX_CHARS,
+        ));
+        return blocks;
+    }
+
+    chunk_text_by_chars(input, ANTHROPIC_CACHE_BLOCK_MAX_CHARS)
+}
+
+fn should_apply_anthropic_cache_control(
+    block_index: usize,
+    explicit_breakpoints: &[usize],
+    cache_enabled: bool,
+) -> bool {
+    if !cache_enabled {
+        return false;
+    }
+
+    explicit_breakpoints.contains(&block_index)
+        || (block_index > 0 && block_index % ANTHROPIC_CACHE_INTERVAL_BLOCKS == 0)
+}
+
+fn format_anthropic_system(
+    system: Option<&str>,
+    block_index: &mut usize,
+    request_options: Option<&LlmRequestOptions>,
+) -> Option<Value> {
+    let text = system?;
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let (explicit_breakpoints, cache_enabled) = request_options
+        .map(|options| {
+            (
+                options.anthropic_cache_breakpoints.as_slice(),
+                !options.anthropic_cache_breakpoints.is_empty(),
+            )
+        })
+        .unwrap_or((&[] as &[usize], false));
+
+    let mut content_blocks = Vec::new();
+    for chunk in chunk_text_by_chars(text, ANTHROPIC_CACHE_BLOCK_MAX_CHARS) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let mut block = serde_json::json!({
+            "type": "text",
+            "text": chunk
+        });
+        if should_apply_anthropic_cache_control(*block_index, explicit_breakpoints, cache_enabled) {
+            block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+        }
+        content_blocks.push(block);
+        *block_index += 1;
+    }
+
+    if content_blocks.is_empty() {
+        None
+    } else {
+        Some(Value::Array(content_blocks))
+    }
+}
+
+fn format_anthropic_messages(
+    messages: &[LlmMessage],
+    block_index: &mut usize,
+    request_options: Option<&LlmRequestOptions>,
+) -> Vec<Value> {
+    let (explicit_breakpoints, cache_enabled) = request_options
+        .map(|options| {
+            (
+                options.anthropic_cache_breakpoints.as_slice(),
+                !options.anthropic_cache_breakpoints.is_empty(),
+            )
+        })
+        .unwrap_or((&[] as &[usize], false));
+
+    let mut formatted = Vec::new();
+    for message in messages.iter().filter(|m| m.role != "system") {
+        let text = value_to_string(&message.content);
+        let chunks = split_anthropic_text_for_cache(&text);
+        let mut content_blocks = Vec::new();
+
+        for chunk in chunks {
+            if chunk.is_empty() {
+                continue;
+            }
+            let mut block = serde_json::json!({
+                "type": "text",
+                "text": chunk
+            });
+            if should_apply_anthropic_cache_control(
+                *block_index,
+                explicit_breakpoints,
+                cache_enabled,
+            ) {
+                block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+            }
+            content_blocks.push(block);
+            *block_index += 1;
+        }
+
+        if content_blocks.is_empty() {
+            content_blocks.push(serde_json::json!({
+                "type": "text",
+                "text": ""
+            }));
+            *block_index += 1;
+        }
+
+        formatted.push(serde_json::json!({
+            "role": message.role,
+            "content": content_blocks
+        }));
+    }
+
+    formatted
+}
+
 pub fn complete_anthropic_with_options(
     client: &Client,
     api_key: &str,
@@ -415,22 +560,23 @@ pub fn complete_anthropic_with_output_format_with_options(
     system: Option<&str>,
     messages: &[LlmMessage],
     output_format: Option<Value>,
-    _request_options: Option<&LlmRequestOptions>,
+    request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
-    let formatted_messages = messages
-        .iter()
-        .filter(|m| m.role != "system")
-        .map(|m| serde_json::json!({ "role": m.role, "content": value_to_string(&m.content) }))
-        .collect::<Vec<_>>();
+    let mut block_index = 0usize;
+    let formatted_system = format_anthropic_system(system, &mut block_index, request_options);
+    let formatted_messages = format_anthropic_messages(messages, &mut block_index, request_options);
 
     let mut body = serde_json::json!({
         "model": model,
-        "system": system,
         "messages": formatted_messages,
         "stream": false,
         "max_tokens": 4096,
         "temperature": 0,
     });
+
+    if let Some(system_blocks) = formatted_system {
+        body["system"] = system_blocks;
+    }
 
     let has_output_format = output_format.is_some();
     if let Some(output_format_value) = output_format {
@@ -529,26 +675,27 @@ pub fn stream_anthropic_with_options<F>(
     model: &str,
     system: Option<&str>,
     messages: &[LlmMessage],
-    _request_options: Option<&LlmRequestOptions>,
+    request_options: Option<&LlmRequestOptions>,
     on_chunk: &mut F,
 ) -> Result<StreamResult, String>
 where
     F: FnMut(&str),
 {
-    let formatted_messages = messages
-        .iter()
-        .filter(|m| m.role != "system")
-        .map(|m| serde_json::json!({ "role": m.role, "content": value_to_string(&m.content) }))
-        .collect::<Vec<_>>();
+    let mut block_index = 0usize;
+    let formatted_system = format_anthropic_system(system, &mut block_index, request_options);
+    let formatted_messages = format_anthropic_messages(messages, &mut block_index, request_options);
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
-        "system": system,
         "messages": formatted_messages,
         "stream": true,
         "max_tokens": 4096,
         "temperature": 0,
     });
+
+    if let Some(system_blocks) = formatted_system {
+        body["system"] = system_blocks;
+    }
 
     let response = client
         .post("https://api.anthropic.com/v1/messages")
