@@ -1251,6 +1251,9 @@ fn build_user_content(content: &str, attachments: &[IncomingAttachment]) -> serd
 const MAX_TOOL_ARGS_CHARS: usize = 4000;
 const MAX_TOOL_RESULT_CHARS: usize = 8000;
 const MAX_TOOL_ERROR_CHARS: usize = 2000;
+const RESPONDER_HISTORY_MAX_CHARS: usize = 48_000;
+const RESPONDER_HISTORY_STABLE_PREFIX_MESSAGES: usize = 8;
+const RESPONDER_HISTORY_RECENT_TAIL_MESSAGES: usize = 20;
 
 fn map_message_attachments(attachments: &[MessageAttachment]) -> Vec<IncomingAttachment> {
     attachments
@@ -1346,12 +1349,36 @@ fn build_responder_prompt(
 
 fn render_recent_messages(messages: &[LlmMessage], limit: usize) -> String {
     let start = messages.len().saturating_sub(limit);
-    messages
+    let rendered = messages
         .iter()
         .skip(start)
         .map(|message| format!("{}: {}", message.role, value_to_string(&message.content)))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect::<Vec<_>>();
+
+    let total_chars = rendered.iter().map(|entry| entry.chars().count()).sum::<usize>();
+    if total_chars <= RESPONDER_HISTORY_MAX_CHARS {
+        return rendered.join("\n");
+    }
+
+    let prefix_end = rendered.len().min(RESPONDER_HISTORY_STABLE_PREFIX_MESSAGES);
+    let tail_start = rendered
+        .len()
+        .saturating_sub(RESPONDER_HISTORY_RECENT_TAIL_MESSAGES);
+    if tail_start <= prefix_end {
+        return rendered.join("\n");
+    }
+
+    let stable_prefix = rendered[..prefix_end].join("\n");
+    let recent_tail = rendered[tail_start..].join("\n");
+    let omitted_messages = tail_start - prefix_end;
+    let omitted_chars = rendered[prefix_end..tail_start]
+        .iter()
+        .map(|entry| entry.chars().count())
+        .sum::<usize>();
+
+    format!(
+        "{stable_prefix}\n[history_compact] omitted_middle_messages={omitted_messages} omitted_chars={omitted_chars}\n{recent_tail}"
+    )
 }
 
 fn render_tool_outputs(tool_execution_inputs: &[MessageToolExecutionInput]) -> String {

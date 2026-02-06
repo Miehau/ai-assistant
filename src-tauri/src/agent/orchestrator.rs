@@ -29,6 +29,9 @@ use uuid::Uuid;
 const AUTO_INLINE_RESULT_MAX_CHARS: usize = 4_096;
 const INLINE_RESULT_HARD_MAX_CHARS: usize = 16_384;
 const PERSISTED_RESULT_PREVIEW_MAX_CHARS: usize = 1_200;
+const CONTROLLER_HISTORY_MAX_CHARS: usize = 48_000;
+const CONTROLLER_HISTORY_STABLE_PREFIX_MESSAGES: usize = 8;
+const CONTROLLER_HISTORY_RECENT_TAIL_MESSAGES: usize = 20;
 
 pub struct DynamicController {
     db: crate::db::Db,
@@ -973,15 +976,42 @@ impl DynamicController {
         } else {
             0
         };
-        self.messages
+        let rendered = self
+            .messages
             .iter()
             .skip(start)
             .map(|message| {
                 let content = value_to_string(&message.content);
                 format!("{}: {}", message.role, content)
             })
-            .collect::<Vec<_>>()
-            .join("\n")
+            .collect::<Vec<_>>();
+
+        let total_chars = rendered.iter().map(|entry| entry.chars().count()).sum::<usize>();
+        if total_chars <= CONTROLLER_HISTORY_MAX_CHARS {
+            return rendered.join("\n");
+        }
+
+        let prefix_end = rendered
+            .len()
+            .min(CONTROLLER_HISTORY_STABLE_PREFIX_MESSAGES);
+        let tail_start = rendered
+            .len()
+            .saturating_sub(CONTROLLER_HISTORY_RECENT_TAIL_MESSAGES);
+        if tail_start <= prefix_end {
+            return rendered.join("\n");
+        }
+
+        let stable_prefix = rendered[..prefix_end].join("\n");
+        let recent_tail = rendered[tail_start..].join("\n");
+        let omitted_messages = tail_start - prefix_end;
+        let omitted_chars = rendered[prefix_end..tail_start]
+            .iter()
+            .map(|entry| entry.chars().count())
+            .sum::<usize>();
+
+        format!(
+            "{stable_prefix}\n[history_compact] omitted_middle_messages={omitted_messages} omitted_chars={omitted_chars}\n{recent_tail}"
+        )
     }
 
     fn render_state_summary(&self) -> String {
