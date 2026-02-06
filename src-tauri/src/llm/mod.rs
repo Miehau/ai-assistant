@@ -12,6 +12,9 @@ const ANTHROPIC_CACHE_INTERVAL_BLOCKS: usize = 16;
 pub struct Usage {
     pub prompt_tokens: i32,
     pub completion_tokens: i32,
+    pub cached_prompt_tokens: i32,
+    pub cache_read_input_tokens: i32,
+    pub cache_creation_input_tokens: i32,
 }
 
 pub struct StreamResult {
@@ -153,10 +156,18 @@ pub fn complete_openai_compatible_with_options(
             .get("completion_tokens")
             .and_then(|v| v.as_i64())
             .unwrap_or(0) as i32;
-        if prompt_tokens > 0 || completion_tokens > 0 {
+        let cached_prompt_tokens = usage
+            .get("prompt_tokens_details")
+            .and_then(|details| details.get("cached_tokens"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+        if prompt_tokens > 0 || completion_tokens > 0 || cached_prompt_tokens > 0 {
             Some(Usage {
                 prompt_tokens,
                 completion_tokens,
+                cached_prompt_tokens,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             })
         } else {
             None
@@ -169,7 +180,15 @@ pub fn complete_openai_compatible_with_options(
         content.len(),
         usage
             .as_ref()
-            .map(|u| (u.prompt_tokens, u.completion_tokens))
+            .map(|u| {
+                (
+                    u.prompt_tokens,
+                    u.completion_tokens,
+                    u.cached_prompt_tokens,
+                    u.cache_read_input_tokens,
+                    u.cache_creation_input_tokens,
+                )
+            })
     );
 
     Ok(StreamResult { content, usage })
@@ -341,10 +360,18 @@ where
                 .get("completion_tokens")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0) as i32;
-            if prompt_tokens > 0 || completion_tokens > 0 {
+            let cached_prompt_tokens = usage_value
+                .get("prompt_tokens_details")
+                .and_then(|details| details.get("cached_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as i32;
+            if prompt_tokens > 0 || completion_tokens > 0 || cached_prompt_tokens > 0 {
                 usage = Some(Usage {
                     prompt_tokens,
                     completion_tokens,
+                    cached_prompt_tokens,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 });
             }
         }
@@ -633,10 +660,25 @@ pub fn complete_anthropic_with_output_format_with_options(
             .get("output_tokens")
             .and_then(|v| v.as_i64())
             .unwrap_or(0) as i32;
-        if prompt_tokens > 0 || completion_tokens > 0 {
+        let cache_read_input_tokens = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+        let cache_creation_input_tokens = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+        if prompt_tokens > 0
+            || completion_tokens > 0
+            || cache_read_input_tokens > 0
+            || cache_creation_input_tokens > 0
+        {
             Some(Usage {
                 prompt_tokens,
                 completion_tokens,
+                cached_prompt_tokens: 0,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
             })
         } else {
             None
@@ -649,7 +691,15 @@ pub fn complete_anthropic_with_output_format_with_options(
         content.len(),
         usage
             .as_ref()
-            .map(|u| (u.prompt_tokens, u.completion_tokens))
+            .map(|u| {
+                (
+                    u.prompt_tokens,
+                    u.completion_tokens,
+                    u.cached_prompt_tokens,
+                    u.cache_read_input_tokens,
+                    u.cache_creation_input_tokens,
+                )
+            })
     );
 
     Ok(StreamResult { content, usage })
@@ -766,10 +816,25 @@ where
                             .get("output_tokens")
                             .and_then(|v| v.as_i64())
                             .unwrap_or(0) as i32;
-                        if prompt_tokens > 0 || completion_tokens > 0 {
+                        let cache_read_input_tokens = usage_value
+                            .get("cache_read_input_tokens")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0) as i32;
+                        let cache_creation_input_tokens = usage_value
+                            .get("cache_creation_input_tokens")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0) as i32;
+                        if prompt_tokens > 0
+                            || completion_tokens > 0
+                            || cache_read_input_tokens > 0
+                            || cache_creation_input_tokens > 0
+                        {
                             usage = Some(Usage {
                                 prompt_tokens,
                                 completion_tokens,
+                                cached_prompt_tokens: 0,
+                                cache_read_input_tokens,
+                                cache_creation_input_tokens,
                             });
                         }
                     }
@@ -783,15 +848,40 @@ where
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0) as i32;
                     let prompt_tokens = usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
+                    let cache_read_input_tokens = usage_value
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or_else(|| {
+                            usage
+                                .as_ref()
+                                .map(|u| u.cache_read_input_tokens as i64)
+                                .unwrap_or(0)
+                        }) as i32;
+                    let cache_creation_input_tokens = usage_value
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or_else(|| {
+                            usage
+                                .as_ref()
+                                .map(|u| u.cache_creation_input_tokens as i64)
+                                .unwrap_or(0)
+                        }) as i32;
                     let completion_tokens = if output_tokens > 0 {
                         output_tokens
                     } else {
                         usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0)
                     };
-                    if prompt_tokens > 0 || completion_tokens > 0 {
+                    if prompt_tokens > 0
+                        || completion_tokens > 0
+                        || cache_read_input_tokens > 0
+                        || cache_creation_input_tokens > 0
+                    {
                         usage = Some(Usage {
                             prompt_tokens,
                             completion_tokens,
+                            cached_prompt_tokens: 0,
+                            cache_read_input_tokens,
+                            cache_creation_input_tokens,
                         });
                     }
                 }

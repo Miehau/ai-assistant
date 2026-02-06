@@ -46,6 +46,9 @@ static CANCEL_REGISTRY: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = Once
 const LLM_HTTP_TIMEOUT_SECS: u64 = 120;
 const LLM_HTTP_CONNECT_TIMEOUT_SECS: u64 = 15;
 const OPENAI_PROMPT_CACHE_RETENTION: &str = "24h";
+const CACHE_DIAGNOSTICS_MIN_REQUESTS: u32 = 6;
+const CACHE_DIAGNOSTICS_MIN_PROMPT_TOKENS: i64 = 4096;
+const CACHE_DIAGNOSTICS_MIN_HIT_RATIO: f64 = 0.10;
 
 fn get_pricing() -> &'static HashMap<String, PricingEntry> {
     PRICING.get_or_init(|| {
@@ -203,6 +206,69 @@ fn llm_request_options(
     }
 
     LlmRequestOptions::default()
+}
+
+#[derive(Default)]
+struct CacheDiagnostics {
+    requests: u32,
+    prompt_tokens: i64,
+    cached_tokens: i64,
+}
+
+fn record_cache_diagnostics(
+    provider: &str,
+    model: &str,
+    phase: &str,
+    usage: &Usage,
+    request_options: &LlmRequestOptions,
+    diagnostics: &mut CacheDiagnostics,
+) {
+    let cached_tokens = match provider {
+        "openai" => usage.cached_prompt_tokens as i64,
+        "anthropic" => usage.cache_read_input_tokens as i64,
+        _ => 0,
+    };
+    if usage.prompt_tokens <= 0 {
+        return;
+    }
+
+    diagnostics.requests += 1;
+    diagnostics.prompt_tokens += usage.prompt_tokens as i64;
+    diagnostics.cached_tokens += cached_tokens.max(0);
+
+    let hit_ratio = if diagnostics.prompt_tokens > 0 {
+        diagnostics.cached_tokens as f64 / diagnostics.prompt_tokens as f64
+    } else {
+        0.0
+    };
+
+    log::debug!(
+        "[cache] provider={} model={} phase={} prompt_tokens={} cached_tokens={} hit_ratio={:.3}",
+        provider,
+        model,
+        phase,
+        usage.prompt_tokens,
+        cached_tokens,
+        hit_ratio
+    );
+
+    if diagnostics.requests >= CACHE_DIAGNOSTICS_MIN_REQUESTS
+        && diagnostics.prompt_tokens >= CACHE_DIAGNOSTICS_MIN_PROMPT_TOKENS
+        && hit_ratio < CACHE_DIAGNOSTICS_MIN_HIT_RATIO
+    {
+        log::warn!(
+            "[cache] low hit ratio: provider={} model={} phase={} hit_ratio={:.3} requests={} total_prompt_tokens={} total_cached_tokens={} prompt_cache_key={:?} anthropic_breakpoints={:?}",
+            provider,
+            model,
+            phase,
+            hit_ratio,
+            diagnostics.requests,
+            diagnostics.prompt_tokens,
+            diagnostics.cached_tokens,
+            request_options.prompt_cache_key,
+            request_options.anthropic_cache_breakpoints
+        );
+    }
 }
 
 fn stream_response_chunks(
@@ -458,7 +524,12 @@ pub fn agent_send_message(
             let mut usage_accumulator = Usage {
                 prompt_tokens: 0,
                 completion_tokens: 0,
+                cached_prompt_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
             };
+            let mut controller_cache_diagnostics = CacheDiagnostics::default();
+            let mut responder_cache_diagnostics = CacheDiagnostics::default();
             let mut waiting_for_human_input = false;
             let openai_api_key = ModelOperations::get_api_key(&db, "openai")
                 .ok()
@@ -596,6 +667,18 @@ pub fn agent_send_message(
                 if let Some(usage) = stream_result.usage.as_ref() {
                     usage_accumulator.prompt_tokens += usage.prompt_tokens;
                     usage_accumulator.completion_tokens += usage.completion_tokens;
+                    usage_accumulator.cached_prompt_tokens += usage.cached_prompt_tokens;
+                    usage_accumulator.cache_read_input_tokens += usage.cache_read_input_tokens;
+                    usage_accumulator.cache_creation_input_tokens +=
+                        usage.cache_creation_input_tokens;
+                    record_cache_diagnostics(
+                        &provider,
+                        &model_for_thread,
+                        "controller",
+                        usage,
+                        &controller_request_options,
+                        &mut controller_cache_diagnostics,
+                    );
                 } else {
                     usage_accumulator.prompt_tokens += estimate_prompt_tokens(&prepared_messages);
                     usage_accumulator.completion_tokens += estimate_tokens(&stream_result.content);
@@ -841,12 +924,26 @@ pub fn agent_send_message(
                 responder_usage = Some(Usage {
                     prompt_tokens: estimate_prompt_tokens(&prepared_responder_messages),
                     completion_tokens: estimate_tokens(&final_response),
+                    cached_prompt_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 });
             }
 
             if let Some(usage) = responder_usage {
                 usage_accumulator.prompt_tokens += usage.prompt_tokens;
                 usage_accumulator.completion_tokens += usage.completion_tokens;
+                usage_accumulator.cached_prompt_tokens += usage.cached_prompt_tokens;
+                usage_accumulator.cache_read_input_tokens += usage.cache_read_input_tokens;
+                usage_accumulator.cache_creation_input_tokens += usage.cache_creation_input_tokens;
+                record_cache_diagnostics(
+                    &provider,
+                    &model_for_thread,
+                    "responder",
+                    &usage,
+                    &responder_request_options,
+                    &mut responder_cache_diagnostics,
+                );
             }
             cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
             if cancelled {
@@ -956,6 +1053,9 @@ pub fn agent_send_message(
                 Some(Usage {
                     prompt_tokens: estimate_prompt_tokens(&messages_for_usage),
                     completion_tokens: estimate_tokens(&final_response),
+                    cached_prompt_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 })
             };
 
