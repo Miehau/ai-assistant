@@ -11,9 +11,11 @@ use crate::events::{
     EVENT_MESSAGE_USAGE_SAVED, EVENT_USAGE_UPDATED,
 };
 use crate::llm::{
-    complete_anthropic, complete_anthropic_with_output_format, complete_claude_cli,
-    complete_openai, complete_openai_compatible, stream_anthropic, stream_openai,
-    stream_openai_compatible, LlmMessage, Usage,
+    complete_anthropic, complete_anthropic_with_output_format_with_options, complete_claude_cli,
+    complete_openai, complete_openai_compatible, complete_openai_compatible_with_options,
+    complete_openai_with_options, stream_anthropic_with_options,
+    stream_openai_compatible_with_options, stream_openai_with_options, LlmMessage,
+    LlmRequestOptions, Usage,
 };
 use crate::tools::{ApprovalStore, ToolRegistry};
 use chrono::Utc;
@@ -163,6 +165,10 @@ fn estimate_prompt_tokens(messages: &[LlmMessage]) -> i32 {
         .iter()
         .map(|message| estimate_tokens(&value_to_string(&message.content)))
         .sum()
+}
+
+fn llm_request_options(_conversation_id: &str, _phase: &str) -> LlmRequestOptions {
+    LlmRequestOptions::default()
 }
 
 fn stream_response_chunks(
@@ -449,6 +455,10 @@ pub fn agent_send_message(
             };
 
             let messages_for_usage = messages.clone();
+            let controller_request_options =
+                llm_request_options(&conversation_id_for_thread, "controller");
+            let responder_request_options =
+                llm_request_options(&conversation_id_for_thread, "responder");
 
             let mut tool_execution_inputs: Vec<MessageToolExecutionInput> = Vec::new();
             let mut call_llm = |messages: &[LlmMessage],
@@ -477,12 +487,13 @@ pub fn agent_send_message(
                     if openai_api_key.is_empty() {
                         Err("Missing OpenAI API key".to_string())
                     } else {
-                        complete_openai(
+                        complete_openai_with_options(
                             &client,
                             &openai_api_key,
                             "https://api.openai.com/v1/chat/completions",
                             &model_for_thread,
                             &prepared_messages,
+                            Some(&controller_request_options),
                         )
                     }
                 }
@@ -490,13 +501,14 @@ pub fn agent_send_message(
                     if anthropic_api_key.is_empty() {
                         Err("Missing Anthropic API key".to_string())
                     } else {
-                        complete_anthropic_with_output_format(
+                        complete_anthropic_with_output_format_with_options(
                             &client,
                             &anthropic_api_key,
                             &model_for_thread,
                             system_prompt,
                             &prepared_messages,
                             output_format,
+                            Some(&controller_request_options),
                         )
                     }
                 }
@@ -504,12 +516,13 @@ pub fn agent_send_message(
                     if deepseek_api_key.is_empty() {
                         Err("Missing DeepSeek API key".to_string())
                     } else {
-                        complete_openai_compatible(
+                        complete_openai_compatible_with_options(
                             &client,
                             Some(&deepseek_api_key),
                             "https://api.deepseek.com/chat/completions",
                             &model_for_thread,
                             &prepared_messages,
+                            Some(&controller_request_options),
                         )
                     }
                 }
@@ -524,12 +537,13 @@ pub fn agent_send_message(
                     if url.is_empty() {
                         Err("Missing custom backend URL".to_string())
                     } else {
-                        complete_openai_compatible(
+                        complete_openai_compatible_with_options(
                             &client,
                             api_key.as_deref(),
                             &url,
                             &model_for_thread,
                             &prepared_messages,
+                            Some(&controller_request_options),
                         )
                     }
                 }
@@ -696,12 +710,13 @@ pub fn agent_send_message(
                     if openai_api_key.is_empty() {
                         Err("Missing OpenAI API key".to_string())
                     } else {
-                        stream_openai(
+                        stream_openai_with_options(
                             &client,
                             &openai_api_key,
                             "https://api.openai.com/v1/chat/completions",
                             &model_for_thread,
                             &prepared_responder_messages,
+                            Some(&responder_request_options),
                             &mut on_chunk,
                         )
                     }
@@ -710,12 +725,13 @@ pub fn agent_send_message(
                     if anthropic_api_key.is_empty() {
                         Err("Missing Anthropic API key".to_string())
                     } else {
-                        stream_anthropic(
+                        stream_anthropic_with_options(
                             &client,
                             &anthropic_api_key,
                             &model_for_thread,
                             responder_system_prompt,
                             &responder_messages,
+                            Some(&responder_request_options),
                             &mut on_chunk,
                         )
                     }
@@ -724,13 +740,14 @@ pub fn agent_send_message(
                     if deepseek_api_key.is_empty() {
                         Err("Missing DeepSeek API key".to_string())
                     } else {
-                        stream_openai_compatible(
+                        stream_openai_compatible_with_options(
                             &client,
                             Some(&deepseek_api_key),
                             "https://api.deepseek.com/chat/completions",
                             &model_for_thread,
                             &prepared_responder_messages,
                             false,
+                            Some(&responder_request_options),
                             &mut on_chunk,
                         )
                     }
@@ -740,13 +757,14 @@ pub fn agent_send_message(
                     if url.is_empty() {
                         Err("Missing custom backend URL".to_string())
                     } else {
-                        stream_openai_compatible(
+                        stream_openai_compatible_with_options(
                             &client,
                             api_key.as_deref(),
                             &url,
                             &model_for_thread,
                             &prepared_responder_messages,
                             false,
+                            Some(&responder_request_options),
                             &mut on_chunk,
                         )
                     }

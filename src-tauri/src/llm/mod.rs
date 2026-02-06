@@ -23,6 +23,13 @@ pub struct LlmMessage {
     pub content: Value,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct LlmRequestOptions {
+    pub prompt_cache_key: Option<String>,
+    pub prompt_cache_retention: Option<String>,
+    pub anthropic_cache_breakpoints: Vec<usize>,
+}
+
 fn compact_error_body(body: String) -> String {
     let normalized = body.trim().replace('\n', " ");
     if normalized.chars().count() <= PROVIDER_ERROR_BODY_MAX_CHARS {
@@ -43,7 +50,25 @@ pub fn complete_openai(
     model: &str,
     messages: &[LlmMessage],
 ) -> Result<StreamResult, String> {
-    complete_openai_compatible(client, Some(api_key), url, model, messages)
+    complete_openai_with_options(client, api_key, url, model, messages, None)
+}
+
+pub fn complete_openai_with_options(
+    client: &Client,
+    api_key: &str,
+    url: &str,
+    model: &str,
+    messages: &[LlmMessage],
+    request_options: Option<&LlmRequestOptions>,
+) -> Result<StreamResult, String> {
+    complete_openai_compatible_with_options(
+        client,
+        Some(api_key),
+        url,
+        model,
+        messages,
+        request_options,
+    )
 }
 
 pub fn complete_openai_compatible(
@@ -52,6 +77,17 @@ pub fn complete_openai_compatible(
     url: &str,
     model: &str,
     messages: &[LlmMessage],
+) -> Result<StreamResult, String> {
+    complete_openai_compatible_with_options(client, api_key, url, model, messages, None)
+}
+
+pub fn complete_openai_compatible_with_options(
+    client: &Client,
+    api_key: Option<&str>,
+    url: &str,
+    model: &str,
+    messages: &[LlmMessage],
+    _request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
     let mut request = client
         .post(url)
@@ -137,7 +173,31 @@ pub fn stream_openai<F>(
 where
     F: FnMut(&str),
 {
-    stream_openai_compatible(client, Some(api_key), url, model, messages, true, on_chunk)
+    stream_openai_with_options(client, api_key, url, model, messages, None, on_chunk)
+}
+
+pub fn stream_openai_with_options<F>(
+    client: &Client,
+    api_key: &str,
+    url: &str,
+    model: &str,
+    messages: &[LlmMessage],
+    request_options: Option<&LlmRequestOptions>,
+    on_chunk: &mut F,
+) -> Result<StreamResult, String>
+where
+    F: FnMut(&str),
+{
+    stream_openai_compatible_with_options(
+        client,
+        Some(api_key),
+        url,
+        model,
+        messages,
+        true,
+        request_options,
+        on_chunk,
+    )
 }
 
 pub fn stream_openai_compatible<F>(
@@ -147,6 +207,31 @@ pub fn stream_openai_compatible<F>(
     model: &str,
     messages: &[LlmMessage],
     include_usage: bool,
+    on_chunk: &mut F,
+) -> Result<StreamResult, String>
+where
+    F: FnMut(&str),
+{
+    stream_openai_compatible_with_options(
+        client,
+        api_key,
+        url,
+        model,
+        messages,
+        include_usage,
+        None,
+        on_chunk,
+    )
+}
+
+pub fn stream_openai_compatible_with_options<F>(
+    client: &Client,
+    api_key: Option<&str>,
+    url: &str,
+    model: &str,
+    messages: &[LlmMessage],
+    include_usage: bool,
+    _request_options: Option<&LlmRequestOptions>,
     on_chunk: &mut F,
 ) -> Result<StreamResult, String>
 where
@@ -255,7 +340,26 @@ pub fn complete_anthropic(
     system: Option<&str>,
     messages: &[LlmMessage],
 ) -> Result<StreamResult, String> {
-    complete_anthropic_with_output_format(client, api_key, model, system, messages, None)
+    complete_anthropic_with_options(client, api_key, model, system, messages, None)
+}
+
+pub fn complete_anthropic_with_options(
+    client: &Client,
+    api_key: &str,
+    model: &str,
+    system: Option<&str>,
+    messages: &[LlmMessage],
+    request_options: Option<&LlmRequestOptions>,
+) -> Result<StreamResult, String> {
+    complete_anthropic_with_output_format_with_options(
+        client,
+        api_key,
+        model,
+        system,
+        messages,
+        None,
+        request_options,
+    )
 }
 
 pub fn json_schema_output_format(schema: Value) -> Value {
@@ -272,6 +376,26 @@ pub fn complete_anthropic_with_output_format(
     system: Option<&str>,
     messages: &[LlmMessage],
     output_format: Option<Value>,
+) -> Result<StreamResult, String> {
+    complete_anthropic_with_output_format_with_options(
+        client,
+        api_key,
+        model,
+        system,
+        messages,
+        output_format,
+        None,
+    )
+}
+
+pub fn complete_anthropic_with_output_format_with_options(
+    client: &Client,
+    api_key: &str,
+    model: &str,
+    system: Option<&str>,
+    messages: &[LlmMessage],
+    output_format: Option<Value>,
+    _request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
     let formatted_messages = messages
         .iter()
@@ -371,6 +495,21 @@ pub fn stream_anthropic<F>(
     model: &str,
     system: Option<&str>,
     messages: &[LlmMessage],
+    on_chunk: &mut F,
+) -> Result<StreamResult, String>
+where
+    F: FnMut(&str),
+{
+    stream_anthropic_with_options(client, api_key, model, system, messages, None, on_chunk)
+}
+
+pub fn stream_anthropic_with_options<F>(
+    client: &Client,
+    api_key: &str,
+    model: &str,
+    system: Option<&str>,
+    messages: &[LlmMessage],
+    _request_options: Option<&LlmRequestOptions>,
     on_chunk: &mut F,
 ) -> Result<StreamResult, String>
 where
