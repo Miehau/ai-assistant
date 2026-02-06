@@ -150,6 +150,17 @@ fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
             map.remove("dependentSchemas");
             map.remove("unevaluatedProperties");
 
+            let is_object_schema = map
+                .get("type")
+                .and_then(|value| value.as_str())
+                .map(|kind| kind == "object")
+                .unwrap_or(false)
+                || map.contains_key("properties");
+            if is_object_schema {
+                map.entry("additionalProperties".to_string())
+                    .or_insert(Value::Bool(false));
+            }
+
             for entry in map.values_mut() {
                 strip_anthropic_unsupported_schema_keywords(entry);
             }
@@ -1114,5 +1125,46 @@ mod tests {
         assert!(schema.get("allOf").is_none());
         assert!(schema.get("if").is_none());
         assert!(schema.get("then").is_none());
+        assert_eq!(
+            schema
+                .get("additionalProperties")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn sanitize_anthropic_output_format_adds_additional_properties_false_recursively() {
+        let output = sanitize_anthropic_output_format(Some(json!({
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "step": {
+                        "type": "object",
+                        "properties": {
+                            "description": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        })))
+        .expect("sanitized output");
+
+        let schema = output.get("schema").expect("schema");
+        assert_eq!(
+            schema
+                .get("additionalProperties")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            schema
+                .get("properties")
+                .and_then(|props| props.get("step"))
+                .and_then(|step| step.get("additionalProperties"))
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
     }
 }
