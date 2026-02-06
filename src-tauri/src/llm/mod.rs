@@ -140,6 +140,39 @@ fn parse_anthropic_usage(usage: &Value) -> Option<Usage> {
     }
 }
 
+fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.remove("if");
+            map.remove("then");
+            map.remove("else");
+            map.remove("allOf");
+            map.remove("dependentSchemas");
+            map.remove("unevaluatedProperties");
+
+            for entry in map.values_mut() {
+                strip_anthropic_unsupported_schema_keywords(entry);
+            }
+        }
+        Value::Array(array) => {
+            for entry in array {
+                strip_anthropic_unsupported_schema_keywords(entry);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_anthropic_output_format(output_format: Option<Value>) -> Option<Value> {
+    let mut output = output_format?;
+    if let Some(schema) = output.get_mut("schema") {
+        strip_anthropic_unsupported_schema_keywords(schema);
+    } else {
+        strip_anthropic_unsupported_schema_keywords(&mut output);
+    }
+    Some(output)
+}
+
 pub fn complete_openai(
     client: &Client,
     api_key: &str,
@@ -248,20 +281,6 @@ pub fn complete_openai_compatible_with_options(
     Ok(StreamResult { content, usage })
 }
 
-pub fn stream_openai<F>(
-    client: &Client,
-    api_key: &str,
-    url: &str,
-    model: &str,
-    messages: &[LlmMessage],
-    on_chunk: &mut F,
-) -> Result<StreamResult, String>
-where
-    F: FnMut(&str),
-{
-    stream_openai_with_options(client, api_key, url, model, messages, None, on_chunk)
-}
-
 pub fn stream_openai_with_options<F>(
     client: &Client,
     api_key: &str,
@@ -282,30 +301,6 @@ where
         messages,
         true,
         request_options,
-        on_chunk,
-    )
-}
-
-pub fn stream_openai_compatible<F>(
-    client: &Client,
-    api_key: Option<&str>,
-    url: &str,
-    model: &str,
-    messages: &[LlmMessage],
-    include_usage: bool,
-    on_chunk: &mut F,
-) -> Result<StreamResult, String>
-where
-    F: FnMut(&str),
-{
-    stream_openai_compatible_with_options(
-        client,
-        api_key,
-        url,
-        model,
-        messages,
-        include_usage,
-        None,
         on_chunk,
     )
 }
@@ -575,25 +570,6 @@ pub fn json_schema_output_format(schema: Value) -> Value {
     })
 }
 
-pub fn complete_anthropic_with_output_format(
-    client: &Client,
-    api_key: &str,
-    model: &str,
-    system: Option<&str>,
-    messages: &[LlmMessage],
-    output_format: Option<Value>,
-) -> Result<StreamResult, String> {
-    complete_anthropic_with_output_format_with_options(
-        client,
-        api_key,
-        model,
-        system,
-        messages,
-        output_format,
-        None,
-    )
-}
-
 pub fn complete_anthropic_with_output_format_with_options(
     client: &Client,
     api_key: &str,
@@ -619,8 +595,9 @@ pub fn complete_anthropic_with_output_format_with_options(
         body["system"] = system_blocks;
     }
 
-    let has_output_format = output_format.is_some();
-    if let Some(output_format_value) = output_format {
+    let sanitized_output_format = sanitize_anthropic_output_format(output_format);
+    let has_output_format = sanitized_output_format.is_some();
+    if let Some(output_format_value) = sanitized_output_format {
         body["output_format"] = output_format_value;
     }
 
@@ -685,20 +662,6 @@ pub fn complete_anthropic_with_output_format_with_options(
     );
 
     Ok(StreamResult { content, usage })
-}
-
-pub fn stream_anthropic<F>(
-    client: &Client,
-    api_key: &str,
-    model: &str,
-    system: Option<&str>,
-    messages: &[LlmMessage],
-    on_chunk: &mut F,
-) -> Result<StreamResult, String>
-where
-    F: FnMut(&str),
-{
-    stream_anthropic_with_options(client, api_key, model, system, messages, None, on_chunk)
 }
 
 pub fn stream_anthropic_with_options<F>(
@@ -1126,5 +1089,30 @@ mod tests {
         assert_eq!(usage.cached_prompt_tokens, 800);
 
         handle.join().expect("join server");
+    }
+
+    #[test]
+    fn sanitize_anthropic_output_format_removes_if_then_allof() {
+        let output = sanitize_anthropic_output_format(Some(json!({
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string" }
+                },
+                "allOf": [
+                    {
+                        "if": { "properties": { "action": { "const": "next_step" } } },
+                        "then": { "required": ["step", "thinking"] }
+                    }
+                ]
+            }
+        })))
+        .expect("sanitized output");
+
+        let schema = output.get("schema").expect("schema");
+        assert!(schema.get("allOf").is_none());
+        assert!(schema.get("if").is_none());
+        assert!(schema.get("then").is_none());
     }
 }

@@ -1,6 +1,6 @@
 use jsonschema::JSONSchema;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
 use uuid::Uuid;
@@ -112,10 +112,6 @@ impl ToolRegistry {
             .collect::<Vec<_>>();
         metadata.sort_by(|a, b| a.name.cmp(&b.name));
         metadata
-    }
-
-    pub fn prompt_json(&self) -> Value {
-        serde_json::to_value(self.list_metadata()).unwrap_or_else(|_| json!([]))
     }
 
     pub fn validate_args(&self, metadata: &ToolMetadata, args: &Value) -> Result<(), ToolError> {
