@@ -253,7 +253,10 @@ impl ApprovalStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{register_file_tools, register_search_tool, ToolExecutionContext, ToolRegistry};
+    use super::{
+        register_file_tools, register_search_tool, ToolDefinition, ToolExecutionContext, ToolError,
+        ToolMetadata, ToolRegistry, ToolResultMode,
+    };
     use crate::db::{Db, PreferenceOperations};
     use serde_json::json;
     use std::fs;
@@ -285,6 +288,48 @@ mod tests {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn list_metadata_is_sorted_by_tool_name() {
+        let mut registry = ToolRegistry::new();
+
+        let first = ToolDefinition {
+            metadata: ToolMetadata {
+                name: "z.tool".to_string(),
+                description: "z".to_string(),
+                args_schema: json!({ "type": "object" }),
+                result_schema: json!({ "type": "object" }),
+                requires_approval: false,
+                result_mode: ToolResultMode::Auto,
+            },
+            handler: std::sync::Arc::new(|_, _| Ok(json!({}))),
+            preview: None,
+        };
+        let second = ToolDefinition {
+            metadata: ToolMetadata {
+                name: "a.tool".to_string(),
+                description: "a".to_string(),
+                args_schema: json!({ "type": "object" }),
+                result_schema: json!({ "type": "object" }),
+                requires_approval: false,
+                result_mode: ToolResultMode::Auto,
+            },
+            handler: std::sync::Arc::new(|_, _| -> Result<serde_json::Value, ToolError> {
+                Ok(json!({}))
+            }),
+            preview: None,
+        };
+
+        registry.register(first).expect("register first");
+        registry.register(second).expect("register second");
+
+        let names = registry
+            .list_metadata()
+            .into_iter()
+            .map(|metadata| metadata.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["a.tool".to_string(), "z.tool".to_string()]);
     }
 
     #[test]

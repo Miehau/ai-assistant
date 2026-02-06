@@ -48,6 +48,98 @@ fn compact_error_body(body: String) -> String {
     format!("{truncated}... [truncated]")
 }
 
+fn build_openai_compatible_body(
+    model: &str,
+    messages: &[LlmMessage],
+    stream: bool,
+    include_usage: bool,
+    request_options: Option<&LlmRequestOptions>,
+) -> Value {
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": stream
+    });
+
+    if include_usage {
+        body["stream_options"] = serde_json::json!({
+            "include_usage": true
+        });
+    }
+
+    if let Some(options) = request_options {
+        if let Some(key) = options.prompt_cache_key.as_ref() {
+            body["prompt_cache_key"] = serde_json::json!(key);
+        }
+        if let Some(retention) = options.prompt_cache_retention.as_ref() {
+            body["prompt_cache_retention"] = serde_json::json!(retention);
+        }
+    }
+
+    body
+}
+
+fn parse_openai_usage(usage: &Value) -> Option<Usage> {
+    let prompt_tokens = usage
+        .get("prompt_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let completion_tokens = usage
+        .get("completion_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let cached_prompt_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    if prompt_tokens > 0 || completion_tokens > 0 || cached_prompt_tokens > 0 {
+        Some(Usage {
+            prompt_tokens,
+            completion_tokens,
+            cached_prompt_tokens,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+        })
+    } else {
+        None
+    }
+}
+
+fn parse_anthropic_usage(usage: &Value) -> Option<Usage> {
+    let prompt_tokens = usage
+        .get("input_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let completion_tokens = usage
+        .get("output_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let cache_read_input_tokens = usage
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    let cache_creation_input_tokens = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+    if prompt_tokens > 0
+        || completion_tokens > 0
+        || cache_read_input_tokens > 0
+        || cache_creation_input_tokens > 0
+    {
+        Some(Usage {
+            prompt_tokens,
+            completion_tokens,
+            cached_prompt_tokens: 0,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+        })
+    } else {
+        None
+    }
+}
+
 pub fn complete_openai(
     client: &Client,
     api_key: &str,
@@ -94,20 +186,7 @@ pub fn complete_openai_compatible_with_options(
     messages: &[LlmMessage],
     request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "stream": false
-    });
-
-    if let Some(options) = request_options {
-        if let Some(key) = options.prompt_cache_key.as_ref() {
-            body["prompt_cache_key"] = serde_json::json!(key);
-        }
-        if let Some(retention) = options.prompt_cache_retention.as_ref() {
-            body["prompt_cache_retention"] = serde_json::json!(retention);
-        }
-    }
+    let body = build_openai_compatible_body(model, messages, false, false, request_options);
 
     let mut request = client
         .post(url)
@@ -147,32 +226,7 @@ pub fn complete_openai_compatible_with_options(
         .unwrap_or("")
         .to_string();
 
-    let usage = value.get("usage").and_then(|usage| {
-        let prompt_tokens = usage
-            .get("prompt_tokens")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
-        let completion_tokens = usage
-            .get("completion_tokens")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
-        let cached_prompt_tokens = usage
-            .get("prompt_tokens_details")
-            .and_then(|details| details.get("cached_tokens"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
-        if prompt_tokens > 0 || completion_tokens > 0 || cached_prompt_tokens > 0 {
-            Some(Usage {
-                prompt_tokens,
-                completion_tokens,
-                cached_prompt_tokens,
-                cache_read_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            })
-        } else {
-            None
-        }
-    });
+    let usage = value.get("usage").and_then(parse_openai_usage);
 
     log::debug!(
         "[llm] provider=openai_compatible model={} content_len={} usage={:?}",
@@ -269,26 +323,7 @@ pub fn stream_openai_compatible_with_options<F>(
 where
     F: FnMut(&str),
 {
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "stream": true
-    });
-
-    if include_usage {
-        body["stream_options"] = serde_json::json!({
-            "include_usage": true
-        });
-    }
-
-    if let Some(options) = request_options {
-        if let Some(key) = options.prompt_cache_key.as_ref() {
-            body["prompt_cache_key"] = serde_json::json!(key);
-        }
-        if let Some(retention) = options.prompt_cache_retention.as_ref() {
-            body["prompt_cache_retention"] = serde_json::json!(retention);
-        }
-    }
+    let body = build_openai_compatible_body(model, messages, true, include_usage, request_options);
 
     let mut request = client
         .post(url)
@@ -352,28 +387,7 @@ where
         }
 
         if let Some(usage_value) = value.get("usage") {
-            let prompt_tokens = usage_value
-                .get("prompt_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32;
-            let completion_tokens = usage_value
-                .get("completion_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32;
-            let cached_prompt_tokens = usage_value
-                .get("prompt_tokens_details")
-                .and_then(|details| details.get("cached_tokens"))
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32;
-            if prompt_tokens > 0 || completion_tokens > 0 || cached_prompt_tokens > 0 {
-                usage = Some(Usage {
-                    prompt_tokens,
-                    completion_tokens,
-                    cached_prompt_tokens,
-                    cache_read_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                });
-            }
+            usage = parse_openai_usage(usage_value);
         }
 
         line.clear();
@@ -651,39 +665,7 @@ pub fn complete_anthropic_with_output_format_with_options(
             "Anthropic structured output missing expected content[0].text".to_string()
         })?;
 
-    let usage = value.get("usage").and_then(|usage| {
-        let prompt_tokens = usage
-            .get("input_tokens")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
-        let completion_tokens = usage
-            .get("output_tokens")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
-        let cache_read_input_tokens = usage
-            .get("cache_read_input_tokens")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
-        let cache_creation_input_tokens = usage
-            .get("cache_creation_input_tokens")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0) as i32;
-        if prompt_tokens > 0
-            || completion_tokens > 0
-            || cache_read_input_tokens > 0
-            || cache_creation_input_tokens > 0
-        {
-            Some(Usage {
-                prompt_tokens,
-                completion_tokens,
-                cached_prompt_tokens: 0,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
-            })
-        } else {
-            None
-        }
-    });
+    let usage = value.get("usage").and_then(parse_anthropic_usage);
 
     log::debug!(
         "[llm] provider=anthropic model={} content_len={} usage={:?}",
@@ -808,69 +790,44 @@ where
             if event_type == "message_start" {
                 if let Some(message) = value.get("message") {
                     if let Some(usage_value) = message.get("usage") {
-                        let prompt_tokens = usage_value
-                            .get("input_tokens")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0) as i32;
-                        let completion_tokens = usage_value
-                            .get("output_tokens")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0) as i32;
-                        let cache_read_input_tokens = usage_value
-                            .get("cache_read_input_tokens")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0) as i32;
-                        let cache_creation_input_tokens = usage_value
-                            .get("cache_creation_input_tokens")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0) as i32;
-                        if prompt_tokens > 0
-                            || completion_tokens > 0
-                            || cache_read_input_tokens > 0
-                            || cache_creation_input_tokens > 0
-                        {
-                            usage = Some(Usage {
-                                prompt_tokens,
-                                completion_tokens,
-                                cached_prompt_tokens: 0,
-                                cache_read_input_tokens,
-                                cache_creation_input_tokens,
-                            });
-                        }
+                        usage = parse_anthropic_usage(usage_value);
                     }
                 }
             }
 
             if event_type == "message_delta" {
                 if let Some(usage_value) = value.get("usage") {
-                    let output_tokens = usage_value
+                    let parsed = parse_anthropic_usage(usage_value);
+                    let previous = usage.clone().unwrap_or(Usage {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        cached_prompt_tokens: 0,
+                        cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                    });
+                    let completion_tokens = usage_value
                         .get("output_tokens")
                         .and_then(|v| v.as_i64())
-                        .unwrap_or(0) as i32;
-                    let prompt_tokens = usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
-                    let cache_read_input_tokens = usage_value
-                        .get("cache_read_input_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or_else(|| {
-                            usage
-                                .as_ref()
-                                .map(|u| u.cache_read_input_tokens as i64)
-                                .unwrap_or(0)
-                        }) as i32;
-                    let cache_creation_input_tokens = usage_value
-                        .get("cache_creation_input_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or_else(|| {
-                            usage
-                                .as_ref()
-                                .map(|u| u.cache_creation_input_tokens as i64)
-                                .unwrap_or(0)
-                        }) as i32;
-                    let completion_tokens = if output_tokens > 0 {
-                        output_tokens
-                    } else {
-                        usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0)
-                    };
+                        .unwrap_or(previous.completion_tokens as i64)
+                        as i32;
+                    let prompt_tokens = parsed
+                        .as_ref()
+                        .map(|u| {
+                            if u.prompt_tokens > 0 {
+                                u.prompt_tokens
+                            } else {
+                                previous.prompt_tokens
+                            }
+                        })
+                        .unwrap_or(previous.prompt_tokens);
+                    let cache_read_input_tokens = parsed
+                        .as_ref()
+                        .map(|u| u.cache_read_input_tokens)
+                        .unwrap_or(previous.cache_read_input_tokens);
+                    let cache_creation_input_tokens = parsed
+                        .as_ref()
+                        .map(|u| u.cache_creation_input_tokens)
+                        .unwrap_or(previous.cache_creation_input_tokens);
                     if prompt_tokens > 0
                         || completion_tokens > 0
                         || cache_read_input_tokens > 0
@@ -996,4 +953,178 @@ fn value_to_string(value: &Value) -> String {
     }
 
     value.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    #[test]
+    fn openai_body_includes_prompt_cache_fields() {
+        let options = LlmRequestOptions {
+            prompt_cache_key: Some("conversation:test:controller:v1".to_string()),
+            prompt_cache_retention: Some("24h".to_string()),
+            anthropic_cache_breakpoints: Vec::new(),
+        };
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+        let body = build_openai_compatible_body("gpt-5-mini", &messages, true, true, Some(&options));
+
+        assert_eq!(
+            body.get("prompt_cache_key").and_then(|v| v.as_str()),
+            Some("conversation:test:controller:v1")
+        );
+        assert_eq!(
+            body.get("prompt_cache_retention").and_then(|v| v.as_str()),
+            Some("24h")
+        );
+        assert_eq!(
+            body.get("stream_options")
+                .and_then(|v| v.get("include_usage"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn parse_openai_usage_extracts_cached_tokens() {
+        let usage = parse_openai_usage(&json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_tokens_details": {
+                "cached_tokens": 700
+            }
+        }))
+        .expect("expected usage");
+        assert_eq!(usage.prompt_tokens, 1000);
+        assert_eq!(usage.completion_tokens, 50);
+        assert_eq!(usage.cached_prompt_tokens, 700);
+    }
+
+    #[test]
+    fn parse_anthropic_usage_extracts_cache_fields() {
+        let usage = parse_anthropic_usage(&json!({
+            "input_tokens": 1200,
+            "output_tokens": 75,
+            "cache_read_input_tokens": 1000,
+            "cache_creation_input_tokens": 200
+        }))
+        .expect("expected usage");
+        assert_eq!(usage.prompt_tokens, 1200);
+        assert_eq!(usage.completion_tokens, 75);
+        assert_eq!(usage.cache_read_input_tokens, 1000);
+        assert_eq!(usage.cache_creation_input_tokens, 200);
+    }
+
+    #[test]
+    fn anthropic_format_marks_cache_breakpoints() {
+        let options = LlmRequestOptions {
+            prompt_cache_key: None,
+            prompt_cache_retention: None,
+            anthropic_cache_breakpoints: vec![0],
+        };
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("stable prefix\nSTATE SUMMARY:\ndynamic suffix"),
+        }];
+        let mut block_index = 0usize;
+        let formatted = format_anthropic_messages(&messages, &mut block_index, Some(&options));
+        let first_block = &formatted[0]["content"][0];
+        assert_eq!(
+            first_block
+                .get("cache_control")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str()),
+            Some("ephemeral")
+        );
+    }
+
+    #[test]
+    fn anthropic_format_adds_periodic_cache_breakpoints() {
+        let options = LlmRequestOptions {
+            prompt_cache_key: None,
+            prompt_cache_retention: None,
+            anthropic_cache_breakpoints: vec![0],
+        };
+        let message = "a".repeat(
+            ANTHROPIC_CACHE_BLOCK_MAX_CHARS * (ANTHROPIC_CACHE_INTERVAL_BLOCKS + 2),
+        );
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!(message),
+        }];
+        let mut block_index = 0usize;
+        let formatted = format_anthropic_messages(&messages, &mut block_index, Some(&options));
+        let blocks = formatted[0]["content"].as_array().expect("content array");
+
+        assert_eq!(
+            blocks[ANTHROPIC_CACHE_INTERVAL_BLOCKS]
+                .get("cache_control")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str()),
+            Some("ephemeral")
+        );
+    }
+
+    #[test]
+    fn complete_openai_compatible_parses_cache_metrics_from_mock_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request_buffer = [0u8; 4096];
+            let _ = stream.read(&mut request_buffer);
+
+            let response_body = json!({
+                "choices": [{
+                    "message": { "content": "ok" }
+                }],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 25,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 800
+                    }
+                }
+            })
+            .to_string();
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+        });
+
+        let client = Client::builder().build().expect("client");
+        let url = format!("http://{}/v1/chat/completions", addr);
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+        let result = complete_openai_compatible_with_options(
+            &client,
+            None,
+            &url,
+            "gpt-5-mini",
+            &messages,
+            None,
+        )
+        .expect("completion");
+        let usage = result.usage.expect("usage");
+        assert_eq!(usage.prompt_tokens, 1000);
+        assert_eq!(usage.completion_tokens, 25);
+        assert_eq!(usage.cached_prompt_tokens, 800);
+
+        handle.join().expect("join server");
+    }
 }
