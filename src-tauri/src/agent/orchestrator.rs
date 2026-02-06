@@ -1186,6 +1186,29 @@ fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
         Ok(action) => Ok(action),
         Err(err) => {
             let action = value.get("action").and_then(|val| val.as_str());
+            if action == Some("next_step") && value.get("step").is_none() {
+                if let Some(message) = value
+                    .get("message")
+                    .and_then(|val| val.as_str())
+                    .or_else(|| value.get("response").and_then(|val| val.as_str()))
+                {
+                    return Ok(ControllerAction::Complete {
+                        message: message.to_string(),
+                    });
+                }
+
+                if let Some(question) = value.get("question").and_then(|val| val.as_str()) {
+                    return Ok(ControllerAction::AskUser {
+                        question: question.to_string(),
+                        context: value
+                            .get("context")
+                            .and_then(|val| val.as_str())
+                            .map(|val| val.to_string()),
+                        resume_to: parse_resume_target(value.get("resume_to")),
+                    });
+                }
+            }
+
             if action == Some("respond") {
                 if let Some(step_value) = value.get("step") {
                     let mut step = step_value.clone();

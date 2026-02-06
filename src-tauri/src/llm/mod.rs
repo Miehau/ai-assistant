@@ -186,7 +186,11 @@ fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
     }
 }
 
-fn sanitize_anthropic_output_format(output_format: Option<Value>) -> Option<Value> {
+fn build_openai_output_schema(output_format: Option<Value>) -> Option<Value> {
+    output_format
+}
+
+fn build_anthropic_output_schema(output_format: Option<Value>) -> Option<Value> {
     let mut output = output_format?;
     if let Some(schema) = output.get_mut("schema") {
         strip_anthropic_unsupported_schema_keywords(schema);
@@ -214,12 +218,13 @@ pub fn complete_openai_with_options(
     messages: &[LlmMessage],
     request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
-    complete_openai_compatible_with_options(
+    complete_openai_compatible_with_output_format_with_options(
         client,
         Some(api_key),
         url,
         model,
         messages,
+        None,
         request_options,
     )
 }
@@ -242,7 +247,30 @@ pub fn complete_openai_compatible_with_options(
     messages: &[LlmMessage],
     request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
-    let body = build_openai_compatible_body(model, messages, false, false, request_options);
+    complete_openai_compatible_with_output_format_with_options(
+        client,
+        api_key,
+        url,
+        model,
+        messages,
+        None,
+        request_options,
+    )
+}
+
+pub fn complete_openai_compatible_with_output_format_with_options(
+    client: &Client,
+    api_key: Option<&str>,
+    url: &str,
+    model: &str,
+    messages: &[LlmMessage],
+    output_format: Option<Value>,
+    request_options: Option<&LlmRequestOptions>,
+) -> Result<StreamResult, String> {
+    let mut body = build_openai_compatible_body(model, messages, false, false, request_options);
+    if let Some(openai_output_schema) = build_openai_output_schema(output_format) {
+        body["response_format"] = openai_output_schema;
+    }
 
     let mut request = client
         .post(url)
@@ -618,7 +646,7 @@ pub fn complete_anthropic_with_output_format_with_options(
         body["system"] = system_blocks;
     }
 
-    let sanitized_output_format = sanitize_anthropic_output_format(output_format);
+    let sanitized_output_format = build_anthropic_output_schema(output_format);
     let has_output_format = sanitized_output_format.is_some();
     if let Some(output_format_value) = sanitized_output_format {
         body["output_format"] = output_format_value;
@@ -1115,8 +1143,26 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_anthropic_output_format_removes_if_then_allof() {
-        let output = sanitize_anthropic_output_format(Some(json!({
+    fn openai_schema_builder_is_passthrough() {
+        let source = json!({
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "allOf": [
+                    {
+                        "if": { "properties": { "action": { "const": "next_step" } } },
+                        "then": { "required": ["step", "thinking"] }
+                    }
+                ]
+            }
+        });
+        let built = build_openai_output_schema(Some(source.clone())).expect("output");
+        assert_eq!(built, source);
+    }
+
+    #[test]
+    fn anthropic_schema_builder_removes_if_then_allof() {
+        let output = build_anthropic_output_schema(Some(json!({
             "type": "json_schema",
             "schema": {
                 "type": "object",
@@ -1146,8 +1192,8 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_anthropic_output_format_adds_additional_properties_false_recursively() {
-        let output = sanitize_anthropic_output_format(Some(json!({
+    fn anthropic_schema_builder_adds_additional_properties_false_recursively() {
+        let output = build_anthropic_output_schema(Some(json!({
             "type": "json_schema",
             "schema": {
                 "type": "object",
@@ -1181,8 +1227,8 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_anthropic_output_format_removes_numeric_bounds() {
-        let output = sanitize_anthropic_output_format(Some(json!({
+    fn anthropic_schema_builder_removes_numeric_bounds() {
+        let output = build_anthropic_output_schema(Some(json!({
             "type": "json_schema",
             "schema": {
                 "type": "object",
