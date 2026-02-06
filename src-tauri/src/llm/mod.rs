@@ -160,6 +160,19 @@ fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
                 map.insert("additionalProperties".to_string(), Value::Bool(false));
             }
 
+            let is_numeric_schema = map
+                .get("type")
+                .and_then(|value| value.as_str())
+                .map(|kind| kind == "number" || kind == "integer")
+                .unwrap_or(false);
+            if is_numeric_schema {
+                map.remove("minimum");
+                map.remove("maximum");
+                map.remove("exclusiveMinimum");
+                map.remove("exclusiveMaximum");
+                map.remove("multipleOf");
+            }
+
             for entry in map.values_mut() {
                 strip_anthropic_unsupported_schema_keywords(entry);
             }
@@ -1165,5 +1178,31 @@ mod tests {
                 .and_then(|value| value.as_bool()),
             Some(false)
         );
+    }
+
+    #[test]
+    fn sanitize_anthropic_output_format_removes_numeric_bounds() {
+        let output = sanitize_anthropic_output_format(Some(json!({
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                    }
+                }
+            }
+        })))
+        .expect("sanitized output");
+
+        let confidence = output
+            .get("schema")
+            .and_then(|schema| schema.get("properties"))
+            .and_then(|props| props.get("confidence"))
+            .expect("confidence schema");
+        assert!(confidence.get("minimum").is_none());
+        assert!(confidence.get("maximum").is_none());
     }
 }
