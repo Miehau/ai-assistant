@@ -215,6 +215,18 @@ struct CacheDiagnostics {
     cached_tokens: i64,
 }
 
+fn effective_prompt_tokens_for_cache(provider: &str, usage: &Usage) -> i64 {
+    match provider {
+        "anthropic" => {
+            (usage.prompt_tokens as i64
+                + usage.cache_read_input_tokens.max(0) as i64
+                + usage.cache_creation_input_tokens.max(0) as i64)
+                .max(0)
+        }
+        _ => (usage.prompt_tokens as i64).max(0),
+    }
+}
+
 fn record_cache_diagnostics(
     provider: &str,
     model: &str,
@@ -228,40 +240,54 @@ fn record_cache_diagnostics(
         "anthropic" => usage.cache_read_input_tokens as i64,
         _ => 0,
     };
-    if usage.prompt_tokens <= 0 {
+    let request_prompt_tokens = effective_prompt_tokens_for_cache(provider, usage);
+    if request_prompt_tokens <= 0 {
         return;
     }
+    let request_cache_creation_tokens = match provider {
+        "anthropic" => usage.cache_creation_input_tokens.max(0) as i64,
+        _ => 0,
+    };
 
     diagnostics.requests += 1;
-    diagnostics.prompt_tokens += usage.prompt_tokens as i64;
+    diagnostics.prompt_tokens += request_prompt_tokens;
     diagnostics.cached_tokens += cached_tokens.max(0);
 
-    let hit_ratio = if diagnostics.prompt_tokens > 0 {
+    let request_cached_tokens = cached_tokens.max(0);
+    let request_hit_ratio = if request_prompt_tokens > 0 {
+        request_cached_tokens as f64 / request_prompt_tokens as f64
+    } else {
+        0.0
+    };
+    let cumulative_hit_ratio = if diagnostics.prompt_tokens > 0 {
         diagnostics.cached_tokens as f64 / diagnostics.prompt_tokens as f64
     } else {
         0.0
     };
 
-    log::debug!(
-        "[cache] provider={} model={} phase={} prompt_tokens={} cached_tokens={} hit_ratio={:.3}",
+    log::info!(
+        "[cache] provider={} model={} phase={} cache_hit={} request_prompt_tokens={} request_cached_tokens={} request_cache_creation_tokens={} request_hit_ratio={:.3} cumulative_hit_ratio={:.3}",
         provider,
         model,
         phase,
-        usage.prompt_tokens,
-        cached_tokens,
-        hit_ratio
+        request_cached_tokens > 0,
+        request_prompt_tokens,
+        request_cached_tokens,
+        request_cache_creation_tokens,
+        request_hit_ratio,
+        cumulative_hit_ratio
     );
 
     if diagnostics.requests >= CACHE_DIAGNOSTICS_MIN_REQUESTS
         && diagnostics.prompt_tokens >= CACHE_DIAGNOSTICS_MIN_PROMPT_TOKENS
-        && hit_ratio < CACHE_DIAGNOSTICS_MIN_HIT_RATIO
+        && cumulative_hit_ratio < CACHE_DIAGNOSTICS_MIN_HIT_RATIO
     {
         log::warn!(
             "[cache] low hit ratio: provider={} model={} phase={} hit_ratio={:.3} requests={} total_prompt_tokens={} total_cached_tokens={} prompt_cache_key={:?} anthropic_breakpoints={:?}",
             provider,
             model,
             phase,
-            hit_ratio,
+            cumulative_hit_ratio,
             diagnostics.requests,
             diagnostics.prompt_tokens,
             diagnostics.cached_tokens,

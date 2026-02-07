@@ -1,4 +1,4 @@
-use crate::agent::prompts::CONTROLLER_PROMPT;
+use crate::agent::prompts::CONTROLLER_PROMPT_BASE;
 use crate::db::{
     AgentConfig, AgentSession, AgentSessionOperations, MessageToolExecutionInput, PhaseKind, Plan,
     PlanStep, ResumeTarget, StepAction, StepResult, StepStatus, ToolExecutionRecord,
@@ -428,6 +428,14 @@ impl DynamicController {
             step_id: step_id.to_string(),
             tool_iteration: iteration,
         })?;
+
+        let args = hydrate_tool_args_for_execution(
+            tool_name,
+            args,
+            &self.session.conversation_id,
+            self.last_step_result.as_ref(),
+            &self.session.step_results,
+        );
 
         let tool = self
             .tool_registry
@@ -880,6 +888,104 @@ impl DynamicController {
         Ok(response.content)
     }
 
+    /// Get compacted history messages for controller context
+    /// Maintains consistent message structure to preserve cache validity
+    fn get_compacted_history_messages(&self) -> Vec<LlmMessage> {
+        // Calculate total character count of messages
+        let message_sizes: Vec<usize> = self
+            .messages
+            .iter()
+            .map(|msg| value_to_string(&msg.content).chars().count())
+            .collect();
+
+        let total_chars: usize = message_sizes.iter().sum();
+
+        // If under the limit, return all messages
+        if total_chars <= CONTROLLER_HISTORY_MAX_CHARS {
+            return self.messages.clone();
+        }
+
+        // Apply compaction: keep first N and last N messages
+        let prefix_end = self
+            .messages
+            .len()
+            .min(CONTROLLER_HISTORY_STABLE_PREFIX_MESSAGES);
+        let tail_start = self
+            .messages
+            .len()
+            .saturating_sub(CONTROLLER_HISTORY_RECENT_TAIL_MESSAGES);
+
+        // If ranges overlap, return all messages
+        if tail_start <= prefix_end {
+            return self.messages.clone();
+        }
+
+        // Build compacted history with summary message
+        let mut compacted = Vec::new();
+
+        // Add stable prefix messages
+        compacted.extend_from_slice(&self.messages[..prefix_end]);
+
+        // Add summary message indicating omission
+        let omitted_count = tail_start - prefix_end;
+        let omitted_chars: usize = message_sizes[prefix_end..tail_start].iter().sum();
+
+        compacted.push(LlmMessage {
+            role: "system".to_string(),
+            content: json!(format!(
+                "[Context Summary: {} messages omitted ({} characters) to maintain conversation flow while staying within limits]",
+                omitted_count, omitted_chars
+            )),
+        });
+
+        // Add recent tail messages
+        compacted.extend_from_slice(&self.messages[tail_start..]);
+
+        compacted
+    }
+
+    /// Build controller messages as an array for optimal caching
+    fn build_controller_messages(
+        &self,
+        tool_list: &str,
+        user_message: &str,
+        turns: u32,
+    ) -> Vec<LlmMessage> {
+        let mut messages = Vec::new();
+
+        // 1. System message: base controller instructions (CACHED - static)
+        messages.push(LlmMessage {
+            role: "system".to_string(),
+            content: json!(CONTROLLER_PROMPT_BASE),
+        });
+
+        // 2. System message: available tools (CACHED - stable per conversation)
+        messages.push(LlmMessage {
+            role: "system".to_string(),
+            content: json!(format!("AVAILABLE TOOLS (JSON):\n{}", tool_list)),
+        });
+
+        // 3. Conversation history as individual messages (CACHED prefix)
+        // Apply smart compaction to keep cache stable while limiting context size
+        let history_messages = self.get_compacted_history_messages();
+        messages.extend(history_messages);
+
+        // 4. Current request with dynamic context (NOT CACHED - changes every turn)
+        let dynamic_context = format!(
+            "USER REQUEST:\n{}\n\nLAST TOOL OUTPUT:\n{}\n\nLIMITS:\n{}",
+            user_message,
+            self.render_last_tool_output(),
+            self.render_limits(turns)
+        );
+
+        messages.push(LlmMessage {
+            role: "user".to_string(),
+            content: json!(dynamic_context),
+        });
+
+        messages
+    }
+
     fn call_controller<F>(
         &mut self,
         call_llm: &mut F,
@@ -907,113 +1013,26 @@ impl DynamicController {
             }
             serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string())
         };
-        let prompt = CONTROLLER_PROMPT
-            .replace("{user_message}", user_message)
-            .replace(
-                "{recent_messages}",
-                &self.render_history(self.messages.len()),
-            )
-            .replace("{state_summary}", &self.render_state_summary())
-            .replace("{last_tool_output}", &self.render_last_tool_output())
-            .replace("{limits}", &self.render_limits(turns))
-            .replace("{tool_descriptions}", &tool_list);
-        let response = self.call_llm_json(call_llm, &prompt, Some(controller_output_format()))?;
+
+        // Build message array instead of single prompt for better caching
+        let messages = self.build_controller_messages(&tool_list, user_message, turns);
+        let response = self.call_llm_json(call_llm, &messages, Some(controller_output_format()))?;
         parse_controller_action(&response)
     }
 
     fn call_llm_json<F>(
         &mut self,
         call_llm: &mut F,
-        prompt: &str,
+        messages: &[LlmMessage],
         output_format: Option<Value>,
     ) -> Result<Value, String>
     where
         F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
-        let response = (call_llm)(
-            &[LlmMessage {
-                role: "user".to_string(),
-                content: json!(prompt),
-            }],
-            self.base_system_prompt.as_deref(),
-            output_format,
-        )?;
+        // Pass messages directly (system prompt now in messages array)
+        let response = (call_llm)(messages, None, output_format)?;
         let json_text = extract_json(&response.content);
         serde_json::from_str(&json_text).map_err(|err| format!("Invalid JSON: {err}"))
-    }
-
-    fn render_history(&self, limit: usize) -> String {
-        let start = if self.messages.len() > limit {
-            self.messages.len() - limit
-        } else {
-            0
-        };
-        let rendered = self
-            .messages
-            .iter()
-            .skip(start)
-            .map(|message| {
-                let content = value_to_string(&message.content);
-                format!("{}: {}", message.role, content)
-            })
-            .collect::<Vec<_>>();
-
-        let total_chars = rendered
-            .iter()
-            .map(|entry| entry.chars().count())
-            .sum::<usize>();
-        if total_chars <= CONTROLLER_HISTORY_MAX_CHARS {
-            return rendered.join("\n");
-        }
-
-        let prefix_end = rendered
-            .len()
-            .min(CONTROLLER_HISTORY_STABLE_PREFIX_MESSAGES);
-        let tail_start = rendered
-            .len()
-            .saturating_sub(CONTROLLER_HISTORY_RECENT_TAIL_MESSAGES);
-        if tail_start <= prefix_end {
-            return rendered.join("\n");
-        }
-
-        let stable_prefix = rendered[..prefix_end].join("\n");
-        let recent_tail = rendered[tail_start..].join("\n");
-        let omitted_messages = tail_start - prefix_end;
-        let omitted_chars = rendered[prefix_end..tail_start]
-            .iter()
-            .map(|entry| entry.chars().count())
-            .sum::<usize>();
-
-        format!(
-            "{stable_prefix}\n[history_compact] omitted_middle_messages={omitted_messages} omitted_chars={omitted_chars}\n{recent_tail}"
-        )
-    }
-
-    fn render_state_summary(&self) -> String {
-        let mut lines = Vec::new();
-        let total_steps = self
-            .session
-            .plan
-            .as_ref()
-            .map(|plan| plan.steps.len())
-            .unwrap_or(0);
-        lines.push(format!("Steps so far: {total_steps}"));
-
-        if let Some(plan) = self.session.plan.as_ref() {
-            for step in plan.steps.iter().rev().take(3) {
-                let status = format!("{:?}", step.status);
-                lines.push(format!("- {} [{}]", step.description, status));
-                if let Some(result) = step.result.as_ref() {
-                    if let Some(output) = result.output.as_ref() {
-                        lines.push(format!("  result: {}", output));
-                    } else if let Some(error) = result.error.as_ref() {
-                        lines.push(format!("  error: {}", error));
-                    }
-                }
-            }
-        }
-
-        lines.join("\n")
     }
 
     fn render_last_tool_output(&self) -> String {
@@ -1160,77 +1179,66 @@ fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
         Ok(action) => Ok(action),
         Err(err) => {
             let action = value.get("action").and_then(|val| val.as_str());
-            if action == Some("next_step") && value.get("step").is_none() {
-                if let Some(message) = value
-                    .get("message")
-                    .and_then(|val| val.as_str())
-                    .or_else(|| value.get("response").and_then(|val| val.as_str()))
-                {
-                    return Ok(ControllerAction::Complete {
-                        message: message.to_string(),
+            if action == Some("next_step") {
+                let thinking = parse_thinking(value)?;
+                let step = if value.get("step").is_none() {
+                    parse_next_step_payload_without_message_fallback(value)
+                        .or_else(|| synthesize_step_from_thinking(&thinking))
+                } else {
+                    parse_next_step_payload(value)
+                        .or_else(|| synthesize_step_from_thinking(&thinking))
+                };
+
+                if let Some(step) = step {
+                    return Ok(ControllerAction::NextStep { thinking, step });
+                }
+
+                if let Some(question) = non_empty_string_field(value, &["question"]) {
+                    return Ok(ControllerAction::AskUser {
+                        question,
+                        context: non_empty_string_field(value, &["context"]),
+                        resume_to: parse_resume_target(value.get("resume_to")),
                     });
                 }
 
-                if let Some(question) = value.get("question").and_then(|val| val.as_str()) {
-                    return Ok(ControllerAction::AskUser {
-                        question: question.to_string(),
-                        context: value
-                            .get("context")
-                            .and_then(|val| val.as_str())
-                            .map(|val| val.to_string()),
-                        resume_to: parse_resume_target(value.get("resume_to")),
-                    });
+                if let Some(message) = non_empty_string_field(value, &["message", "response"]) {
+                    return Ok(ControllerAction::Complete { message });
                 }
             }
 
             if action == Some("respond") {
                 if let Some(step_value) = value.get("step") {
-                    let mut step = step_value.clone();
-                    if step.get("type").is_none() {
-                        if let Value::Object(map) = &mut step {
-                            map.insert("type".to_string(), Value::String("respond".to_string()));
-                        }
-                    }
-                    if let Ok(step) = serde_json::from_value::<ControllerStep>(step) {
+                    if let Some(step) =
+                        parse_controller_step_payload(step_value.clone(), Some("respond"))
+                    {
                         let thinking = parse_thinking(value)?;
                         return Ok(ControllerAction::NextStep { thinking, step });
                     }
                 }
 
-                if let Some(message) = value.get("message").and_then(|val| val.as_str()) {
-                    return Ok(ControllerAction::Complete {
-                        message: message.to_string(),
-                    });
+                if let Some(message) = non_empty_string_field(value, &["message"]) {
+                    return Ok(ControllerAction::Complete { message });
                 }
 
-                if let Some(message) = value.get("response").and_then(|val| val.as_str()) {
-                    return Ok(ControllerAction::Complete {
-                        message: message.to_string(),
-                    });
+                if let Some(message) = non_empty_string_field(value, &["response"]) {
+                    return Ok(ControllerAction::Complete { message });
                 }
             }
 
             if action == Some("ask_user") {
                 if let Some(step_value) = value.get("step") {
-                    let mut step = step_value.clone();
-                    if step.get("type").is_none() {
-                        if let Value::Object(map) = &mut step {
-                            map.insert("type".to_string(), Value::String("ask_user".to_string()));
-                        }
-                    }
-                    if let Ok(step) = serde_json::from_value::<ControllerStep>(step) {
+                    if let Some(step) =
+                        parse_controller_step_payload(step_value.clone(), Some("ask_user"))
+                    {
                         let thinking = parse_thinking(value)?;
                         return Ok(ControllerAction::NextStep { thinking, step });
                     }
                 }
 
-                if let Some(question) = value.get("question").and_then(|val| val.as_str()) {
+                if let Some(question) = non_empty_string_field(value, &["question"]) {
                     return Ok(ControllerAction::AskUser {
-                        question: question.to_string(),
-                        context: value
-                            .get("context")
-                            .and_then(|val| val.as_str())
-                            .map(|val| val.to_string()),
+                        question,
+                        context: non_empty_string_field(value, &["context"]),
                         resume_to: parse_resume_target(value.get("resume_to")),
                     });
                 }
@@ -1238,6 +1246,281 @@ fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
 
             Err(format!("Invalid controller output: {err}"))
         }
+    }
+}
+
+fn parse_next_step_payload(value: &Value) -> Option<ControllerStep> {
+    parse_next_step_payload_inner(value, true)
+}
+
+fn parse_next_step_payload_without_message_fallback(value: &Value) -> Option<ControllerStep> {
+    parse_next_step_payload_inner(value, false)
+}
+
+fn parse_next_step_payload_inner(
+    value: &Value,
+    include_message_fields_in_top_level_fallback: bool,
+) -> Option<ControllerStep> {
+    for key in ["step", "next_step", "next_action"] {
+        if let Some(step_value) = value.get(key) {
+            if let Some(step) = parse_controller_step_payload(step_value.clone(), None) {
+                return Some(step);
+            }
+        }
+    }
+
+    let Value::Object(root) = value else {
+        return None;
+    };
+
+    let mut step = serde_json::Map::new();
+    for key in ["type", "description", "tool", "args"] {
+        if let Some(field) = root.get(key) {
+            if matches!(key, "type" | "description" | "tool") && is_blank_string_value(field) {
+                continue;
+            }
+            step.insert(key.to_string(), field.clone());
+        }
+    }
+
+    for key in ["tool_name", "name", "tool_args", "arguments", "tool_input"] {
+        if let Some(field) = root.get(key) {
+            step.insert(key.to_string(), field.clone());
+        }
+    }
+
+    if include_message_fields_in_top_level_fallback {
+        for key in ["message", "question", "context", "resume_to"] {
+            if let Some(field) = root.get(key) {
+                if matches!(key, "message" | "question" | "context") && is_blank_string_value(field)
+                {
+                    continue;
+                }
+                step.insert(key.to_string(), field.clone());
+            }
+        }
+    }
+
+    if step.is_empty() {
+        return None;
+    }
+
+    parse_controller_step_payload(Value::Object(step), None)
+}
+
+fn synthesize_step_from_thinking(thinking: &Value) -> Option<ControllerStep> {
+    if let Some(tool_step) = synthesize_tool_step_from_thinking(thinking) {
+        return Some(tool_step);
+    }
+
+    let description = thinking
+        .get("task")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Think through the next step")
+        .to_string();
+
+    serde_json::from_value::<ControllerStep>(json!({
+        "type": "think",
+        "description": description
+    }))
+    .ok()
+}
+
+fn synthesize_tool_step_from_thinking(thinking: &Value) -> Option<ControllerStep> {
+    let tool = thinking
+        .get("tool")
+        .or_else(|| thinking.get("tool_name"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| is_valid_tool_name(value))
+        .map(|value| value.to_string())
+        .or_else(|| {
+            thinking
+                .get("task")
+                .and_then(|value| value.as_str())
+                .and_then(extract_tool_name_from_text)
+        })
+        .or_else(|| {
+            thinking
+                .get("decisions")
+                .and_then(|value| value.as_array())
+                .and_then(|decisions| {
+                    decisions
+                        .iter()
+                        .find_map(|entry| entry.as_str().and_then(extract_tool_name_from_text))
+                })
+        })?;
+
+    let description = thinking
+        .get("task")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Call the selected tool")
+        .to_string();
+
+    let args = thinking
+        .get("args")
+        .or_else(|| thinking.get("tool_args"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    serde_json::from_value::<ControllerStep>(json!({
+        "type": "tool",
+        "description": description,
+        "tool": tool,
+        "args": args
+    }))
+    .ok()
+}
+
+fn extract_tool_name_from_text(text: &str) -> Option<String> {
+    for raw_token in text.split_whitespace() {
+        let token = raw_token
+            .trim_matches(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'));
+        if is_valid_tool_name(token) {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+fn is_valid_tool_name(value: &str) -> bool {
+    if value.is_empty() || !value.contains('.') || value.starts_with('.') || value.ends_with('.') {
+        return false;
+    }
+
+    if matches!(value.to_ascii_lowercase().as_str(), "e.g" | "i.e") {
+        return false;
+    }
+
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
+    {
+        return false;
+    }
+
+    let segments = value.split('.').collect::<Vec<_>>();
+    if segments.len() < 2 || segments.iter().any(|segment| segment.trim().is_empty()) {
+        return false;
+    }
+
+    let action = segments[1].to_ascii_lowercase();
+    if segments[1].contains('_') {
+        return true;
+    }
+
+    [
+        "list", "get", "read", "search", "open", "create", "update", "delete", "send", "write",
+        "fetch", "find", "run", "execute", "call",
+    ]
+    .iter()
+    .any(|prefix| action.starts_with(prefix))
+}
+
+fn parse_controller_step_payload(
+    value: Value,
+    forced_type: Option<&str>,
+) -> Option<ControllerStep> {
+    let mut step = value;
+    let Value::Object(map) = &mut step else {
+        return None;
+    };
+
+    for key in [
+        "type",
+        "description",
+        "tool",
+        "message",
+        "question",
+        "context",
+    ] {
+        if map.get(key).is_some_and(is_blank_string_value) {
+            map.remove(key);
+        }
+    }
+
+    if map.get("type").is_none() {
+        if let Some(step_type) = forced_type.or_else(|| infer_step_type(map)) {
+            map.insert("type".to_string(), Value::String(step_type.to_string()));
+        }
+    }
+
+    if map.get("tool").is_none() {
+        if let Some(tool_name) = map
+            .get("tool_name")
+            .or_else(|| map.get("name"))
+            .and_then(|value| value.as_str())
+        {
+            map.insert("tool".to_string(), Value::String(tool_name.to_string()));
+        }
+    }
+
+    if map.get("args").is_none() {
+        if let Some(args) = map
+            .get("tool_args")
+            .or_else(|| map.get("arguments"))
+            .or_else(|| map.get("tool_input"))
+        {
+            map.insert("args".to_string(), args.clone());
+        }
+    }
+
+    if map.get("message").is_none() {
+        if let Some(message) = map
+            .get("response")
+            .or_else(|| map.get("content"))
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            map.insert("message".to_string(), Value::String(message.to_string()));
+        }
+    }
+
+    if map.get("description").is_none() {
+        if let Some(step_type) = map.get("type").and_then(|value| value.as_str()) {
+            map.insert(
+                "description".to_string(),
+                Value::String(default_step_description(step_type).to_string()),
+            );
+        }
+    }
+
+    serde_json::from_value::<ControllerStep>(step).ok()
+}
+
+fn infer_step_type(map: &serde_json::Map<String, Value>) -> Option<&'static str> {
+    if map.get("tool").is_some_and(is_non_empty_string_value)
+        || map.get("tool_name").is_some_and(is_non_empty_string_value)
+    {
+        return Some("tool");
+    }
+    if map.get("question").is_some_and(is_non_empty_string_value) {
+        return Some("ask_user");
+    }
+    if map.get("message").is_some_and(is_non_empty_string_value) {
+        return Some("respond");
+    }
+    if map
+        .get("description")
+        .is_some_and(is_non_empty_string_value)
+    {
+        return Some("think");
+    }
+    None
+}
+
+fn default_step_description(step_type: &str) -> &'static str {
+    match step_type {
+        "tool" => "Call the selected tool",
+        "respond" => "Respond to the user",
+        "think" => "Think through the next step",
+        "ask_user" => "Ask the user for clarification",
+        _ => "Continue with the next step",
     }
 }
 
@@ -1257,6 +1540,30 @@ fn parse_thinking(value: &Value) -> Result<Value, String> {
         return Err("Invalid field thinking: expected object".to_string());
     }
     Ok(thinking.clone())
+}
+
+fn non_empty_string_field(root: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        root.get(key)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+    })
+}
+
+fn is_blank_string_value(value: &Value) -> bool {
+    value
+        .as_str()
+        .map(|text| text.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn is_non_empty_string_value(value: &Value) -> bool {
+    value
+        .as_str()
+        .map(|text| !text.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn controller_output_format() -> Value {
@@ -1315,14 +1622,22 @@ fn controller_output_format() -> Value {
                 "enum": ["reflecting", "controller"]
             }
         },
-        "allOf": [
+        "oneOf": [
             {
-                "if": {
-                    "properties": { "action": { "const": "next_step" } }
-                },
-                "then": {
-                    "required": ["step", "thinking"]
-                }
+                "properties": { "action": { "const": "next_step" } },
+                "required": ["action", "step", "thinking"]
+            },
+            {
+                "properties": { "action": { "const": "complete" } },
+                "required": ["action", "message"]
+            },
+            {
+                "properties": { "action": { "const": "guardrail_stop" } },
+                "required": ["action", "reason"]
+            },
+            {
+                "properties": { "action": { "const": "ask_user" } },
+                "required": ["action", "question"]
             }
         ],
         "additionalProperties": false
@@ -1357,6 +1672,95 @@ fn normalize_tool_args(args: Value) -> Value {
         }
         other => other,
     }
+}
+
+fn hydrate_tool_args_for_execution(
+    tool_name: &str,
+    args: Value,
+    conversation_id: &str,
+    last_step_result: Option<&StepResult>,
+    history: &[StepResult],
+) -> Value {
+    if tool_name != "tool_outputs.read" {
+        return args;
+    }
+
+    let mut args = normalize_tool_args(args);
+    if value_has_non_empty_string_field(&args, "id") {
+        return args;
+    }
+
+    let output_id = last_step_result
+        .and_then(step_result_output_ref_id)
+        .or_else(|| history.iter().rev().find_map(step_result_output_ref_id));
+
+    let Some(output_id) = output_id else {
+        return args;
+    };
+
+    match &mut args {
+        Value::Object(map) => {
+            map.insert("id".to_string(), Value::String(output_id));
+            let conversation_missing_or_blank = map
+                .get("conversation_id")
+                .map(is_blank_string_value)
+                .unwrap_or(true);
+            if conversation_missing_or_blank {
+                map.insert(
+                    "conversation_id".to_string(),
+                    Value::String(conversation_id.to_string()),
+                );
+            }
+        }
+        _ => {
+            args = json!({
+                "id": output_id,
+                "conversation_id": conversation_id
+            });
+        }
+    }
+
+    args
+}
+
+fn step_result_output_ref_id(result: &StepResult) -> Option<String> {
+    result
+        .output
+        .as_ref()
+        .and_then(extract_tool_output_ref_id_from_value)
+}
+
+fn extract_tool_output_ref_id_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(map) => {
+            if let Some(output_ref_id) = map
+                .get("output_ref")
+                .and_then(|value| value.get("id"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return Some(output_ref_id.to_string());
+            }
+
+            map.values().find_map(extract_tool_output_ref_id_from_value)
+        }
+        Value::Array(values) => values
+            .iter()
+            .find_map(extract_tool_output_ref_id_from_value),
+        Value::String(text) => serde_json::from_str::<Value>(text)
+            .ok()
+            .and_then(|parsed| extract_tool_output_ref_id_from_value(&parsed)),
+        _ => None,
+    }
+}
+
+fn value_has_non_empty_string_field(value: &Value, field: &str) -> bool {
+    value
+        .get(field)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
 }
 
 fn summarize_tool_args(args: &Value, max_len: usize) -> String {
@@ -1448,4 +1852,262 @@ fn value_to_string(value: &serde_json::Value) -> String {
     }
 
     value.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_controller_action_accepts_next_step_top_level_tool_payload() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": { "task": "Check weather" },
+            "tool": "weather",
+            "args": { "location": "Austin, TX" }
+        });
+
+        let action = parse_controller_action(&payload).expect("next_step payload should parse");
+        match action {
+            ControllerAction::NextStep { step, .. } => match step {
+                ControllerStep::Tool { tool, args, .. } => {
+                    assert_eq!(tool, "weather");
+                    assert_eq!(args, json!({ "location": "Austin, TX" }));
+                }
+                other => panic!("expected tool step, got {other:?}"),
+            },
+            other => panic!("expected next_step action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_controller_action_accepts_next_step_step_without_type_or_description() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": { "task": "Check weather" },
+            "step": {
+                "tool": "weather",
+                "args": { "location": "Austin, TX" }
+            }
+        });
+
+        let action = parse_controller_action(&payload).expect("step payload should parse");
+        match action {
+            ControllerAction::NextStep { step, .. } => match step {
+                ControllerStep::Tool {
+                    description,
+                    tool,
+                    args,
+                } => {
+                    assert_eq!(description, "Call the selected tool");
+                    assert_eq!(tool, "weather");
+                    assert_eq!(args, json!({ "location": "Austin, TX" }));
+                }
+                other => panic!("expected tool step, got {other:?}"),
+            },
+            other => panic!("expected next_step action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_controller_action_accepts_next_step_with_only_thinking_task() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": { "task": "Inspect project files before deciding" }
+        });
+
+        let action =
+            parse_controller_action(&payload).expect("next_step without step should synthesize");
+        match action {
+            ControllerAction::NextStep { step, .. } => match step {
+                ControllerStep::Think { description } => {
+                    assert_eq!(description, "Inspect project files before deciding");
+                }
+                other => panic!("expected think step, got {other:?}"),
+            },
+            other => panic!("expected next_step action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_controller_action_ignores_blank_question_on_next_step_fallback() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": { "task": "Inspect project files before deciding" },
+            "question": "",
+            "context": ""
+        });
+
+        let action = parse_controller_action(&payload).expect("payload should parse");
+        match action {
+            ControllerAction::NextStep { step, .. } => match step {
+                ControllerStep::Think { description } => {
+                    assert_eq!(description, "Inspect project files before deciding");
+                }
+                other => panic!("expected think step, got {other:?}"),
+            },
+            other => panic!("expected next_step action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_controller_action_does_not_treat_next_step_progress_message_as_complete() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": {
+                "task": "Examine email threads to find meeting information from yesterday",
+                "decisions": [
+                    "Need to examine individual email threads to find meeting-related content"
+                ]
+            },
+            "message": "I'll examine the email threads to find meeting information from yesterday.",
+            "resume_to": "controller"
+        });
+
+        let action = parse_controller_action(&payload).expect("payload should parse");
+        match action {
+            ControllerAction::NextStep { step, .. } => match step {
+                ControllerStep::Think { description } => {
+                    assert_eq!(
+                        description,
+                        "Examine email threads to find meeting information from yesterday"
+                    );
+                }
+                other => panic!("expected think step, got {other:?}"),
+            },
+            other => panic!("expected next_step action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_controller_action_synthesizes_tool_from_thinking_decisions() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": {
+                "task": "Check the user's last 20 emails to find meetings from yesterday",
+                "decisions": [
+                    "Use gmail.list_threads to fetch the last 20 email threads"
+                ]
+            },
+            "question": "",
+            "context": "",
+            "resume_to": "controller"
+        });
+
+        let action = parse_controller_action(&payload).expect("payload should parse");
+        match action {
+            ControllerAction::NextStep { step, .. } => match step {
+                ControllerStep::Tool {
+                    description,
+                    tool,
+                    args,
+                } => {
+                    assert_eq!(
+                        description,
+                        "Check the user's last 20 emails to find meetings from yesterday"
+                    );
+                    assert_eq!(tool, "gmail.list_threads");
+                    assert_eq!(args, json!({}));
+                }
+                other => panic!("expected tool step, got {other:?}"),
+            },
+            other => panic!("expected next_step action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn controller_output_schema_uses_one_of_for_action_requirements() {
+        let schema = controller_output_format();
+        let root = schema.get("schema").expect("schema root");
+
+        assert!(root.get("allOf").is_none());
+        assert!(root.get("oneOf").is_some());
+    }
+
+    #[test]
+    fn hydrate_tool_outputs_read_args_uses_last_step_output_ref() {
+        let last_result = StepResult {
+            step_id: "step-1".to_string(),
+            success: true,
+            output: Some(json!({
+                "message": "Tool output stored in app data. Use tool_outputs.read to retrieve.",
+                "output_ref": {
+                    "id": "exec-123",
+                    "storage": "app_data"
+                }
+            })),
+            error: None,
+            tool_executions: Vec::new(),
+            duration_ms: 0,
+            completed_at: Utc::now(),
+        };
+
+        let hydrated = hydrate_tool_args_for_execution(
+            "tool_outputs.read",
+            json!({}),
+            "conversation-1",
+            Some(&last_result),
+            &[],
+        );
+
+        assert_eq!(
+            hydrated.get("id").and_then(|value| value.as_str()),
+            Some("exec-123")
+        );
+        assert_eq!(
+            hydrated
+                .get("conversation_id")
+                .and_then(|value| value.as_str()),
+            Some("conversation-1")
+        );
+    }
+
+    #[test]
+    fn hydrate_tool_outputs_read_args_preserves_existing_id() {
+        let hydrated = hydrate_tool_args_for_execution(
+            "tool_outputs.read",
+            json!({ "id": "explicit-id" }),
+            "conversation-1",
+            None,
+            &[],
+        );
+
+        assert_eq!(
+            hydrated.get("id").and_then(|value| value.as_str()),
+            Some("explicit-id")
+        );
+    }
+
+    #[test]
+    fn hydrate_tool_outputs_read_args_uses_history_when_last_result_missing() {
+        let history = vec![StepResult {
+            step_id: "step-older".to_string(),
+            success: true,
+            output: Some(json!({
+                "result": {
+                    "output_ref": {
+                        "id": "hist-456"
+                    }
+                }
+            })),
+            error: None,
+            tool_executions: Vec::new(),
+            duration_ms: 0,
+            completed_at: Utc::now(),
+        }];
+
+        let hydrated = hydrate_tool_args_for_execution(
+            "tool_outputs.read",
+            json!({}),
+            "conversation-1",
+            None,
+            &history,
+        );
+
+        assert_eq!(
+            hydrated.get("id").and_then(|value| value.as_str()),
+            Some("hist-456")
+        );
+    }
 }

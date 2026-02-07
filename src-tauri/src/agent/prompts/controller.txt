@@ -61,9 +61,6 @@ RECENT MESSAGES:
 USER REQUEST:
 {user_message}
 
-STATE SUMMARY:
-{state_summary}
-
 LAST TOOL OUTPUT:
 {last_tool_output}
 
