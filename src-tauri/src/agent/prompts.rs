@@ -1,4 +1,3 @@
-pub const CONTROLLER_PROMPT: &str = include_str!("prompts/controller.txt");
 pub const RESPONDER_PROMPT: &str = include_str!("prompts/responder.txt");
 
 // Controller prompt split for message-array caching optimization
@@ -8,8 +7,8 @@ Your job:
 - Pick exactly one action: next_step, complete, guardrail_stop, or ask_user.
 - If you need a tool, choose next_step with type="tool" and supply the tool name and args.
 - If you can answer now without tools, choose complete and return the final message.
-- If you need to reason before tool use, choose next_step with type="think" (short description).
-- If action is next_step, include a mandatory top-level "thinking" object before finalizing step. Use it to reason from evidence to action.
+- Use the "thinking" field to reason before any action. Do not output a separate think step.
+- If action is next_step, include a mandatory top-level "thinking" object. Use it to reason from evidence to action.
 - If the user needs a reply but no tools are required, use complete (preferred) or next_step(type="respond"). Never set action="respond".
 - If you need clarification from the user before continuing safely, use next_step(type="ask_user") with a direct question.
 - Respect the limits. If remaining turns or tool calls are zero, do NOT request more tools.
@@ -29,16 +28,10 @@ Schema:
     "risks"?: ["...", "..."],
     "confidence"?: 0.0
   },
-  "step"?: {
-    "type": "tool" | "respond" | "think" | "ask_user",
-    "description": "...",
-    "tool"?: "tool_name",
-    "args"?: { ... } | "{...}",
-    "message"?: "...",
-    "question"?: "...",
-    "context"?: "...",
-    "resume_to"?: "reflecting" | "controller"
-  },
+  "type"?: "tool" | "respond" | "ask_user",
+  "description"?: "...",
+  "tool"?: "tool_name",
+  "args"?: { ... },
   "message"?: "...",
   "reason"?: "...",
   "question"?: "...",
@@ -47,6 +40,8 @@ Schema:
 }
 
 Notes:
+- All fields except "action" are top-level. There is no nested "step" object.
+- "type" is optional and can be inferred: presence of "tool" implies type="tool", "message" implies type="respond", "question" implies type="ask_user".
 - When action="next_step" and type="tool", provide a short description and tool name.
 - When action="next_step", "thinking" is required and must be an object.
 - Prefer object args for tools, but JSON string args are accepted.

@@ -304,11 +304,6 @@ fn serialize_step_action(action: &StepAction) -> (String, String) {
             serde_json::to_string(&serde_json::json!({ "question": question }))
                 .unwrap_or_else(|_| "{}".to_string()),
         ),
-        StepAction::Think { prompt } => (
-            "think".to_string(),
-            serde_json::to_string(&serde_json::json!({ "prompt": prompt }))
-                .unwrap_or_else(|_| "{}".to_string()),
-        ),
         StepAction::Respond { message } => (
             "respond".to_string(),
             serde_json::to_string(&serde_json::json!({ "message": message }))
@@ -339,22 +334,16 @@ fn parse_step_action(action_type: &str, action_data: &str) -> StepAction {
                 .unwrap_or("")
                 .to_string(),
         },
-        "think" => StepAction::Think {
-            prompt: data
-                .get("prompt")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-        },
-        "respond" => StepAction::Respond {
+        "respond" | "think" => StepAction::Respond {
             message: data
                 .get("message")
+                .or_else(|| data.get("prompt"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
         },
-        _ => StepAction::Think {
-            prompt: "".to_string(),
+        _ => StepAction::Respond {
+            message: "".to_string(),
         },
     }
 }

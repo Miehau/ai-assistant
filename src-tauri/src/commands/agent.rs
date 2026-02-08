@@ -724,7 +724,6 @@ pub fn agent_send_message(
                 approvals_for_thread.clone(),
                 cancel_token_for_thread.clone(),
                 messages,
-                system_prompt_for_thread.clone(),
                 conversation_id_for_thread.clone(),
                 user_message_id_for_thread.clone(),
                 assistant_message_id_for_thread.clone(),
