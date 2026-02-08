@@ -41,7 +41,6 @@ pub struct DynamicController {
     cancel_flag: Arc<AtomicBool>,
     session: AgentSession,
     messages: Vec<LlmMessage>,
-    base_system_prompt: Option<String>,
     assistant_message_id: String,
     pending_tool_executions: Vec<MessageToolExecutionInput>,
     last_step_result: Option<StepResult>,
@@ -58,7 +57,6 @@ impl DynamicController {
         approvals: ApprovalStore,
         cancel_flag: Arc<AtomicBool>,
         messages: Vec<LlmMessage>,
-        base_system_prompt: Option<String>,
         conversation_id: String,
         message_id: String,
         assistant_message_id: String,
@@ -88,7 +86,6 @@ impl DynamicController {
             cancel_flag,
             session,
             messages,
-            base_system_prompt,
             assistant_message_id,
             pending_tool_executions: Vec::new(),
             last_step_result: None,
@@ -118,10 +115,31 @@ impl DynamicController {
             match decision {
                 ControllerAction::NextStep {
                     thinking: _thinking,
-                    step,
+                    step_type,
+                    description,
+                    tool,
+                    args,
+                    message,
+                    question,
+                    context,
+                    resume_to,
                 } => {
                     self.ensure_plan(user_message)?;
-                    match self.execute_step(call_llm, step)? {
+                    let effective_type = step_type
+                        .as_deref()
+                        .or_else(|| infer_step_type_flat(&tool, &message, &question))
+                        .unwrap_or("tool"); // safe: validate() already checked
+                    match self.execute_flat_step(
+                        call_llm,
+                        effective_type,
+                        description,
+                        tool,
+                        args,
+                        message,
+                        question,
+                        context,
+                        resume_to,
+                    )? {
                         StepExecutionOutcome::Continue => {}
                         StepExecutionOutcome::Complete(response) => {
                             return self.finish(response);
@@ -206,39 +224,50 @@ impl DynamicController {
         Ok(())
     }
 
-    fn execute_step<F>(
+    #[allow(clippy::too_many_arguments)]
+    fn execute_flat_step<F>(
         &mut self,
-        call_llm: &mut F,
-        step: ControllerStep,
+        _call_llm: &mut F,
+        effective_type: &str,
+        description: Option<String>,
+        tool: Option<String>,
+        args: Value,
+        message: Option<String>,
+        question: Option<String>,
+        context: Option<String>,
+        resume_to: Option<ResumeTarget>,
     ) -> Result<StepExecutionOutcome, String>
     where
         F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         self.tool_calls_in_current_step = 0;
+        let step_description = description
+            .clone()
+            .unwrap_or_else(|| default_step_description(effective_type).to_string());
         let plan = self.session.plan.as_mut().ok_or("Missing plan")?;
         let step_id = format!("step-{}", Uuid::new_v4());
         let sequence = plan.steps.len();
         let expected_outcome = "Step result recorded.".to_string();
-        let action = match &step {
-            ControllerStep::Tool { tool, args, .. } => StepAction::ToolCall {
-                tool: tool.clone(),
+        let action = match effective_type {
+            "tool" => StepAction::ToolCall {
+                tool: tool.clone().unwrap_or_default(),
                 args: normalize_tool_args(args.clone()),
             },
-            ControllerStep::Respond { message, .. } => StepAction::Respond {
-                message: message.clone(),
+            "respond" => StepAction::Respond {
+                message: message.clone().unwrap_or_default(),
             },
-            ControllerStep::Think { description } => StepAction::Think {
-                prompt: description.clone(),
+            "ask_user" => StepAction::AskUser {
+                question: question.clone().unwrap_or_default(),
             },
-            ControllerStep::AskUser { question, .. } => StepAction::AskUser {
-                question: question.clone(),
-            },
+            _ => {
+                return Err(format!("Unknown step type: {effective_type}"));
+            }
         };
 
         let plan_step = PlanStep {
             id: step_id.clone(),
             sequence,
-            description: step.description().to_string(),
+            description: step_description,
             expected_outcome,
             action,
             status: StepStatus::Proposed,
@@ -259,15 +288,17 @@ impl DynamicController {
             Utc::now().timestamp_millis(),
         ));
 
-        let preview = match &step {
-            ControllerStep::Tool { tool, args, .. } => self
-                .tool_registry
-                .get(tool)
-                .and_then(|tool_def| tool_def.preview.as_ref())
-                .and_then(|preview| {
-                    preview(normalize_tool_args(args.clone()), ToolExecutionContext).ok()
-                }),
-            _ => None,
+        let preview = if effective_type == "tool" {
+            tool.as_deref().and_then(|tool_name| {
+                self.tool_registry
+                    .get(tool_name)
+                    .and_then(|tool_def| tool_def.preview.as_ref())
+                    .and_then(|preview_fn| {
+                        preview_fn(normalize_tool_args(args.clone()), ToolExecutionContext).ok()
+                    })
+            })
+        } else {
+            None
         };
 
         self.event_bus.publish(AgentEvent::new_with_timestamp(
@@ -296,56 +327,48 @@ impl DynamicController {
             Utc::now().timestamp_millis(),
         ));
 
-        let respond_message = match &step {
-            ControllerStep::Respond { message, .. } => Some(message.clone()),
-            ControllerStep::AskUser { question, .. } => Some(question.clone()),
-            _ => None,
+        let is_respond = effective_type == "respond";
+        let respond_message = if is_respond {
+            message.clone()
+        } else if effective_type == "ask_user" {
+            question.clone()
+        } else {
+            None
         };
-        let is_respond = matches!(&step, ControllerStep::Respond { .. });
-        let ask_user_payload = match &step {
-            ControllerStep::AskUser {
-                question,
+        let ask_user_payload = if effective_type == "ask_user" {
+            Some((
+                question.unwrap_or_default(),
                 context,
-                resume_to,
-                ..
-            } => Some((question.clone(), context.clone(), resume_to.clone())),
-            _ => None,
+                resume_to.unwrap_or_else(default_resume_target),
+            ))
+        } else {
+            None
         };
 
-        let result = match step {
-            ControllerStep::Tool { tool, args, .. } => {
-                self.execute_tool(&step_id, &tool, normalize_tool_args(args))?
+        let result = match effective_type {
+            "tool" => {
+                let tool_name = tool.unwrap_or_default();
+                self.execute_tool(&step_id, &tool_name, normalize_tool_args(args))?
             }
-            ControllerStep::Respond { message, .. } => StepResult {
+            "respond" => StepResult {
                 step_id: step_id.clone(),
                 success: true,
-                output: Some(json!({ "message": message })),
+                output: Some(json!({ "message": message.unwrap_or_default() })),
                 error: None,
                 tool_executions: Vec::new(),
                 duration_ms: 0,
                 completed_at: Utc::now(),
             },
-            ControllerStep::Think { description } => {
-                let output = self.call_think(call_llm, &description)?;
-                StepResult {
-                    step_id: step_id.clone(),
-                    success: true,
-                    output: Some(json!({ "note": output })),
-                    error: None,
-                    tool_executions: Vec::new(),
-                    duration_ms: 0,
-                    completed_at: Utc::now(),
-                }
-            }
-            ControllerStep::AskUser { question, .. } => StepResult {
+            "ask_user" => StepResult {
                 step_id: step_id.clone(),
                 success: true,
-                output: Some(json!({ "question": question })),
+                output: Some(json!({ "question": ask_user_payload.as_ref().map(|(q, _, _)| q.clone()).unwrap_or_default() })),
                 error: None,
                 tool_executions: Vec::new(),
                 duration_ms: 0,
                 completed_at: Utc::now(),
             },
+            _ => unreachable!(),
         };
 
         let status = if result.success {
@@ -873,21 +896,6 @@ impl DynamicController {
         }
     }
 
-    fn call_think<F>(&mut self, call_llm: &mut F, prompt: &str) -> Result<String, String>
-    where
-        F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
-    {
-        let response = (call_llm)(
-            &[LlmMessage {
-                role: "user".to_string(),
-                content: json!(prompt),
-            }],
-            self.base_system_prompt.as_deref(),
-            None,
-        )?;
-        Ok(response.content)
-    }
-
     /// Get compacted history messages for controller context
     /// Maintains consistent message structure to preserve cache validity
     fn get_compacted_history_messages(&self) -> Vec<LlmMessage> {
@@ -1110,7 +1118,19 @@ impl DynamicController {
 enum ControllerAction {
     NextStep {
         thinking: Value,
-        step: ControllerStep,
+        #[serde(rename = "type")]
+        step_type: Option<String>,
+        description: Option<String>,
+        // tool fields
+        tool: Option<String>,
+        #[serde(default)]
+        args: Value,
+        // respond fields
+        message: Option<String>,
+        // ask_user fields (when type=ask_user inside next_step)
+        question: Option<String>,
+        context: Option<String>,
+        resume_to: Option<ResumeTarget>,
     },
     Complete {
         message: String,
@@ -1128,41 +1148,72 @@ enum ControllerAction {
     },
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ControllerStep {
-    Tool {
-        description: String,
-        tool: String,
-        #[serde(default)]
-        args: Value,
-    },
-    Respond {
-        description: String,
-        message: String,
-    },
-    Think {
-        description: String,
-    },
-    AskUser {
-        description: String,
-        question: String,
-        #[serde(default)]
-        context: Option<String>,
-        #[serde(default = "default_resume_target")]
-        resume_to: ResumeTarget,
-    },
-}
-
-impl ControllerStep {
-    fn description(&self) -> &str {
+impl ControllerAction {
+    fn validate(&self) -> Result<(), String> {
         match self {
-            ControllerStep::Tool { description, .. } => description,
-            ControllerStep::Respond { description, .. } => description,
-            ControllerStep::Think { description } => description,
-            ControllerStep::AskUser { description, .. } => description,
+            ControllerAction::NextStep {
+                step_type,
+                tool,
+                message,
+                question,
+                ..
+            } => {
+                let effective_type = step_type
+                    .as_deref()
+                    .or_else(|| infer_step_type_flat(tool, message, question));
+                match effective_type {
+                    Some("tool") => {
+                        if tool.as_ref().map_or(true, |t| t.trim().is_empty()) {
+                            return Err(
+                                "next_step type=tool requires non-empty 'tool' field".into()
+                            );
+                        }
+                    }
+                    Some("respond") => {
+                        if message.as_ref().map_or(true, |m| m.trim().is_empty()) {
+                            return Err(
+                                "next_step type=respond requires non-empty 'message' field".into(),
+                            );
+                        }
+                    }
+                    Some("ask_user") => {
+                        if question.as_ref().map_or(true, |q| q.trim().is_empty()) {
+                            return Err(
+                                "next_step type=ask_user requires non-empty 'question' field"
+                                    .into(),
+                            );
+                        }
+                    }
+                    None => {
+                        return Err(
+                            "Cannot determine step type: provide 'type' or 'tool'/'message'/'question'"
+                                .into(),
+                        )
+                    }
+                    Some(other) => return Err(format!("Unknown step type: {other}")),
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
+}
+
+fn infer_step_type_flat(
+    tool: &Option<String>,
+    message: &Option<String>,
+    question: &Option<String>,
+) -> Option<&'static str> {
+    if tool.as_ref().is_some_and(|t| !t.trim().is_empty()) {
+        return Some("tool");
+    }
+    if question.as_ref().is_some_and(|q| !q.trim().is_empty()) {
+        return Some("ask_user");
+    }
+    if message.as_ref().is_some_and(|m| !m.trim().is_empty()) {
+        return Some("respond");
+    }
+    None
 }
 
 enum StepExecutionOutcome {
@@ -1175,371 +1226,80 @@ fn default_resume_target() -> ResumeTarget {
 }
 
 fn parse_controller_action(value: &Value) -> Result<ControllerAction, String> {
-    match serde_json::from_value::<ControllerAction>(value.clone()) {
-        Ok(action) => Ok(action),
-        Err(err) => {
-            let action = value.get("action").and_then(|val| val.as_str());
-            if action == Some("next_step") {
-                let thinking = parse_thinking(value)?;
-                let step = if value.get("step").is_none() {
-                    parse_next_step_payload_without_message_fallback(value)
-                        .or_else(|| synthesize_step_from_thinking(&thinking))
-                } else {
-                    parse_next_step_payload(value)
-                        .or_else(|| synthesize_step_from_thinking(&thinking))
-                };
+    // Step 1: Normalize aliases at the Value level before serde
+    let normalized = normalize_controller_value(value);
 
-                if let Some(step) = step {
-                    return Ok(ControllerAction::NextStep { thinking, step });
-                }
-
-                if let Some(question) = non_empty_string_field(value, &["question"]) {
-                    return Ok(ControllerAction::AskUser {
-                        question,
-                        context: non_empty_string_field(value, &["context"]),
-                        resume_to: parse_resume_target(value.get("resume_to")),
-                    });
-                }
-
-                if let Some(message) = non_empty_string_field(value, &["message", "response"]) {
-                    return Ok(ControllerAction::Complete { message });
+    // Step 2: Try serde deserialization
+    match serde_json::from_value::<ControllerAction>(normalized.clone()) {
+        Ok(action) => {
+            action.validate()?;
+            Ok(action)
+        }
+        Err(serde_err) => {
+            // Step 3: Handle action="respond" -> Complete
+            let action_str = normalized.get("action").and_then(|v| v.as_str());
+            if action_str == Some("respond") {
+                if let Some(msg) = non_empty_string_field(&normalized, &["message", "response"]) {
+                    return Ok(ControllerAction::Complete { message: msg });
                 }
             }
 
-            if action == Some("respond") {
-                if let Some(step_value) = value.get("step") {
-                    if let Some(step) =
-                        parse_controller_step_payload(step_value.clone(), Some("respond"))
-                    {
-                        let thinking = parse_thinking(value)?;
-                        return Ok(ControllerAction::NextStep { thinking, step });
-                    }
-                }
-
-                if let Some(message) = non_empty_string_field(value, &["message"]) {
-                    return Ok(ControllerAction::Complete { message });
-                }
-
-                if let Some(message) = non_empty_string_field(value, &["response"]) {
-                    return Ok(ControllerAction::Complete { message });
-                }
-            }
-
-            if action == Some("ask_user") {
-                if let Some(step_value) = value.get("step") {
-                    if let Some(step) =
-                        parse_controller_step_payload(step_value.clone(), Some("ask_user"))
-                    {
-                        let thinking = parse_thinking(value)?;
-                        return Ok(ControllerAction::NextStep { thinking, step });
-                    }
-                }
-
-                if let Some(question) = non_empty_string_field(value, &["question"]) {
-                    return Ok(ControllerAction::AskUser {
-                        question,
-                        context: non_empty_string_field(value, &["context"]),
-                        resume_to: parse_resume_target(value.get("resume_to")),
-                    });
-                }
-            }
-
-            Err(format!("Invalid controller output: {err}"))
+            // Step 4: Fail with clear error -- no synthesis
+            Err(format!("Invalid controller output: {serde_err}"))
         }
     }
 }
 
-fn parse_next_step_payload(value: &Value) -> Option<ControllerStep> {
-    parse_next_step_payload_inner(value, true)
-}
-
-fn parse_next_step_payload_without_message_fallback(value: &Value) -> Option<ControllerStep> {
-    parse_next_step_payload_inner(value, false)
-}
-
-fn parse_next_step_payload_inner(
-    value: &Value,
-    include_message_fields_in_top_level_fallback: bool,
-) -> Option<ControllerStep> {
-    for key in ["step", "next_step", "next_action"] {
-        if let Some(step_value) = value.get(key) {
-            if let Some(step) = parse_controller_step_payload(step_value.clone(), None) {
-                return Some(step);
-            }
-        }
-    }
-
-    let Value::Object(root) = value else {
-        return None;
+fn normalize_controller_value(value: &Value) -> Value {
+    let Value::Object(map) = value else {
+        return value.clone();
     };
+    let mut out = map.clone();
 
-    let mut step = serde_json::Map::new();
-    for key in ["type", "description", "tool", "args"] {
-        if let Some(field) = root.get(key) {
-            if matches!(key, "type" | "description" | "tool") && is_blank_string_value(field) {
-                continue;
-            }
-            step.insert(key.to_string(), field.clone());
+    // Hoist nested step fields to top level (backwards compat for LLMs that still nest)
+    if let Some(Value::Object(step)) = out.remove("step").or_else(|| out.remove("next_step")) {
+        for (key, val) in step {
+            out.entry(key).or_insert(val);
         }
     }
 
-    for key in ["tool_name", "name", "tool_args", "arguments", "tool_input"] {
-        if let Some(field) = root.get(key) {
-            step.insert(key.to_string(), field.clone());
-        }
-    }
-
-    if include_message_fields_in_top_level_fallback {
-        for key in ["message", "question", "context", "resume_to"] {
-            if let Some(field) = root.get(key) {
-                if matches!(key, "message" | "question" | "context") && is_blank_string_value(field)
-                {
-                    continue;
-                }
-                step.insert(key.to_string(), field.clone());
+    // Normalize tool name aliases
+    for alias in ["tool_name", "name"] {
+        if out.get("tool").is_none() {
+            if let Some(val) = out.remove(alias) {
+                out.insert("tool".to_string(), val);
             }
         }
     }
 
-    if step.is_empty() {
-        return None;
-    }
-
-    parse_controller_step_payload(Value::Object(step), None)
-}
-
-fn synthesize_step_from_thinking(thinking: &Value) -> Option<ControllerStep> {
-    if let Some(tool_step) = synthesize_tool_step_from_thinking(thinking) {
-        return Some(tool_step);
-    }
-
-    let description = thinking
-        .get("task")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("Think through the next step")
-        .to_string();
-
-    serde_json::from_value::<ControllerStep>(json!({
-        "type": "think",
-        "description": description
-    }))
-    .ok()
-}
-
-fn synthesize_tool_step_from_thinking(thinking: &Value) -> Option<ControllerStep> {
-    let tool = thinking
-        .get("tool")
-        .or_else(|| thinking.get("tool_name"))
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| is_valid_tool_name(value))
-        .map(|value| value.to_string())
-        .or_else(|| {
-            thinking
-                .get("task")
-                .and_then(|value| value.as_str())
-                .and_then(extract_tool_name_from_text)
-        })
-        .or_else(|| {
-            thinking
-                .get("decisions")
-                .and_then(|value| value.as_array())
-                .and_then(|decisions| {
-                    decisions
-                        .iter()
-                        .find_map(|entry| entry.as_str().and_then(extract_tool_name_from_text))
-                })
-        })?;
-
-    let description = thinking
-        .get("task")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("Call the selected tool")
-        .to_string();
-
-    let args = thinking
-        .get("args")
-        .or_else(|| thinking.get("tool_args"))
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-
-    serde_json::from_value::<ControllerStep>(json!({
-        "type": "tool",
-        "description": description,
-        "tool": tool,
-        "args": args
-    }))
-    .ok()
-}
-
-fn extract_tool_name_from_text(text: &str) -> Option<String> {
-    for raw_token in text.split_whitespace() {
-        let token = raw_token
-            .trim_matches(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '.'));
-        if is_valid_tool_name(token) {
-            return Some(token.to_string());
-        }
-    }
-    None
-}
-
-fn is_valid_tool_name(value: &str) -> bool {
-    if value.is_empty() || !value.contains('.') || value.starts_with('.') || value.ends_with('.') {
-        return false;
-    }
-
-    if matches!(value.to_ascii_lowercase().as_str(), "e.g" | "i.e") {
-        return false;
-    }
-
-    if !value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
-    {
-        return false;
-    }
-
-    let segments = value.split('.').collect::<Vec<_>>();
-    if segments.len() < 2 || segments.iter().any(|segment| segment.trim().is_empty()) {
-        return false;
-    }
-
-    let action = segments[1].to_ascii_lowercase();
-    if segments[1].contains('_') {
-        return true;
-    }
-
-    [
-        "list", "get", "read", "search", "open", "create", "update", "delete", "send", "write",
-        "fetch", "find", "run", "execute", "call",
-    ]
-    .iter()
-    .any(|prefix| action.starts_with(prefix))
-}
-
-fn parse_controller_step_payload(
-    value: Value,
-    forced_type: Option<&str>,
-) -> Option<ControllerStep> {
-    let mut step = value;
-    let Value::Object(map) = &mut step else {
-        return None;
-    };
-
-    for key in [
-        "type",
-        "description",
-        "tool",
-        "message",
-        "question",
-        "context",
-    ] {
-        if map.get(key).is_some_and(is_blank_string_value) {
-            map.remove(key);
+    // Normalize args aliases
+    for alias in ["tool_args", "arguments", "tool_input"] {
+        if out.get("args").is_none() {
+            if let Some(val) = out.remove(alias) {
+                out.insert("args".to_string(), val);
+            }
         }
     }
 
-    if map.get("type").is_none() {
-        if let Some(step_type) = forced_type.or_else(|| infer_step_type(map)) {
-            map.insert("type".to_string(), Value::String(step_type.to_string()));
+    // Normalize message aliases
+    for alias in ["response", "content"] {
+        if out.get("message").is_none() {
+            if let Some(val) = out.remove(alias) {
+                out.insert("message".to_string(), val);
+            }
         }
     }
 
-    if map.get("tool").is_none() {
-        if let Some(tool_name) = map
-            .get("tool_name")
-            .or_else(|| map.get("name"))
-            .and_then(|value| value.as_str())
-        {
-            map.insert("tool".to_string(), Value::String(tool_name.to_string()));
-        }
-    }
-
-    if map.get("args").is_none() {
-        if let Some(args) = map
-            .get("tool_args")
-            .or_else(|| map.get("arguments"))
-            .or_else(|| map.get("tool_input"))
-        {
-            map.insert("args".to_string(), args.clone());
-        }
-    }
-
-    if map.get("message").is_none() {
-        if let Some(message) = map
-            .get("response")
-            .or_else(|| map.get("content"))
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            map.insert("message".to_string(), Value::String(message.to_string()));
-        }
-    }
-
-    if map.get("description").is_none() {
-        if let Some(step_type) = map.get("type").and_then(|value| value.as_str()) {
-            map.insert(
-                "description".to_string(),
-                Value::String(default_step_description(step_type).to_string()),
-            );
-        }
-    }
-
-    serde_json::from_value::<ControllerStep>(step).ok()
-}
-
-fn infer_step_type(map: &serde_json::Map<String, Value>) -> Option<&'static str> {
-    if map.get("tool").is_some_and(is_non_empty_string_value)
-        || map.get("tool_name").is_some_and(is_non_empty_string_value)
-    {
-        return Some("tool");
-    }
-    if map.get("question").is_some_and(is_non_empty_string_value) {
-        return Some("ask_user");
-    }
-    if map.get("message").is_some_and(is_non_empty_string_value) {
-        return Some("respond");
-    }
-    if map
-        .get("description")
-        .is_some_and(is_non_empty_string_value)
-    {
-        return Some("think");
-    }
-    None
+    Value::Object(out)
 }
 
 fn default_step_description(step_type: &str) -> &'static str {
     match step_type {
         "tool" => "Call the selected tool",
         "respond" => "Respond to the user",
-        "think" => "Think through the next step",
         "ask_user" => "Ask the user for clarification",
         _ => "Continue with the next step",
     }
-}
-
-fn parse_resume_target(value: Option<&Value>) -> ResumeTarget {
-    match value.and_then(|value| value.as_str()) {
-        Some("controller") => ResumeTarget::Controller,
-        Some("reflecting") => ResumeTarget::Reflecting,
-        _ => default_resume_target(),
-    }
-}
-
-fn parse_thinking(value: &Value) -> Result<Value, String> {
-    let thinking = value
-        .get("thinking")
-        .ok_or_else(|| "Missing required field: thinking".to_string())?;
-    if !thinking.is_object() {
-        return Err("Invalid field thinking: expected object".to_string());
-    }
-    Ok(thinking.clone())
 }
 
 fn non_empty_string_field(root: &Value, keys: &[&str]) -> Option<String> {
@@ -1559,13 +1319,6 @@ fn is_blank_string_value(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn is_non_empty_string_value(value: &Value) -> bool {
-    value
-        .as_str()
-        .map(|text| !text.trim().is_empty())
-        .unwrap_or(false)
-}
-
 fn controller_output_format() -> Value {
     json_schema_output_format(json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1576,32 +1329,6 @@ fn controller_output_format() -> Value {
                 "type": "string",
                 "enum": ["next_step", "complete", "guardrail_stop", "ask_user"]
             },
-            "step": {
-                "type": "object",
-                "required": ["type", "description"],
-                "properties": {
-                    "type": {
-                        "type": "string",
-                        "enum": ["tool", "respond", "think", "ask_user"]
-                    },
-                    "description": { "type": "string" },
-                    "tool": { "type": "string" },
-                    "args": {
-                        "anyOf": [
-                            { "type": "object" },
-                            { "type": "string" }
-                        ]
-                    },
-                    "message": { "type": "string" },
-                    "question": { "type": "string" },
-                    "context": { "type": "string" },
-                    "resume_to": {
-                        "type": "string",
-                        "enum": ["reflecting", "controller"]
-                    }
-                },
-                "additionalProperties": false
-            },
             "thinking": {
                 "type": "object",
                 "properties": {
@@ -1609,10 +1336,17 @@ fn controller_output_format() -> Value {
                     "facts": { "type": "array", "items": { "type": "string" } },
                     "decisions": { "type": "array", "items": { "type": "string" } },
                     "risks": { "type": "array", "items": { "type": "string" } },
-                    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+                    "confidence": { "type": "number" }
                 },
                 "additionalProperties": true
             },
+            "type": {
+                "type": "string",
+                "enum": ["tool", "respond", "ask_user"]
+            },
+            "description": { "type": "string" },
+            "tool": { "type": "string" },
+            "args": {},
             "message": { "type": "string" },
             "reason": { "type": "string" },
             "question": { "type": "string" },
@@ -1622,24 +1356,6 @@ fn controller_output_format() -> Value {
                 "enum": ["reflecting", "controller"]
             }
         },
-        "oneOf": [
-            {
-                "properties": { "action": { "const": "next_step" } },
-                "required": ["action", "step", "thinking"]
-            },
-            {
-                "properties": { "action": { "const": "complete" } },
-                "required": ["action", "message"]
-            },
-            {
-                "properties": { "action": { "const": "guardrail_stop" } },
-                "required": ["action", "reason"]
-            },
-            {
-                "properties": { "action": { "const": "ask_user" } },
-                "required": ["action", "question"]
-            }
-        ],
         "additionalProperties": false
     }))
 }
@@ -1870,19 +1586,16 @@ mod tests {
 
         let action = parse_controller_action(&payload).expect("next_step payload should parse");
         match action {
-            ControllerAction::NextStep { step, .. } => match step {
-                ControllerStep::Tool { tool, args, .. } => {
-                    assert_eq!(tool, "weather");
-                    assert_eq!(args, json!({ "location": "Austin, TX" }));
-                }
-                other => panic!("expected tool step, got {other:?}"),
-            },
+            ControllerAction::NextStep { tool, args, .. } => {
+                assert_eq!(tool.as_deref(), Some("weather"));
+                assert_eq!(args, json!({ "location": "Austin, TX" }));
+            }
             other => panic!("expected next_step action, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_controller_action_accepts_next_step_step_without_type_or_description() {
+    fn parse_controller_action_accepts_next_step_step_hoisted_to_top_level() {
         let payload = json!({
             "action": "next_step",
             "thinking": { "task": "Check weather" },
@@ -1894,44 +1607,30 @@ mod tests {
 
         let action = parse_controller_action(&payload).expect("step payload should parse");
         match action {
-            ControllerAction::NextStep { step, .. } => match step {
-                ControllerStep::Tool {
-                    description,
-                    tool,
-                    args,
-                } => {
-                    assert_eq!(description, "Call the selected tool");
-                    assert_eq!(tool, "weather");
-                    assert_eq!(args, json!({ "location": "Austin, TX" }));
-                }
-                other => panic!("expected tool step, got {other:?}"),
-            },
+            ControllerAction::NextStep { tool, args, .. } => {
+                assert_eq!(tool.as_deref(), Some("weather"));
+                assert_eq!(args, json!({ "location": "Austin, TX" }));
+            }
             other => panic!("expected next_step action, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_controller_action_accepts_next_step_with_only_thinking_task() {
+    fn parse_controller_action_rejects_next_step_with_only_thinking() {
         let payload = json!({
             "action": "next_step",
             "thinking": { "task": "Inspect project files before deciding" }
         });
 
-        let action =
-            parse_controller_action(&payload).expect("next_step without step should synthesize");
-        match action {
-            ControllerAction::NextStep { step, .. } => match step {
-                ControllerStep::Think { description } => {
-                    assert_eq!(description, "Inspect project files before deciding");
-                }
-                other => panic!("expected think step, got {other:?}"),
-            },
-            other => panic!("expected next_step action, got {other:?}"),
-        }
+        let result = parse_controller_action(&payload);
+        assert!(
+            result.is_err(),
+            "next_step with only thinking should fail validation (no think synthesis)"
+        );
     }
 
     #[test]
-    fn parse_controller_action_ignores_blank_question_on_next_step_fallback() {
+    fn parse_controller_action_rejects_blank_question_without_tool_or_message() {
         let payload = json!({
             "action": "next_step",
             "thinking": { "task": "Inspect project files before deciding" },
@@ -1939,20 +1638,15 @@ mod tests {
             "context": ""
         });
 
-        let action = parse_controller_action(&payload).expect("payload should parse");
-        match action {
-            ControllerAction::NextStep { step, .. } => match step {
-                ControllerStep::Think { description } => {
-                    assert_eq!(description, "Inspect project files before deciding");
-                }
-                other => panic!("expected think step, got {other:?}"),
-            },
-            other => panic!("expected next_step action, got {other:?}"),
-        }
+        let result = parse_controller_action(&payload);
+        assert!(
+            result.is_err(),
+            "next_step with blank question and no tool/message should fail"
+        );
     }
 
     #[test]
-    fn parse_controller_action_does_not_treat_next_step_progress_message_as_complete() {
+    fn parse_controller_action_next_step_with_message_infers_respond() {
         let payload = json!({
             "action": "next_step",
             "thinking": {
@@ -1967,21 +1661,34 @@ mod tests {
 
         let action = parse_controller_action(&payload).expect("payload should parse");
         match action {
-            ControllerAction::NextStep { step, .. } => match step {
-                ControllerStep::Think { description } => {
-                    assert_eq!(
-                        description,
-                        "Examine email threads to find meeting information from yesterday"
-                    );
-                }
-                other => panic!("expected think step, got {other:?}"),
-            },
+            ControllerAction::NextStep {
+                step_type, message, ..
+            } => {
+                // type is inferred as "respond" since message is present
+                let effective = step_type
+                    .as_deref()
+                    .or_else(|| {
+                        if message.is_some() {
+                            Some("respond")
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap();
+                assert_eq!(effective, "respond");
+                assert_eq!(
+                    message.as_deref(),
+                    Some("I'll examine the email threads to find meeting information from yesterday.")
+                );
+            }
             other => panic!("expected next_step action, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_controller_action_synthesizes_tool_from_thinking_decisions() {
+    fn parse_controller_action_does_not_synthesize_tool_from_thinking() {
+        // With the flat schema, we no longer synthesize tool steps from thinking decisions.
+        // The LLM must explicitly provide the tool field.
         let payload = json!({
             "action": "next_step",
             "thinking": {
@@ -1995,34 +1702,161 @@ mod tests {
             "resume_to": "controller"
         });
 
-        let action = parse_controller_action(&payload).expect("payload should parse");
+        let result = parse_controller_action(&payload);
+        assert!(
+            result.is_err(),
+            "next_step without tool/message/question should fail (no synthesis)"
+        );
+    }
+
+    #[test]
+    fn controller_output_schema_has_no_one_of() {
+        let schema = controller_output_format();
+        let root = schema.get("schema").expect("schema root");
+
+        assert!(root.get("allOf").is_none(), "schema should not have allOf");
+        assert!(root.get("oneOf").is_none(), "schema should not have oneOf");
+        assert!(root.get("anyOf").is_none(), "schema should not have anyOf");
+    }
+
+    #[test]
+    fn controller_output_schema_has_flat_type_field() {
+        let schema = controller_output_format();
+        let root = schema.get("schema").expect("schema root");
+        let props = root.get("properties").expect("properties");
+
+        // type is top-level, not nested in step
+        assert!(props.get("type").is_some(), "type should be top-level");
+        assert!(props.get("step").is_none(), "step should not exist");
+
+        // type enum should not contain "think"
+        let type_enum = props
+            .get("type")
+            .unwrap()
+            .get("enum")
+            .expect("type enum");
+        let values: Vec<&str> = type_enum
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(values, vec!["tool", "respond", "ask_user"]);
+    }
+
+    #[test]
+    fn parse_controller_action_infers_tool_type_from_tool_field() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": { "task": "Fetch weather data" },
+            "tool": "weather.get_forecast",
+            "args": { "city": "London" }
+        });
+
+        let action = parse_controller_action(&payload).expect("should parse");
         match action {
-            ControllerAction::NextStep { step, .. } => match step {
-                ControllerStep::Tool {
-                    description,
-                    tool,
-                    args,
-                } => {
-                    assert_eq!(
-                        description,
-                        "Check the user's last 20 emails to find meetings from yesterday"
-                    );
-                    assert_eq!(tool, "gmail.list_threads");
-                    assert_eq!(args, json!({}));
-                }
-                other => panic!("expected tool step, got {other:?}"),
-            },
+            ControllerAction::NextStep {
+                step_type, tool, args, ..
+            } => {
+                // type is None because it was inferred, not explicitly set
+                assert!(step_type.is_none(), "type should be inferred, not explicit");
+                assert_eq!(tool.as_deref(), Some("weather.get_forecast"));
+                assert_eq!(args, json!({ "city": "London" }));
+            }
             other => panic!("expected next_step action, got {other:?}"),
         }
     }
 
     #[test]
-    fn controller_output_schema_uses_one_of_for_action_requirements() {
-        let schema = controller_output_format();
-        let root = schema.get("schema").expect("schema root");
+    fn parse_controller_action_normalizes_tool_name_alias() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": { "task": "Search files" },
+            "tool_name": "files.search",
+            "args": { "query": "test" }
+        });
 
-        assert!(root.get("allOf").is_none());
-        assert!(root.get("oneOf").is_some());
+        let action = parse_controller_action(&payload).expect("should parse with tool_name alias");
+        match action {
+            ControllerAction::NextStep { tool, .. } => {
+                assert_eq!(tool.as_deref(), Some("files.search"));
+            }
+            other => panic!("expected next_step action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_controller_action_normalizes_args_aliases() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": { "task": "Read file" },
+            "tool": "files.read",
+            "arguments": { "path": "/tmp/test.txt" }
+        });
+
+        let action = parse_controller_action(&payload).expect("should parse with arguments alias");
+        match action {
+            ControllerAction::NextStep { tool, args, .. } => {
+                assert_eq!(tool.as_deref(), Some("files.read"));
+                assert_eq!(args, json!({ "path": "/tmp/test.txt" }));
+            }
+            other => panic!("expected next_step action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_controller_action_handles_respond_action_as_complete() {
+        let payload = json!({
+            "action": "respond",
+            "message": "Here is your answer."
+        });
+
+        let action =
+            parse_controller_action(&payload).expect("action=respond should map to Complete");
+        match action {
+            ControllerAction::Complete { message } => {
+                assert_eq!(message, "Here is your answer.");
+            }
+            other => panic!("expected Complete action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_controller_action_handles_respond_action_with_response_alias() {
+        let payload = json!({
+            "action": "respond",
+            "response": "The result is 42."
+        });
+
+        let action = parse_controller_action(&payload)
+            .expect("action=respond with response alias should map to Complete");
+        match action {
+            ControllerAction::Complete { message } => {
+                assert_eq!(message, "The result is 42.");
+            }
+            other => panic!("expected Complete action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_controller_action_normalizes_message_alias() {
+        let payload = json!({
+            "action": "next_step",
+            "thinking": { "task": "Respond to user" },
+            "response": "Here is the info you requested."
+        });
+
+        let action =
+            parse_controller_action(&payload).expect("response alias should be normalized");
+        match action {
+            ControllerAction::NextStep { message, .. } => {
+                assert_eq!(
+                    message.as_deref(),
+                    Some("Here is the info you requested.")
+                );
+            }
+            other => panic!("expected next_step action, got {other:?}"),
+        }
     }
 
     #[test]

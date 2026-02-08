@@ -117,9 +117,6 @@ pub enum StepAction {
     AskUser {
         question: String,
     },
-    Think {
-        prompt: String,
-    },
     Respond {
         message: String,
     },
