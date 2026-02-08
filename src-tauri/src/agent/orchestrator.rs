@@ -705,9 +705,6 @@ impl DynamicController {
                 if !persist_output {
                     (true, Some(output_value), None)
                 } else {
-                    let forced_persist_for_safety = tool.metadata.result_mode
-                        == ToolResultMode::Inline
-                        && output_chars > INLINE_RESULT_HARD_MAX_CHARS;
                     let (preview, preview_truncated) = summarize_tool_output_value(
                         &output_value,
                         PERSISTED_RESULT_PREVIEW_MAX_CHARS,
@@ -725,16 +722,22 @@ impl DynamicController {
 
                     match store_tool_output(&record) {
                         Ok(output_ref) => {
+                            let metadata = compute_output_metadata(&record.output);
                             let message = json!({
-                                "message": "Tool output stored in app data. Use tool_outputs.read to retrieve.",
-                                "success": true,
+                                "persisted": true,
                                 "output_ref": output_ref,
-                                "result_mode": "persist",
-                                "requested_result_mode": &tool.metadata.result_mode,
-                                "result_size_chars": output_chars as i64,
-                                "forced_persist_for_safety": forced_persist_for_safety,
+                                "size_chars": output_chars as i64,
                                 "preview": preview,
-                                "preview_truncated": preview_truncated
+                                "preview_truncated": preview_truncated,
+                                "metadata": metadata,
+                                "available_tools": [
+                                    "tool_outputs.read — load full output into context",
+                                    "tool_outputs.extract — extract fields via JSONPath",
+                                    "tool_outputs.stats — get schema, field types, counts",
+                                    "tool_outputs.count — count items matching criteria",
+                                    "tool_outputs.sample — sample items from arrays",
+                                    "tool_outputs.list — list all stored outputs"
+                                ]
                             });
                             (true, Some(message), None)
                         }
@@ -1397,7 +1400,7 @@ fn hydrate_tool_args_for_execution(
     last_step_result: Option<&StepResult>,
     history: &[StepResult],
 ) -> Value {
-    if tool_name != "tool_outputs.read" {
+    if !tool_name.starts_with("tool_outputs.") {
         return args;
     }
 
@@ -1493,7 +1496,7 @@ fn should_persist_tool_output(
     result_mode: &ToolResultMode,
     output_chars: usize,
 ) -> bool {
-    if tool_name == "tool_outputs.read" {
+    if tool_name.starts_with("tool_outputs.") {
         return false;
     }
 
@@ -1550,6 +1553,29 @@ fn extract_json(raw: &str) -> String {
     }
 
     json_lines.join("\n").trim().to_string()
+}
+
+fn compute_output_metadata(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let keys: Vec<&str> = map.keys().map(|k| k.as_str()).take(20).collect();
+            json!({
+                "root_type": "object",
+                "key_count": map.len(),
+                "top_level_keys": keys
+            })
+        }
+        Value::Array(arr) => {
+            json!({
+                "root_type": "array",
+                "array_length": arr.len()
+            })
+        }
+        Value::String(_) => json!({ "root_type": "string" }),
+        Value::Number(_) => json!({ "root_type": "number" }),
+        Value::Bool(_) => json!({ "root_type": "boolean" }),
+        Value::Null => json!({ "root_type": "null" }),
+    }
 }
 
 fn value_to_string(value: &serde_json::Value) -> String {
@@ -1865,7 +1891,7 @@ mod tests {
             step_id: "step-1".to_string(),
             success: true,
             output: Some(json!({
-                "message": "Tool output stored in app data. Use tool_outputs.read to retrieve.",
+                "persisted": true,
                 "output_ref": {
                     "id": "exec-123",
                     "storage": "app_data"
@@ -1943,5 +1969,202 @@ mod tests {
             hydrated.get("id").and_then(|value| value.as_str()),
             Some("hist-456")
         );
+    }
+
+    #[test]
+    fn hydrate_tool_outputs_extract_args_uses_last_step_output_ref() {
+        let last_result = StepResult {
+            step_id: "step-1".to_string(),
+            success: true,
+            output: Some(json!({
+                "persisted": true,
+                "output_ref": {
+                    "id": "exec-789",
+                    "storage": "app_data"
+                }
+            })),
+            error: None,
+            tool_executions: Vec::new(),
+            duration_ms: 0,
+            completed_at: Utc::now(),
+        };
+
+        let hydrated = hydrate_tool_args_for_execution(
+            "tool_outputs.extract",
+            json!({}),
+            "conversation-1",
+            Some(&last_result),
+            &[],
+        );
+
+        assert_eq!(
+            hydrated.get("id").and_then(|value| value.as_str()),
+            Some("exec-789")
+        );
+        assert_eq!(
+            hydrated
+                .get("conversation_id")
+                .and_then(|value| value.as_str()),
+            Some("conversation-1")
+        );
+    }
+
+    #[test]
+    fn should_persist_skips_all_tool_outputs_tools() {
+        assert!(!should_persist_tool_output(
+            "tool_outputs.read",
+            &ToolResultMode::Persist,
+            1000
+        ));
+        assert!(!should_persist_tool_output(
+            "tool_outputs.extract",
+            &ToolResultMode::Persist,
+            1000
+        ));
+        assert!(!should_persist_tool_output(
+            "tool_outputs.stats",
+            &ToolResultMode::Persist,
+            1000
+        ));
+        assert!(!should_persist_tool_output(
+            "tool_outputs.list",
+            &ToolResultMode::Persist,
+            1000
+        ));
+        assert!(!should_persist_tool_output(
+            "tool_outputs.count",
+            &ToolResultMode::Persist,
+            1000
+        ));
+        assert!(!should_persist_tool_output(
+            "tool_outputs.sample",
+            &ToolResultMode::Persist,
+            1000
+        ));
+    }
+
+    #[test]
+    fn compute_output_metadata_for_object() {
+        let value = json!({ "name": "test", "count": 42, "items": [1, 2, 3] });
+        let meta = compute_output_metadata(&value);
+        assert_eq!(meta.get("root_type").and_then(|v| v.as_str()), Some("object"));
+        assert_eq!(meta.get("key_count").and_then(|v| v.as_u64()), Some(3));
+        let keys = meta.get("top_level_keys").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(keys.len(), 3);
+    }
+
+    #[test]
+    fn compute_output_metadata_for_array() {
+        let value = json!([1, 2, 3, 4, 5]);
+        let meta = compute_output_metadata(&value);
+        assert_eq!(meta.get("root_type").and_then(|v| v.as_str()), Some("array"));
+        assert_eq!(meta.get("array_length").and_then(|v| v.as_u64()), Some(5));
+    }
+
+    #[test]
+    fn compute_output_metadata_for_string() {
+        let value = json!("hello world");
+        let meta = compute_output_metadata(&value);
+        assert_eq!(meta.get("root_type").and_then(|v| v.as_str()), Some("string"));
+    }
+
+    // ---- Phase 3: Schema hardening regression tests ----
+
+    #[test]
+    fn controller_schema_survives_anthropic_sanitizer_with_known_diff() {
+        let original = controller_output_format();
+        let mut sanitized = original.clone();
+        if let Some(schema) = sanitized.get_mut("schema") {
+            crate::llm::strip_anthropic_unsupported_schema_keywords(schema);
+        }
+        // The only expected difference is thinking.additionalProperties
+        // changing from true to false (Anthropic forces false on all objects).
+        // Verify the sanitizer does not remove any fields or add unexpected ones.
+        let orig_schema = original.get("schema").unwrap();
+        let san_schema = sanitized.get("schema").unwrap();
+
+        // Root-level keys are preserved
+        let orig_keys: Vec<&str> = orig_schema.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        let san_keys: Vec<&str> = san_schema.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        assert_eq!(orig_keys, san_keys);
+
+        // Only the thinking object's additionalProperties should differ
+        let thinking_orig = orig_schema.get("properties").unwrap().get("thinking").unwrap();
+        let thinking_san = san_schema.get("properties").unwrap().get("thinking").unwrap();
+        assert_eq!(
+            thinking_orig.get("additionalProperties").and_then(|v| v.as_bool()),
+            Some(true),
+            "original thinking has additionalProperties: true"
+        );
+        assert_eq!(
+            thinking_san.get("additionalProperties").and_then(|v| v.as_bool()),
+            Some(false),
+            "sanitized thinking has additionalProperties: false (Anthropic requirement)"
+        );
+    }
+
+    #[test]
+    fn controller_schema_passes_anthropic_validation() {
+        let format = controller_output_format();
+        let mut sanitized = format.clone();
+        if let Some(schema) = sanitized.get_mut("schema") {
+            crate::llm::strip_anthropic_unsupported_schema_keywords(schema);
+        }
+        crate::llm::validate_anthropic_output_format(Some(&sanitized))
+            .expect("controller schema should pass Anthropic validation");
+    }
+
+    #[test]
+    fn controller_schema_has_no_conditional_keywords_at_any_depth() {
+        let format = controller_output_format();
+        let schema_str = serde_json::to_string(&format).unwrap();
+        let forbidden = ["\"oneOf\"", "\"allOf\"", "\"anyOf\"", "\"if\"", "\"then\"", "\"else\""];
+        for keyword in &forbidden {
+            assert!(
+                !schema_str.contains(keyword),
+                "controller schema must not contain {keyword} at any depth"
+            );
+        }
+    }
+
+    #[test]
+    fn controller_schema_root_has_additional_properties_false() {
+        let format = controller_output_format();
+        let schema = format.get("schema").expect("schema root");
+        assert_eq!(
+            schema
+                .get("additionalProperties")
+                .and_then(|v| v.as_bool()),
+            Some(false),
+            "root schema must have additionalProperties: false"
+        );
+    }
+
+    #[test]
+    fn controller_schema_args_field_accepts_any_value() {
+        let format = controller_output_format();
+        let schema = format.get("schema").expect("schema root");
+        let args = schema
+            .get("properties")
+            .and_then(|p| p.get("args"))
+            .expect("args field");
+        // args should be an empty schema {} which accepts any value
+        assert_eq!(args, &json!({}));
+    }
+
+    #[test]
+    fn controller_schema_confidence_has_no_numeric_bounds() {
+        let format = controller_output_format();
+        let schema = format.get("schema").expect("schema root");
+        let confidence = schema
+            .get("properties")
+            .and_then(|p| p.get("thinking"))
+            .and_then(|t| t.get("properties"))
+            .and_then(|p| p.get("confidence"))
+            .expect("confidence field");
+        assert!(confidence.get("minimum").is_none());
+        assert!(confidence.get("maximum").is_none());
+        assert!(confidence.get("exclusiveMinimum").is_none());
+        assert!(confidence.get("exclusiveMaximum").is_none());
     }
 }

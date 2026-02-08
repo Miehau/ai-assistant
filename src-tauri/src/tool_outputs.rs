@@ -31,7 +31,7 @@ pub struct ToolOutputRef {
     pub size_bytes: u64,
 }
 
-fn tool_outputs_root() -> Result<PathBuf, String> {
+pub fn tool_outputs_root() -> Result<PathBuf, String> {
     let app_dir = path::app_data_dir(&tauri::Config::default())
         .ok_or_else(|| "Failed to get app data dir".to_string())?;
     Ok(app_dir.join(APP_NAMESPACE_DIR).join(TOOL_OUTPUTS_DIR))
