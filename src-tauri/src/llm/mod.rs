@@ -143,7 +143,7 @@ fn parse_anthropic_usage(usage: &Value) -> Option<Usage> {
     }
 }
 
-fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
+pub(crate) fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
     match value {
         Value::Object(map) => {
             map.remove("if");
@@ -204,7 +204,7 @@ fn build_anthropic_output_schema(output_format: Option<Value>) -> Option<Value> 
     Some(output)
 }
 
-fn validate_anthropic_output_format(output_format: Option<&Value>) -> Result<(), String> {
+pub(crate) fn validate_anthropic_output_format(output_format: Option<&Value>) -> Result<(), String> {
     let Some(output_format) = output_format else {
         return Ok(());
     };
