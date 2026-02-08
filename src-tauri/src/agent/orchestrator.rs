@@ -902,57 +902,12 @@ impl DynamicController {
     /// Get compacted history messages for controller context
     /// Maintains consistent message structure to preserve cache validity
     fn get_compacted_history_messages(&self) -> Vec<LlmMessage> {
-        // Calculate total character count of messages
-        let message_sizes: Vec<usize> = self
-            .messages
-            .iter()
-            .map(|msg| value_to_string(&msg.content).chars().count())
-            .collect();
-
-        let total_chars: usize = message_sizes.iter().sum();
-
-        // If under the limit, return all messages
-        if total_chars <= CONTROLLER_HISTORY_MAX_CHARS {
-            return self.messages.clone();
-        }
-
-        // Apply compaction: keep first N and last N messages
-        let prefix_end = self
-            .messages
-            .len()
-            .min(CONTROLLER_HISTORY_STABLE_PREFIX_MESSAGES);
-        let tail_start = self
-            .messages
-            .len()
-            .saturating_sub(CONTROLLER_HISTORY_RECENT_TAIL_MESSAGES);
-
-        // If ranges overlap, return all messages
-        if tail_start <= prefix_end {
-            return self.messages.clone();
-        }
-
-        // Build compacted history with summary message
-        let mut compacted = Vec::new();
-
-        // Add stable prefix messages
-        compacted.extend_from_slice(&self.messages[..prefix_end]);
-
-        // Add summary message indicating omission
-        let omitted_count = tail_start - prefix_end;
-        let omitted_chars: usize = message_sizes[prefix_end..tail_start].iter().sum();
-
-        compacted.push(LlmMessage {
-            role: "system".to_string(),
-            content: json!(format!(
-                "[Context Summary: {} messages omitted ({} characters) to maintain conversation flow while staying within limits]",
-                omitted_count, omitted_chars
-            )),
-        });
-
-        // Add recent tail messages
-        compacted.extend_from_slice(&self.messages[tail_start..]);
-
-        compacted
+        compact_history_messages_with_limits(
+            &self.messages,
+            CONTROLLER_HISTORY_MAX_CHARS,
+            CONTROLLER_HISTORY_STABLE_PREFIX_MESSAGES,
+            CONTROLLER_HISTORY_RECENT_TAIL_MESSAGES,
+        )
     }
 
     /// Build controller messages as an array for optimal caching
@@ -1533,6 +1488,34 @@ fn truncate_chars(input: &str, max_chars: usize) -> (String, bool) {
     (output, false)
 }
 
+fn compact_history_messages_with_limits(
+    messages: &[LlmMessage],
+    max_chars: usize,
+    stable_prefix_messages: usize,
+    recent_tail_messages: usize,
+) -> Vec<LlmMessage> {
+    let message_sizes: Vec<usize> = messages
+        .iter()
+        .map(|msg| value_to_string(&msg.content).chars().count())
+        .collect();
+    let total_chars: usize = message_sizes.iter().sum();
+
+    if total_chars <= max_chars {
+        return messages.to_vec();
+    }
+
+    let prefix_end = messages.len().min(stable_prefix_messages);
+    let tail_start = messages.len().saturating_sub(recent_tail_messages);
+    if tail_start <= prefix_end {
+        return messages.to_vec();
+    }
+
+    let mut compacted = Vec::with_capacity(prefix_end + (messages.len() - tail_start));
+    compacted.extend_from_slice(&messages[..prefix_end]);
+    compacted.extend_from_slice(&messages[tail_start..]);
+    compacted
+}
+
 fn extract_json(raw: &str) -> String {
     let trimmed = raw.trim();
     if !trimmed.starts_with("```") {
@@ -1600,6 +1583,39 @@ fn value_to_string(value: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn compacted_history_keeps_prefix_and_tail_without_summary_message() {
+        let messages = (0..12)
+            .map(|idx| LlmMessage {
+                role: "user".to_string(),
+                content: json!(format!("message-{idx}-{}", "x".repeat(48))),
+            })
+            .collect::<Vec<_>>();
+
+        let compacted = compact_history_messages_with_limits(&messages, 200, 2, 3);
+        assert_eq!(compacted.len(), 5);
+        assert_eq!(value_to_string(&compacted[0].content), value_to_string(&messages[0].content));
+        assert_eq!(value_to_string(&compacted[1].content), value_to_string(&messages[1].content));
+        assert_eq!(
+            value_to_string(&compacted[2].content),
+            value_to_string(&messages[9].content)
+        );
+        assert_eq!(
+            value_to_string(&compacted[3].content),
+            value_to_string(&messages[10].content)
+        );
+        assert_eq!(
+            value_to_string(&compacted[4].content),
+            value_to_string(&messages[11].content)
+        );
+        assert!(
+            compacted
+                .iter()
+                .all(|message| !value_to_string(&message.content).contains("[Context Summary:")),
+            "compaction should not inject dynamic summary messages"
+        );
+    }
 
     #[test]
     fn parse_controller_action_accepts_next_step_top_level_tool_payload() {

@@ -198,10 +198,15 @@ fn llm_request_options(
     }
 
     if provider == "anthropic" {
+        let anthropic_cache_breakpoints = if phase == "controller" {
+            vec![0]
+        } else {
+            Vec::new()
+        };
         return LlmRequestOptions {
             prompt_cache_key: None,
             prompt_cache_retention: None,
-            anthropic_cache_breakpoints: vec![0],
+            anthropic_cache_breakpoints,
         };
     }
 
@@ -1513,4 +1518,30 @@ fn render_tool_outputs(tool_execution_inputs: &[MessageToolExecutionInput]) -> S
     }
 
     blocks.join("\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn llm_request_options_enables_anthropic_cache_for_controller_phase() {
+        let options = llm_request_options("anthropic", "conv-1", "controller", "claude-sonnet");
+        assert_eq!(options.anthropic_cache_breakpoints, vec![0]);
+    }
+
+    #[test]
+    fn llm_request_options_disables_anthropic_cache_for_responder_phase() {
+        let options = llm_request_options("anthropic", "conv-1", "responder", "claude-sonnet");
+        assert!(options.anthropic_cache_breakpoints.is_empty());
+    }
+
+    #[test]
+    fn llm_request_options_keeps_openai_prompt_cache_key_shape() {
+        let options = llm_request_options("openai", "conv-1", "controller", "gpt-5-mini");
+        assert_eq!(
+            options.prompt_cache_key.as_deref(),
+            Some("conversation:conv-1:controller:v1")
+        );
+    }
 }
