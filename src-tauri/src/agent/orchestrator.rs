@@ -1349,7 +1349,7 @@ fn controller_output_format() -> Value {
             },
             "description": { "type": "string" },
             "tool": { "type": "string" },
-            "args": {},
+            "args": { "type": "object" },
             "message": { "type": "string" },
             "reason": { "type": "string" },
             "question": { "type": "string" },
@@ -2077,8 +2077,9 @@ mod tests {
         if let Some(schema) = sanitized.get_mut("schema") {
             crate::llm::strip_anthropic_unsupported_schema_keywords(schema);
         }
-        // The only expected difference is thinking.additionalProperties
-        // changing from true to false (Anthropic forces false on all objects).
+        // Known differences after sanitization:
+        // 1. thinking.additionalProperties: true → false (Anthropic forces false on all objects)
+        // 2. args gets additionalProperties: false added (it's typed as object)
         // Verify the sanitizer does not remove any fields or add unexpected ones.
         let orig_schema = original.get("schema").unwrap();
         let san_schema = sanitized.get("schema").unwrap();
@@ -2088,7 +2089,7 @@ mod tests {
         let san_keys: Vec<&str> = san_schema.as_object().unwrap().keys().map(|k| k.as_str()).collect();
         assert_eq!(orig_keys, san_keys);
 
-        // Only the thinking object's additionalProperties should differ
+        // thinking.additionalProperties differs as expected
         let thinking_orig = orig_schema.get("properties").unwrap().get("thinking").unwrap();
         let thinking_san = san_schema.get("properties").unwrap().get("thinking").unwrap();
         assert_eq!(
@@ -2100,6 +2101,14 @@ mod tests {
             thinking_san.get("additionalProperties").and_then(|v| v.as_bool()),
             Some(false),
             "sanitized thinking has additionalProperties: false (Anthropic requirement)"
+        );
+
+        // args gets additionalProperties: false added by sanitizer
+        let args_san = san_schema.get("properties").unwrap().get("args").unwrap();
+        assert_eq!(
+            args_san.get("additionalProperties").and_then(|v| v.as_bool()),
+            Some(false),
+            "sanitized args has additionalProperties: false (Anthropic requirement)"
         );
     }
 
@@ -2141,15 +2150,18 @@ mod tests {
     }
 
     #[test]
-    fn controller_schema_args_field_accepts_any_value() {
+    fn controller_schema_args_field_is_object_type() {
         let format = controller_output_format();
         let schema = format.get("schema").expect("schema root");
         let args = schema
             .get("properties")
             .and_then(|p| p.get("args"))
             .expect("args field");
-        // args should be an empty schema {} which accepts any value
-        assert_eq!(args, &json!({}));
+        assert_eq!(
+            args.get("type").and_then(|v| v.as_str()),
+            Some("object"),
+            "args should be typed as object (string args handled by normalize_tool_args)"
+        );
     }
 
     #[test]
