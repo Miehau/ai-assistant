@@ -519,6 +519,46 @@ fn chunk_text_by_chars(input: &str, max_chars: usize) -> Vec<String> {
         .collect()
 }
 
+fn split_anthropic_system_prefix(
+    system: Option<&str>,
+    messages: &[LlmMessage],
+) -> (Option<String>, Vec<LlmMessage>) {
+    let mut sections: Vec<String> = Vec::new();
+    let mut append_section = |candidate: &str| {
+        let trimmed = candidate.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if sections.last().map(|last| last == trimmed).unwrap_or(false) {
+            return;
+        }
+        sections.push(trimmed.to_string());
+    };
+
+    if let Some(system_text) = system {
+        append_section(system_text);
+    }
+
+    let mut message_start_index = 0usize;
+    for message in messages {
+        if message.role != "system" {
+            break;
+        }
+        let text = value_to_string(&message.content);
+        append_section(&text);
+        message_start_index += 1;
+    }
+
+    let merged_system = if sections.is_empty() {
+        None
+    } else {
+        Some(sections.join("\n\n"))
+    };
+    let remaining_messages = messages[message_start_index..].to_vec();
+
+    (merged_system, remaining_messages)
+}
+
 fn split_anthropic_text_for_cache(input: &str) -> Vec<(String, bool)> {
     let mut marker_positions = ["\nSTATE SUMMARY:\n", "\nLAST TOOL OUTPUT:\n", "\nLIMITS:\n"]
         .iter()
@@ -719,16 +759,17 @@ pub fn complete_anthropic_with_output_format_with_options(
     output_format: Option<Value>,
     request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
+    let (merged_system, anthropic_messages) = split_anthropic_system_prefix(system, messages);
     let mut block_index = 0usize;
     let mut cache_control_count = 0usize;
     let formatted_system = format_anthropic_system(
-        system,
+        merged_system.as_deref(),
         &mut block_index,
         &mut cache_control_count,
         request_options,
     );
     let formatted_messages = format_anthropic_messages(
-        messages,
+        &anthropic_messages,
         &mut block_index,
         &mut cache_control_count,
         request_options,
@@ -826,16 +867,17 @@ pub fn stream_anthropic_with_options<F>(
 where
     F: FnMut(&str),
 {
+    let (merged_system, anthropic_messages) = split_anthropic_system_prefix(system, messages);
     let mut block_index = 0usize;
     let mut cache_control_count = 0usize;
     let formatted_system = format_anthropic_system(
-        system,
+        merged_system.as_deref(),
         &mut block_index,
         &mut cache_control_count,
         request_options,
     );
     let formatted_messages = format_anthropic_messages(
-        messages,
+        &anthropic_messages,
         &mut block_index,
         &mut cache_control_count,
         request_options,
@@ -1160,6 +1202,70 @@ mod tests {
         let beta = anthropic_beta_header(true, Some(&options)).expect("beta header");
         assert!(beta.contains(ANTHROPIC_BETA_PROMPT_CACHING));
         assert!(beta.contains(ANTHROPIC_BETA_STRUCTURED_OUTPUTS));
+    }
+
+    #[test]
+    fn anthropic_beta_header_omits_prompt_caching_without_breakpoints() {
+        let options = LlmRequestOptions {
+            prompt_cache_key: None,
+            prompt_cache_retention: None,
+            anthropic_cache_breakpoints: Vec::new(),
+        };
+
+        let beta = anthropic_beta_header(true, Some(&options)).expect("beta header");
+        assert!(!beta.contains(ANTHROPIC_BETA_PROMPT_CACHING));
+        assert!(beta.contains(ANTHROPIC_BETA_STRUCTURED_OUTPUTS));
+        assert!(anthropic_beta_header(false, Some(&options)).is_none());
+    }
+
+    #[test]
+    fn anthropic_system_prefix_lifts_leading_system_messages() {
+        let messages = vec![
+            LlmMessage {
+                role: "system".to_string(),
+                content: json!("base instructions"),
+            },
+            LlmMessage {
+                role: "system".to_string(),
+                content: json!("tool list"),
+            },
+            LlmMessage {
+                role: "user".to_string(),
+                content: json!("hello"),
+            },
+        ];
+
+        let (merged, remaining) = split_anthropic_system_prefix(None, &messages);
+        assert_eq!(merged.as_deref(), Some("base instructions\n\ntool list"));
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].role, "user");
+    }
+
+    #[test]
+    fn anthropic_system_prefix_deduplicates_adjacent_identical_sections() {
+        let messages = vec![
+            LlmMessage {
+                role: "system".to_string(),
+                content: json!("base instructions"),
+            },
+            LlmMessage {
+                role: "system".to_string(),
+                content: json!("runtime constraints"),
+            },
+            LlmMessage {
+                role: "user".to_string(),
+                content: json!("hello"),
+            },
+        ];
+
+        let (merged, remaining) =
+            split_anthropic_system_prefix(Some("base instructions"), &messages);
+        assert_eq!(
+            merged.as_deref(),
+            Some("base instructions\n\nruntime constraints")
+        );
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].role, "user");
     }
 
     #[test]
