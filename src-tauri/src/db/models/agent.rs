@@ -114,12 +114,23 @@ pub enum StepAction {
         tool: String,
         args: serde_json::Value,
     },
+    ToolBatch {
+        tools: Vec<ToolBatchToolCall>,
+    },
     AskUser {
         question: String,
     },
     Respond {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolBatchToolCall {
+    pub tool: String,
+    pub args: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -191,7 +202,7 @@ impl Default for AgentConfig {
             max_total_llm_turns: 20,
             max_clarify_iters: 3,
             max_plan_revisions: 3,
-            max_tool_calls_per_step: 5,
+            max_tool_calls_per_step: 10,
             approval_timeout_ms: 60_000,
             tool_execution_timeout_ms: 120_000,
         }
@@ -209,4 +220,12 @@ pub struct ToolExecutionRecord {
     pub duration_ms: i64,
     pub iteration: usize,
     pub timestamp_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_output_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_output_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forced_persist: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forced_reason: Option<String>,
 }

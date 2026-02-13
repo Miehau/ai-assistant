@@ -191,7 +191,46 @@ pub(crate) fn strip_anthropic_unsupported_schema_keywords(value: &mut Value) {
 }
 
 fn build_openai_output_schema(output_format: Option<Value>) -> Option<Value> {
-    output_format
+    let output = output_format?;
+
+    // Start with any existing json_schema block
+    let mut json_schema = if let Some(existing) = output.get("json_schema") {
+        existing.clone()
+    } else {
+        let schema_value = output.get("schema")?.clone();
+        serde_json::json!({ "schema": schema_value })
+    };
+
+    // Ensure the schema field is populated
+    if json_schema.get("schema").is_none() {
+        if let Some(schema_value) = output.get("schema").cloned() {
+            json_schema["schema"] = schema_value;
+        }
+    }
+
+    // Derive the name, preferring explicit json_schema.name > output.name
+    let name = json_schema
+        .get("name")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .or_else(|| {
+            output
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())
+        })
+        .unwrap_or_else(|| "response".to_string());
+    json_schema["name"] = Value::String(name);
+
+    // Default to strict JSON schema enforcement
+    if json_schema.get("strict").is_none() {
+        json_schema["strict"] = Value::Bool(true);
+    }
+
+    Some(serde_json::json!({
+        "type": "json_schema",
+        "json_schema": json_schema,
+    }))
 }
 
 fn build_anthropic_output_schema(output_format: Option<Value>) -> Option<Value> {
@@ -204,7 +243,9 @@ fn build_anthropic_output_schema(output_format: Option<Value>) -> Option<Value> 
     Some(output)
 }
 
-pub(crate) fn validate_anthropic_output_format(output_format: Option<&Value>) -> Result<(), String> {
+pub(crate) fn validate_anthropic_output_format(
+    output_format: Option<&Value>,
+) -> Result<(), String> {
     let Some(output_format) = output_format else {
         return Ok(());
     };
@@ -243,7 +284,9 @@ fn anthropic_beta_header(
 ) -> Option<String> {
     let mut beta_features = Vec::new();
 
-    if anthropic_prompt_cache_enabled(request_options) {
+    // Avoid combining structured outputs and prompt caching in a single request.
+    // Controller requests using structured schemas can stall when both betas are enabled.
+    if !structured_outputs && anthropic_prompt_cache_enabled(request_options) {
         beta_features.push(ANTHROPIC_BETA_PROMPT_CACHING);
     }
     if structured_outputs {
@@ -560,10 +603,19 @@ fn split_anthropic_system_prefix(
 }
 
 fn split_anthropic_text_for_cache(input: &str) -> Vec<(String, bool)> {
-    let mut marker_positions = ["\nSTATE SUMMARY:\n", "\nLAST TOOL OUTPUT:\n", "\nLIMITS:\n"]
-        .iter()
-        .filter_map(|candidate| input.find(candidate))
-        .collect::<Vec<_>>();
+    let mut marker_positions = [
+        "\nSTATE SUMMARY:\n",
+        "\nLAST TOOL OUTPUT:\n",
+        "\nLIMITS:\n",
+        "\nUSER REQUEST:\n",
+        "\nRECENT MESSAGES:\n",
+        "\nTOOL OUTPUTS (if any):\n",
+        "\nCONTROLLER DRAFT (if any):\n",
+        "\nInstructions:\n",
+    ]
+    .iter()
+    .filter_map(|candidate| input.find(candidate))
+    .collect::<Vec<_>>();
 
     if marker_positions.is_empty() {
         return chunk_text_by_chars(input, ANTHROPIC_CACHE_BLOCK_MAX_CHARS)
@@ -643,8 +695,7 @@ fn format_anthropic_system(
             "text": chunk
         });
         if (should_apply_anthropic_cache_control(*block_index, explicit_breakpoints, cache_enabled)
-            || (cache_enabled && chunk_idx + 1 == chunk_count)
-            )
+            || (cache_enabled && chunk_idx + 1 == chunk_count))
             && *cache_control_count < ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS
         {
             block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
@@ -696,8 +747,7 @@ fn format_anthropic_messages(
                 explicit_breakpoints,
                 cache_enabled,
             ) || (cache_enabled && section_boundary)
-                || (cache_enabled && chunk_idx + 1 == chunk_count)
-                )
+                || (cache_enabled && chunk_idx + 1 == chunk_count))
                 && *cache_control_count < ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS
             {
                 block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
@@ -759,6 +809,17 @@ pub fn complete_anthropic_with_output_format_with_options(
     output_format: Option<Value>,
     request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
+    let sanitized_output_format = build_anthropic_output_schema(output_format);
+    validate_anthropic_output_format(sanitized_output_format.as_ref())?;
+    let has_output_format = sanitized_output_format.is_some();
+
+    // Keep prompt caching disabled when structured outputs are enabled.
+    let effective_request_options = if has_output_format {
+        None
+    } else {
+        request_options
+    };
+
     let (merged_system, anthropic_messages) = split_anthropic_system_prefix(system, messages);
     let mut block_index = 0usize;
     let mut cache_control_count = 0usize;
@@ -766,13 +827,13 @@ pub fn complete_anthropic_with_output_format_with_options(
         merged_system.as_deref(),
         &mut block_index,
         &mut cache_control_count,
-        request_options,
+        effective_request_options,
     );
     let formatted_messages = format_anthropic_messages(
         &anthropic_messages,
         &mut block_index,
         &mut cache_control_count,
-        request_options,
+        effective_request_options,
     );
 
     let mut body = serde_json::json!({
@@ -787,9 +848,6 @@ pub fn complete_anthropic_with_output_format_with_options(
         body["system"] = system_blocks;
     }
 
-    let sanitized_output_format = build_anthropic_output_schema(output_format);
-    validate_anthropic_output_format(sanitized_output_format.as_ref())?;
-    let has_output_format = sanitized_output_format.is_some();
     if let Some(output_format_value) = sanitized_output_format {
         body["output_format"] = output_format_value;
     }
@@ -801,7 +859,9 @@ pub fn complete_anthropic_with_output_format_with_options(
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01");
 
-        if let Some(beta_header) = anthropic_beta_header(structured_outputs, request_options) {
+        if let Some(beta_header) =
+            anthropic_beta_header(structured_outputs, effective_request_options)
+        {
             request = request.header("anthropic-beta", beta_header);
         }
 
@@ -1192,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_beta_header_includes_prompt_caching_and_structured_outputs() {
+    fn anthropic_beta_header_prefers_structured_outputs_over_prompt_caching() {
         let options = LlmRequestOptions {
             prompt_cache_key: None,
             prompt_cache_retention: None,
@@ -1200,8 +1260,21 @@ mod tests {
         };
 
         let beta = anthropic_beta_header(true, Some(&options)).expect("beta header");
-        assert!(beta.contains(ANTHROPIC_BETA_PROMPT_CACHING));
+        assert!(!beta.contains(ANTHROPIC_BETA_PROMPT_CACHING));
         assert!(beta.contains(ANTHROPIC_BETA_STRUCTURED_OUTPUTS));
+    }
+
+    #[test]
+    fn anthropic_beta_header_includes_prompt_caching_without_structured_outputs() {
+        let options = LlmRequestOptions {
+            prompt_cache_key: None,
+            prompt_cache_retention: None,
+            anthropic_cache_breakpoints: vec![0],
+        };
+
+        let beta = anthropic_beta_header(false, Some(&options)).expect("beta header");
+        assert!(beta.contains(ANTHROPIC_BETA_PROMPT_CACHING));
+        assert!(!beta.contains(ANTHROPIC_BETA_STRUCTURED_OUTPUTS));
     }
 
     #[test]
@@ -1294,6 +1367,29 @@ mod tests {
                 .and_then(|v| v.get("type"))
                 .and_then(|v| v.as_str()),
             Some("ephemeral")
+        );
+    }
+
+    #[test]
+    fn anthropic_format_omits_cache_breakpoints_without_request_options() {
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("stable prefix\nSTATE SUMMARY:\ndynamic suffix"),
+        }];
+        let mut block_index = 0usize;
+        let mut cache_control_count = 0usize;
+        let formatted = format_anthropic_messages(
+            &messages,
+            &mut block_index,
+            &mut cache_control_count,
+            None,
+        );
+        let blocks = formatted[0]["content"].as_array().expect("content array");
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.get("cache_control").is_none()),
+            "cache_control markers should be absent without request options"
         );
     }
 
@@ -1403,6 +1499,43 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_format_marks_responder_section_boundaries_for_cache() {
+        let options = LlmRequestOptions {
+            prompt_cache_key: None,
+            prompt_cache_retention: None,
+            anthropic_cache_breakpoints: vec![0],
+        };
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!(
+                "prefix\nUSER REQUEST:\nrequest\nRECENT MESSAGES:\nhistory\nTOOL OUTPUTS (if any):\noutputs\nCONTROLLER DRAFT (if any):\ndraft\nInstructions:\nfinalize"
+            ),
+        }];
+        let mut block_index = 0usize;
+        let mut cache_control_count = 0usize;
+        let formatted = format_anthropic_messages(
+            &messages,
+            &mut block_index,
+            &mut cache_control_count,
+            Some(&options),
+        );
+        let blocks = formatted[0]["content"].as_array().expect("content array");
+        assert!(
+            blocks.len() >= 5,
+            "expected split into responder sections, got {}",
+            blocks.len()
+        );
+        assert!(
+            blocks.iter().skip(1).take(3).all(|block| block
+                .get("cache_control")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str())
+                == Some("ephemeral")),
+            "expected responder section boundaries to carry cache markers"
+        );
+    }
+
+    #[test]
     fn anthropic_format_limits_cache_control_blocks_per_request() {
         let options = LlmRequestOptions {
             prompt_cache_key: None,
@@ -1418,7 +1551,9 @@ mod tests {
             },
             LlmMessage {
                 role: "assistant".to_string(),
-                content: json!("extra\nSTATE SUMMARY:\nmore\nLAST TOOL OUTPUT:\nmore\nLIMITS:\nmore"),
+                content: json!(
+                    "extra\nSTATE SUMMARY:\nmore\nLAST TOOL OUTPUT:\nmore\nLIMITS:\nmore"
+                ),
             },
         ];
         let mut block_index = 0usize;

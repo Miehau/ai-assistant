@@ -208,10 +208,7 @@ fn register_list_tool(registry: &mut ToolRegistry) -> Result<(), String> {
             .and_then(|v| v.as_u64())
             .unwrap_or(20)
             .min(100) as usize;
-        let offset = args
-            .get("offset")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let sort_by = args
             .get("sort_by")
             .and_then(|v| v.as_str())
@@ -231,9 +228,8 @@ fn register_list_tool(registry: &mut ToolRegistry) -> Result<(), String> {
             .min(500) as usize;
 
         // Read all .json files and deserialize
-        let entries = std::fs::read_dir(&root).map_err(|e| {
-            ToolError::new(format!("Failed to read tool outputs directory: {e}"))
-        })?;
+        let entries = std::fs::read_dir(&root)
+            .map_err(|e| ToolError::new(format!("Failed to read tool outputs directory: {e}")))?;
 
         struct ListEntry {
             record: ToolOutputRecord,
@@ -339,8 +335,8 @@ fn register_list_tool(registry: &mut ToolRegistry) -> Result<(), String> {
                 obj["summary"] = summary;
 
                 if include_preview {
-                    let output_str = serde_json::to_string(&entry.record.output)
-                        .unwrap_or_default();
+                    let output_str =
+                        serde_json::to_string(&entry.record.output).unwrap_or_default();
                     let preview: String = output_str.chars().take(preview_length).collect();
                     obj["preview"] = Value::String(preview);
                 }
@@ -466,11 +462,7 @@ fn register_stats_tool(registry: &mut ToolRegistry) -> Result<(), String> {
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
-        let id = args
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+        let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim();
         if id.is_empty() {
             return Err(ToolError::new("Missing 'id'"));
         }
@@ -532,8 +524,7 @@ fn register_stats_tool(registry: &mut ToolRegistry) -> Result<(), String> {
         }
 
         // Compute serialized size
-        let output_str =
-            serde_json::to_string(&record.output).unwrap_or_default();
+        let output_str = serde_json::to_string(&record.output).unwrap_or_default();
         let bytes = output_str.len() as u64;
 
         let mut result = json!({
@@ -638,11 +629,7 @@ fn register_extract_tool(registry: &mut ToolRegistry) -> Result<(), String> {
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
-        let id = args
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+        let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim();
         if id.is_empty() {
             return Err(ToolError::new("Missing 'id'"));
         }
@@ -675,9 +662,8 @@ fn register_extract_tool(registry: &mut ToolRegistry) -> Result<(), String> {
                 let path_str = path_val
                     .as_str()
                     .ok_or_else(|| ToolError::new("Each path must be a string"))?;
-                let jp = JsonPath::parse(path_str).map_err(|e| {
-                    ToolError::new(format!("Invalid JSONPath '{path_str}': {e}"))
-                })?;
+                let jp = JsonPath::parse(path_str)
+                    .map_err(|e| ToolError::new(format!("Invalid JSONPath '{path_str}': {e}")))?;
                 let nodes = jp.query(&record.output);
                 let results: Vec<&Value> = nodes.all();
                 if results.is_empty() {
@@ -703,9 +689,8 @@ fn register_extract_tool(registry: &mut ToolRegistry) -> Result<(), String> {
                 let path_str = path_val
                     .as_str()
                     .ok_or_else(|| ToolError::new("Each path must be a string"))?;
-                let jp = JsonPath::parse(path_str).map_err(|e| {
-                    ToolError::new(format!("Invalid JSONPath '{path_str}': {e}"))
-                })?;
+                let jp = JsonPath::parse(path_str)
+                    .map_err(|e| ToolError::new(format!("Invalid JSONPath '{path_str}': {e}")))?;
                 let nodes = jp.query(&record.output);
                 let results: Vec<&Value> = nodes.all();
                 if results.is_empty() {
@@ -729,9 +714,8 @@ fn register_extract_tool(registry: &mut ToolRegistry) -> Result<(), String> {
                 let path_str = path_val
                     .as_str()
                     .ok_or_else(|| ToolError::new("Each path must be a string"))?;
-                let jp = JsonPath::parse(path_str).map_err(|e| {
-                    ToolError::new(format!("Invalid JSONPath '{path_str}': {e}"))
-                })?;
+                let jp = JsonPath::parse(path_str)
+                    .map_err(|e| ToolError::new(format!("Invalid JSONPath '{path_str}': {e}")))?;
                 let nodes = jp.query(&record.output);
                 let results: Vec<&Value> = nodes.all();
                 if results.is_empty() {
@@ -829,11 +813,7 @@ fn register_count_tool(registry: &mut ToolRegistry) -> Result<(), String> {
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
-        let id = args
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+        let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim();
         if id.is_empty() {
             return Err(ToolError::new("Missing 'id'"));
         }
@@ -862,9 +842,8 @@ fn register_count_tool(registry: &mut ToolRegistry) -> Result<(), String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("array_length");
 
-            let jp = JsonPath::parse(path_str).map_err(|e| {
-                ToolError::new(format!("Invalid JSONPath '{path_str}': {e}"))
-            })?;
+            let jp = JsonPath::parse(path_str)
+                .map_err(|e| ToolError::new(format!("Invalid JSONPath '{path_str}': {e}")))?;
             let nodes = jp.query(&record.output);
             let results: Vec<&Value> = nodes.all();
 
@@ -880,30 +859,23 @@ fn register_count_tool(registry: &mut ToolRegistry) -> Result<(), String> {
                         })
                         .sum()
                 }
-                "object_keys" => {
-                    results
-                        .iter()
-                        .map(|v| match v {
-                            Value::Object(map) => map.len() as i64,
-                            _ => 0,
-                        })
-                        .sum()
-                }
+                "object_keys" => results
+                    .iter()
+                    .map(|v| match v {
+                        Value::Object(map) => map.len() as i64,
+                        _ => 0,
+                    })
+                    .sum(),
                 "matches" => {
                     // Count the number of matched nodes
                     results.len() as i64
                 }
                 "nested_total" => {
                     // For each matched node, if it's an array, count all items recursively
-                    results
-                        .iter()
-                        .map(|v| count_nested_items(v))
-                        .sum()
+                    results.iter().map(|v| count_nested_items(v)).sum()
                 }
                 _ => {
-                    return Err(ToolError::new(format!(
-                        "Unknown count_type '{count_type}'"
-                    )));
+                    return Err(ToolError::new(format!("Unknown count_type '{count_type}'")));
                 }
             };
 
@@ -1015,11 +987,7 @@ fn register_sample_tool(registry: &mut ToolRegistry) -> Result<(), String> {
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
-        let id = args
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+        let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim();
         if id.is_empty() {
             return Err(ToolError::new("Missing 'id'"));
         }
@@ -1037,16 +1005,12 @@ fn register_sample_tool(registry: &mut ToolRegistry) -> Result<(), String> {
             .and_then(|v| v.as_str())
             .unwrap_or("random");
         let seed = args.get("seed").and_then(|v| v.as_u64());
-        let stride = args
-            .get("stride")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1) as usize;
+        let stride = args.get("stride").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
 
         let record = read_tool_output(id).map_err(ToolError::new)?;
 
-        let jp = JsonPath::parse(path_str).map_err(|e| {
-            ToolError::new(format!("Invalid JSONPath '{path_str}': {e}"))
-        })?;
+        let jp = JsonPath::parse(path_str)
+            .map_err(|e| ToolError::new(format!("Invalid JSONPath '{path_str}': {e}")))?;
         let nodes = jp.query(&record.output);
         let results: Vec<&Value> = nodes.all();
 
@@ -1054,11 +1018,7 @@ fn register_sample_tool(registry: &mut ToolRegistry) -> Result<(), String> {
         let arr = results
             .iter()
             .find_map(|v| v.as_array())
-            .ok_or_else(|| {
-                ToolError::new(format!(
-                    "Path '{path_str}' did not match an array"
-                ))
-            })?;
+            .ok_or_else(|| ToolError::new(format!("Path '{path_str}' did not match an array")))?;
 
         let total_items = arr.len();
         let actual_size = size.min(total_items);
@@ -1093,8 +1053,7 @@ fn register_sample_tool(registry: &mut ToolRegistry) -> Result<(), String> {
                     None => StdRng::from_entropy(),
                 };
                 index_pool.shuffle(&mut rng);
-                let mut indices: Vec<usize> =
-                    index_pool.into_iter().take(actual_size).collect();
+                let mut indices: Vec<usize> = index_pool.into_iter().take(actual_size).collect();
                 indices.sort_unstable();
                 let items: Vec<Value> = indices.iter().map(|&i| arr[i].clone()).collect();
                 (indices, items)
@@ -1179,7 +1138,16 @@ fn walk_value(
             if depth < max_depth {
                 for (key, val) in map {
                     let child_path = format!("{path}.{key}");
-                    walk_value(val, &child_path, depth + 1, max_depth, sample_arrays, stats, arrays, objects);
+                    walk_value(
+                        val,
+                        &child_path,
+                        depth + 1,
+                        max_depth,
+                        sample_arrays,
+                        stats,
+                        arrays,
+                        objects,
+                    );
                 }
             }
         }
@@ -1201,7 +1169,16 @@ fn walk_value(
                 let indices = sample_indices(arr.len());
                 for idx in indices {
                     let child_path = format!("{path}[{idx}]");
-                    walk_value(&arr[idx], &child_path, depth + 1, max_depth, sample_arrays, stats, arrays, objects);
+                    walk_value(
+                        &arr[idx],
+                        &child_path,
+                        depth + 1,
+                        max_depth,
+                        sample_arrays,
+                        stats,
+                        arrays,
+                        objects,
+                    );
                 }
             }
         }

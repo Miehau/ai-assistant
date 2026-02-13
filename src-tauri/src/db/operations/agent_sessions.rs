@@ -299,6 +299,11 @@ fn serialize_step_action(action: &StepAction) -> (String, String) {
             serde_json::to_string(&serde_json::json!({ "tool": tool, "args": args }))
                 .unwrap_or_else(|_| "{}".to_string()),
         ),
+        StepAction::ToolBatch { tools } => (
+            "tool_batch".to_string(),
+            serde_json::to_string(&serde_json::json!({ "tools": tools }))
+                .unwrap_or_else(|_| "{}".to_string()),
+        ),
         StepAction::AskUser { question } => (
             "ask_user".to_string(),
             serde_json::to_string(&serde_json::json!({ "question": question }))
@@ -326,6 +331,33 @@ fn parse_step_action(action_type: &str, action_data: &str) -> StepAction {
                 .get("args")
                 .cloned()
                 .unwrap_or_else(|| Value::Object(Default::default())),
+        },
+        "tool_batch" => StepAction::ToolBatch {
+            tools: data
+                .get("tools")
+                .and_then(|v| v.as_array())
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter_map(|entry| {
+                            let tool = entry.get("tool").and_then(|v| v.as_str())?.to_string();
+                            let args = entry
+                                .get("args")
+                                .cloned()
+                                .unwrap_or_else(|| Value::Object(Default::default()));
+                            let output_mode = entry
+                                .get("output_mode")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string);
+                            Some(crate::db::ToolBatchToolCall {
+                                tool,
+                                args,
+                                output_mode,
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
         },
         "ask_user" => StepAction::AskUser {
             question: data
