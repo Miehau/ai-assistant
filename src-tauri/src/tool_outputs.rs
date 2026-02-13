@@ -81,3 +81,8 @@ pub fn read_tool_output(id: &str) -> Result<ToolOutputRecord, String> {
         .map_err(|err| format!("Failed to read tool output: {err}"))?;
     serde_json::from_str(&payload).map_err(|err| format!("Failed to parse tool output: {err}"))
 }
+
+pub fn tool_output_exists(id: &str) -> Result<bool, String> {
+    let file_path = tool_output_file_path(id)?;
+    Ok(file_path.is_file())
+}

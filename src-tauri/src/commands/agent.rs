@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::State;
 use uuid::Uuid;
 
@@ -45,6 +45,7 @@ static PRICING: OnceLock<HashMap<String, PricingEntry>> = OnceLock::new();
 static CANCEL_REGISTRY: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 const LLM_HTTP_TIMEOUT_SECS: u64 = 120;
 const LLM_HTTP_CONNECT_TIMEOUT_SECS: u64 = 15;
+const CONTROLLER_HTTP_TIMEOUT_SECS: u64 = 120;
 const OPENAI_PROMPT_CACHE_RETENTION: &str = "24h";
 const CACHE_DIAGNOSTICS_MIN_REQUESTS: u32 = 6;
 const CACHE_DIAGNOSTICS_MIN_PROMPT_TOKENS: i64 = 4096;
@@ -89,10 +90,10 @@ fn cancel_token(message_id: &str) -> bool {
     }
 }
 
-fn build_http_client() -> Client {
+fn build_http_client_with_timeouts(timeout_secs: u64, connect_timeout_secs: u64) -> Client {
     Client::builder()
-        .timeout(Duration::from_secs(LLM_HTTP_TIMEOUT_SECS))
-        .connect_timeout(Duration::from_secs(LLM_HTTP_CONNECT_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(timeout_secs))
+        .connect_timeout(Duration::from_secs(connect_timeout_secs))
         .build()
         .unwrap_or_else(|error| {
             log::warn!(
@@ -101,6 +102,28 @@ fn build_http_client() -> Client {
             );
             Client::new()
         })
+}
+
+fn build_http_client() -> Client {
+    build_http_client_with_timeouts(LLM_HTTP_TIMEOUT_SECS, LLM_HTTP_CONNECT_TIMEOUT_SECS)
+}
+
+fn should_retry_anthropic_without_output_format(error: &str) -> bool {
+    let lowered = error.to_ascii_lowercase();
+    lowered.contains("timed out")
+        || lowered.contains("deadline")
+        || lowered.contains("error sending request for url")
+        || lowered.contains("connection reset")
+        || lowered.contains("stream error")
+        || lowered.contains("http2")
+}
+
+fn controller_output_format_for_provider(provider: &str, output_format: Option<Value>) -> Option<Value> {
+    if provider == "anthropic" {
+        None
+    } else {
+        output_format
+    }
 }
 
 fn calculate_estimated_cost(model: &str, prompt_tokens: i32, completion_tokens: i32) -> f64 {
@@ -198,7 +221,7 @@ fn llm_request_options(
     }
 
     if provider == "anthropic" {
-        let anthropic_cache_breakpoints = if phase == "controller" {
+        let anthropic_cache_breakpoints = if phase == "responder" {
             vec![0]
         } else {
             Vec::new()
@@ -222,12 +245,10 @@ struct CacheDiagnostics {
 
 fn effective_prompt_tokens_for_cache(provider: &str, usage: &Usage) -> i64 {
     match provider {
-        "anthropic" => {
-            (usage.prompt_tokens as i64
-                + usage.cache_read_input_tokens.max(0) as i64
-                + usage.cache_creation_input_tokens.max(0) as i64)
-                .max(0)
-        }
+        "anthropic" => (usage.prompt_tokens as i64
+            + usage.cache_read_input_tokens.max(0) as i64
+            + usage.cache_creation_input_tokens.max(0) as i64)
+            .max(0),
         _ => (usage.prompt_tokens as i64).max(0),
     }
 }
@@ -247,6 +268,9 @@ fn record_cache_diagnostics(
     };
     let request_prompt_tokens = effective_prompt_tokens_for_cache(provider, usage);
     if request_prompt_tokens <= 0 {
+        return;
+    }
+    if !cache_diagnostics_enabled(provider, request_options) {
         return;
     }
     let request_cache_creation_tokens = match provider {
@@ -299,6 +323,18 @@ fn record_cache_diagnostics(
             request_options.prompt_cache_key,
             request_options.anthropic_cache_breakpoints
         );
+    }
+}
+
+fn cache_diagnostics_enabled(provider: &str, request_options: &LlmRequestOptions) -> bool {
+    match provider {
+        "openai" => request_options
+            .prompt_cache_key
+            .as_ref()
+            .map(|key| !key.trim().is_empty())
+            .unwrap_or(false),
+        "anthropic" => !request_options.anthropic_cache_breakpoints.is_empty(),
+        _ => false,
     }
 }
 
@@ -429,6 +465,14 @@ pub fn agent_send_message(
     } = payload;
 
     let conversation_id = conversation_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    log::info!(
+        "[agent] send_message received: conversation_id={} provider={} model={} content_chars={} attachments={}",
+        conversation_id,
+        provider,
+        model,
+        content.chars().count(),
+        attachments.len()
+    );
     ConversationOperations::get_or_create_conversation(&*state, &conversation_id)
         .map_err(|e| e.to_string())?;
 
@@ -545,12 +589,23 @@ pub fn agent_send_message(
     let cancel_token_for_thread = register_cancel_token(&assistant_message_id);
 
     std::thread::spawn(move || {
+        log::info!(
+            "[agent] worker started: conversation_id={} message_id={} provider={} model={}",
+            conversation_id_for_thread,
+            assistant_message_id_for_thread,
+            provider,
+            model_for_thread
+        );
         let panic_bus = bus.clone();
         let panic_conversation_id = conversation_id_for_thread.clone();
         let panic_message_id = assistant_message_id_for_thread.clone();
 
         let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let client = build_http_client();
+            let controller_client = build_http_client_with_timeouts(
+                CONTROLLER_HTTP_TIMEOUT_SECS,
+                LLM_HTTP_CONNECT_TIMEOUT_SECS,
+            );
+            let stream_client = build_http_client();
             let mut draft = String::new();
             let mut usage_accumulator = Usage {
                 prompt_tokens: 0,
@@ -608,6 +663,15 @@ pub fn agent_send_message(
             let mut call_llm = |messages: &[LlmMessage],
                                 system_prompt: Option<&str>,
                                 output_format: Option<Value>| {
+                log::debug!(
+                    "[agent] controller llm call: provider={} model={} conversation_id={} message_id={} messages={} output_format={}",
+                    provider,
+                    model_for_thread,
+                    conversation_id_for_thread,
+                    assistant_message_id_for_thread,
+                    messages.len(),
+                    output_format.is_some()
+                );
                 let prepared_messages = if provider == "anthropic" || provider == "claude_cli" {
                     messages.to_vec()
                 } else {
@@ -626,13 +690,14 @@ pub fn agent_send_message(
                     prepared
                 };
 
+                let llm_call_started = Instant::now();
                 let result = match provider.as_str() {
                     "openai" => {
                         if openai_api_key.is_empty() {
                             Err("Missing OpenAI API key".to_string())
                         } else {
                             complete_openai_with_options(
-                                &client,
+                                &controller_client,
                                 &openai_api_key,
                                 "https://api.openai.com/v1/chat/completions",
                                 &model_for_thread,
@@ -645,15 +710,49 @@ pub fn agent_send_message(
                         if anthropic_api_key.is_empty() {
                             Err("Missing Anthropic API key".to_string())
                         } else {
-                            complete_anthropic_with_output_format_with_options(
-                                &client,
+                            let effective_output_format =
+                                controller_output_format_for_provider(&provider, output_format.clone());
+                            let primary = complete_anthropic_with_output_format_with_options(
+                                &controller_client,
                                 &anthropic_api_key,
                                 &model_for_thread,
                                 system_prompt,
                                 &prepared_messages,
-                                output_format,
+                                effective_output_format.clone(),
                                 Some(&controller_request_options),
-                            )
+                            );
+                            if effective_output_format.is_some() {
+                                match primary {
+                                    Ok(success) => Ok(success),
+                                    Err(error)
+                                        if should_retry_anthropic_without_output_format(&error) =>
+                                    {
+                                        log::warn!(
+                                            "[agent] controller anthropic call failed with structured output, retrying without output_format and without anthropic cache options: conversation_id={} message_id={} error={}",
+                                            conversation_id_for_thread,
+                                            assistant_message_id_for_thread,
+                                            error
+                                        );
+                                        complete_anthropic_with_output_format_with_options(
+                                            &controller_client,
+                                            &anthropic_api_key,
+                                            &model_for_thread,
+                                            system_prompt,
+                                            &prepared_messages,
+                                            None,
+                                            None,
+                                        )
+                                        .map_err(|retry_error| {
+                                            format!(
+                                                "Anthropic controller retry without output_format failed: initial_error={error}; retry_error={retry_error}"
+                                            )
+                                        })
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            } else {
+                                primary
+                            }
                         }
                     }
                     "deepseek" => {
@@ -661,7 +760,7 @@ pub fn agent_send_message(
                             Err("Missing DeepSeek API key".to_string())
                         } else {
                             complete_openai_compatible_with_options(
-                                &client,
+                                &controller_client,
                                 Some(&deepseek_api_key),
                                 "https://api.deepseek.com/chat/completions",
                                 &model_for_thread,
@@ -682,7 +781,7 @@ pub fn agent_send_message(
                             Err("Missing custom backend URL".to_string())
                         } else {
                             complete_openai_compatible_with_options(
-                                &client,
+                                &controller_client,
                                 api_key.as_deref(),
                                 &url,
                                 &model_for_thread,
@@ -693,6 +792,32 @@ pub fn agent_send_message(
                     }
                     _ => Err(format!("Unsupported provider: {provider}")),
                 };
+
+                let elapsed_ms = llm_call_started.elapsed().as_millis();
+                match &result {
+                    Ok(stream_result) => {
+                        log::debug!(
+                            "[agent] controller llm call completed: provider={} model={} conversation_id={} message_id={} elapsed_ms={} response_chars={}",
+                            provider,
+                            model_for_thread,
+                            conversation_id_for_thread,
+                            assistant_message_id_for_thread,
+                            elapsed_ms,
+                            stream_result.content.chars().count()
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "[agent] controller llm call failed: provider={} model={} conversation_id={} message_id={} elapsed_ms={} error={}",
+                            provider,
+                            model_for_thread,
+                            conversation_id_for_thread,
+                            assistant_message_id_for_thread,
+                            elapsed_ms,
+                            error
+                        );
+                    }
+                }
 
                 if let Ok(ref stream_result) = result {
                     if let Some(usage) = stream_result.usage.as_ref() {
@@ -741,13 +866,30 @@ pub fn agent_send_message(
             };
 
             if let Some(ref mut controller) = controller {
+                log::info!(
+                    "[agent] controller run started: conversation_id={} message_id={}",
+                    conversation_id_for_thread,
+                    assistant_message_id_for_thread
+                );
                 match controller.run(&content, &mut call_llm) {
                     Ok(response) => {
+                        log::info!(
+                            "[agent] controller run completed: conversation_id={} message_id={} response_chars={}",
+                            conversation_id_for_thread,
+                            assistant_message_id_for_thread,
+                            response.chars().count()
+                        );
                         draft = response;
                         controller_ok = true;
                         requested_user_input = controller.requested_user_input();
                     }
                     Err(error) => {
+                        log::warn!(
+                            "[agent] controller run failed: conversation_id={} message_id={} error={}",
+                            conversation_id_for_thread,
+                            assistant_message_id_for_thread,
+                            error
+                        );
                         if error == "Cancelled" {
                             draft.clear();
                         } else {
@@ -843,7 +985,7 @@ pub fn agent_send_message(
                             Err("Missing OpenAI API key".to_string())
                         } else {
                             stream_openai_with_options(
-                                &client,
+                                &stream_client,
                                 &openai_api_key,
                                 "https://api.openai.com/v1/chat/completions",
                                 &model_for_thread,
@@ -858,7 +1000,7 @@ pub fn agent_send_message(
                             Err("Missing Anthropic API key".to_string())
                         } else {
                             stream_anthropic_with_options(
-                                &client,
+                                &stream_client,
                                 &anthropic_api_key,
                                 &model_for_thread,
                                 responder_system_prompt,
@@ -873,7 +1015,7 @@ pub fn agent_send_message(
                             Err("Missing DeepSeek API key".to_string())
                         } else {
                             stream_openai_compatible_with_options(
-                                &client,
+                                &stream_client,
                                 Some(&deepseek_api_key),
                                 "https://api.deepseek.com/chat/completions",
                                 &model_for_thread,
@@ -890,7 +1032,7 @@ pub fn agent_send_message(
                             Err("Missing custom backend URL".to_string())
                         } else {
                             stream_openai_compatible_with_options(
-                                &client,
+                                &stream_client,
                                 api_key.as_deref(),
                                 &url,
                                 &model_for_thread,
@@ -1191,6 +1333,12 @@ fn generate_title_and_update(
     event_bus: EventBus,
     payload: AgentGenerateTitlePayload,
 ) -> Result<AgentGenerateTitleResult, String> {
+    log::info!(
+        "[agent] title generation started: conversation_id={} provider={} model={}",
+        payload.conversation_id,
+        payload.provider,
+        payload.model
+    );
     let provider = payload.provider.to_lowercase();
     let model = payload.model.clone();
 
@@ -1356,8 +1504,9 @@ fn build_user_content(content: &str, attachments: &[IncomingAttachment]) -> serd
     json!(content_array)
 }
 
-const MAX_TOOL_ARGS_CHARS: usize = 4000;
-const MAX_TOOL_RESULT_CHARS: usize = 8000;
+const MAX_TOOL_ARGS_CHARS: usize = 900;
+const MAX_TOOL_RESULT_CHARS: usize = 1200;
+const MAX_TOOL_METADATA_CHARS: usize = 320;
 const MAX_TOOL_ERROR_CHARS: usize = 2000;
 const RESPONDER_HISTORY_MAX_CHARS: usize = 48_000;
 const RESPONDER_HISTORY_STABLE_PREFIX_MESSAGES: usize = 8;
@@ -1397,29 +1546,128 @@ fn format_tool_executions(executions: &[MessageToolExecution]) -> String {
 
     let mut blocks = Vec::new();
     for exec in executions {
-        let params = serde_json::to_string_pretty(&exec.parameters)
-            .unwrap_or_else(|_| exec.parameters.to_string());
-        let result =
-            serde_json::to_string_pretty(&exec.result).unwrap_or_else(|_| exec.result.to_string());
-        let params = truncate_for_prompt(&params, MAX_TOOL_ARGS_CHARS);
-        let result = truncate_for_prompt(&result, MAX_TOOL_RESULT_CHARS);
-        let error = exec
-            .error
-            .as_deref()
-            .map(|err| truncate_for_prompt(err, MAX_TOOL_ERROR_CHARS));
-
-        let error_line = error
-            .as_ref()
-            .map(|err| format!("\nError: {}", err))
-            .unwrap_or_default();
-
-        blocks.push(format!(
-            "Tool: {}\nSuccess: {}\nArgs: {}\nResult: {}{}",
-            exec.tool_name, exec.success, params, result, error_line
+        blocks.push(format_tool_execution_block(
+            &exec.tool_name,
+            exec.success,
+            &exec.parameters,
+            &exec.result,
+            exec.error.as_deref(),
+            Some(exec.duration_ms),
+            Some(exec.id.as_str()),
         ));
     }
 
     format!("[Tool executions]\n{}", blocks.join("\n\n"))
+}
+
+fn format_tool_execution_block(
+    tool_name: &str,
+    success: bool,
+    parameters: &Value,
+    result: &Value,
+    error: Option<&str>,
+    duration_ms: Option<i64>,
+    execution_id: Option<&str>,
+) -> String {
+    let params = serde_json::to_string(parameters).unwrap_or_else(|_| parameters.to_string());
+    let params = truncate_for_prompt(&params, MAX_TOOL_ARGS_CHARS);
+
+    let output_ref = extract_output_ref_id(result).unwrap_or("none");
+    let requested_output_mode = result
+        .get("requested_output_mode")
+        .and_then(|value| value.as_str())
+        .unwrap_or("n/a");
+    let resolved_output_mode = result
+        .get("resolved_output_mode")
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            if output_ref != "none" {
+                Some("persist")
+            } else if success {
+                Some("inline")
+            } else {
+                None
+            }
+        })
+        .unwrap_or("n/a");
+    let forced_persist = result
+        .get("forced_persist")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let forced_reason = result
+        .get("forced_reason")
+        .and_then(|value| value.as_str())
+        .unwrap_or("none");
+
+    let metadata = result
+        .get("metadata")
+        .cloned()
+        .unwrap_or_else(|| compact_result_metadata(result));
+    let metadata_summary = if metadata.is_null() {
+        "none".to_string()
+    } else {
+        truncate_for_prompt(&metadata.to_string(), MAX_TOOL_METADATA_CHARS)
+    };
+
+    let preview = if !success {
+        let failure = error.unwrap_or("Tool execution failed");
+        format!(
+            "Error: {}",
+            truncate_for_prompt(failure, MAX_TOOL_ERROR_CHARS)
+        )
+    } else if let Some(preview) = result.get("preview").and_then(|value| value.as_str()) {
+        let mut summary = truncate_for_prompt(preview, MAX_TOOL_RESULT_CHARS);
+        if result
+            .get("preview_truncated")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            summary.push_str(" ...(truncated)");
+        }
+        summary
+    } else {
+        let rendered = serde_json::to_string(result).unwrap_or_else(|_| result.to_string());
+        truncate_for_prompt(&rendered, MAX_TOOL_RESULT_CHARS)
+    };
+
+    let mut prefix = format!("Tool: {tool_name}");
+    if let Some(execution_id) = execution_id {
+        prefix.push_str(&format!("\nExecutionId: {execution_id}"));
+    }
+    if let Some(duration_ms) = duration_ms {
+        prefix.push_str(&format!("\nDurationMs: {duration_ms}"));
+    }
+
+    format!(
+        "{prefix}\nSuccess: {success}\nRequestedOutputMode: {requested_output_mode}\nResolvedOutputMode: {resolved_output_mode}\nForcedPersist: {forced_persist}\nForcedReason: {forced_reason}\nOutputRef: {output_ref}\nArgs: {params}\nMetadata: {metadata_summary}\nPreview: {preview}"
+    )
+}
+
+fn extract_output_ref_id(result: &Value) -> Option<&str> {
+    result
+        .get("output_ref")
+        .and_then(|value| value.get("id"))
+        .and_then(|value| value.as_str())
+}
+
+fn compact_result_metadata(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => json!({
+            "root_type": "object",
+            "key_count": map.len()
+        }),
+        Value::Array(values) => json!({
+            "root_type": "array",
+            "array_length": values.len()
+        }),
+        Value::String(text) => json!({
+            "root_type": "string",
+            "string_length": text.chars().count()
+        }),
+        Value::Number(_) => json!({ "root_type": "number" }),
+        Value::Bool(_) => json!({ "root_type": "boolean" }),
+        Value::Null => json!({ "root_type": "null" }),
+    }
 }
 
 fn supports_streaming(provider: &str) -> bool {
@@ -1501,19 +1749,14 @@ fn render_tool_outputs(tool_execution_inputs: &[MessageToolExecutionInput]) -> S
     let mut blocks = Vec::new();
 
     for input in tool_execution_inputs.iter().skip(start) {
-        let parameters = serde_json::to_string_pretty(&input.parameters)
-            .unwrap_or_else(|_| input.parameters.to_string());
-        let result = serde_json::to_string_pretty(&input.result)
-            .unwrap_or_else(|_| input.result.to_string());
-        let error = input
-            .error
-            .as_ref()
-            .map(|err| format!("\nError: {}", err))
-            .unwrap_or_default();
-
-        blocks.push(format!(
-            "Tool: {}\nSuccess: {}\nArgs: {}\nResult: {}{}",
-            input.tool_name, input.success, parameters, result, error
+        blocks.push(format_tool_execution_block(
+            &input.tool_name,
+            input.success,
+            &input.parameters,
+            &input.result,
+            input.error.as_deref(),
+            Some(input.duration_ms),
+            Some(input.id.as_str()),
         ));
     }
 
@@ -1525,14 +1768,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn llm_request_options_enables_anthropic_cache_for_controller_phase() {
+    fn llm_request_options_disables_anthropic_cache_for_controller_phase() {
         let options = llm_request_options("anthropic", "conv-1", "controller", "claude-sonnet");
+        assert!(options.anthropic_cache_breakpoints.is_empty());
+    }
+
+    #[test]
+    fn llm_request_options_enables_anthropic_cache_for_responder_phase() {
+        let options = llm_request_options("anthropic", "conv-1", "responder", "claude-sonnet");
         assert_eq!(options.anthropic_cache_breakpoints, vec![0]);
     }
 
     #[test]
-    fn llm_request_options_disables_anthropic_cache_for_responder_phase() {
-        let options = llm_request_options("anthropic", "conv-1", "responder", "claude-sonnet");
+    fn llm_request_options_disables_anthropic_cache_for_other_phases() {
+        let options = llm_request_options("anthropic", "conv-1", "triage", "claude-sonnet");
         assert!(options.anthropic_cache_breakpoints.is_empty());
     }
 
@@ -1542,6 +1791,127 @@ mod tests {
         assert_eq!(
             options.prompt_cache_key.as_deref(),
             Some("conversation:conv-1:controller:v1")
+        );
+    }
+
+    #[test]
+    fn cache_diagnostics_enabled_for_openai_with_cache_key() {
+        let options = llm_request_options("openai", "conv-1", "controller", "gpt-5-mini");
+        assert!(cache_diagnostics_enabled("openai", &options));
+    }
+
+    #[test]
+    fn cache_diagnostics_disabled_for_anthropic_controller_without_breakpoints() {
+        let options = llm_request_options("anthropic", "conv-1", "controller", "claude-sonnet");
+        assert!(!cache_diagnostics_enabled("anthropic", &options));
+    }
+
+    #[test]
+    fn cache_diagnostics_enabled_for_anthropic_responder_with_breakpoints() {
+        let options = llm_request_options("anthropic", "conv-1", "responder", "claude-sonnet");
+        assert!(cache_diagnostics_enabled("anthropic", &options));
+    }
+
+    #[test]
+    fn anthropic_retry_without_output_format_on_timeout_like_errors() {
+        assert!(should_retry_anthropic_without_output_format(
+            "error sending request for url: operation timed out"
+        ));
+        assert!(should_retry_anthropic_without_output_format(
+            "error sending request for url (https://api.anthropic.com/v1/messages)"
+        ));
+        assert!(should_retry_anthropic_without_output_format(
+            "error: stream error in the HTTP/2 framing layer"
+        ));
+    }
+
+    #[test]
+    fn anthropic_retry_without_output_format_skips_rate_limit_errors() {
+        assert!(!should_retry_anthropic_without_output_format(
+            "Anthropic error: 429 Too Many Requests - rate limit exceeded"
+        ));
+        assert!(!should_retry_anthropic_without_output_format(
+            "Anthropic error: 400 Bad Request - invalid output format"
+        ));
+    }
+
+    #[test]
+    fn controller_output_format_for_provider_disables_anthropic_structured_output() {
+        let format = json!({
+            "type": "json_schema",
+            "schema": { "type": "object" }
+        });
+        assert!(
+            controller_output_format_for_provider("anthropic", Some(format)).is_none()
+        );
+    }
+
+    #[test]
+    fn controller_output_format_for_provider_keeps_non_anthropic_output_format() {
+        let format = json!({
+            "type": "json_schema",
+            "schema": { "type": "object" }
+        });
+        let selected = controller_output_format_for_provider("openai", Some(format.clone()));
+        assert_eq!(selected, Some(format));
+    }
+
+    #[test]
+    fn format_tool_executions_renders_envelope_fields() {
+        let execution = MessageToolExecution {
+            id: "exec-1".to_string(),
+            message_id: "msg-1".to_string(),
+            tool_name: "gmail.list_threads".to_string(),
+            parameters: serde_json::json!({ "max_results": 10 }),
+            result: serde_json::json!({
+                "persisted": true,
+                "output_ref": { "id": "artifact-123" },
+                "preview": "[{\"id\":\"t1\"}]",
+                "preview_truncated": false,
+                "metadata": { "root_type": "array", "array_length": 10 },
+                "requested_output_mode": "persist",
+                "resolved_output_mode": "persist",
+                "forced_persist": false,
+                "forced_reason": null
+            }),
+            success: true,
+            duration_ms: 42,
+            timestamp_ms: 1000,
+            error: None,
+            iteration_number: 1,
+        };
+
+        let rendered = format_tool_executions(&[execution]);
+        assert!(rendered.contains("RequestedOutputMode: persist"));
+        assert!(rendered.contains("ResolvedOutputMode: persist"));
+        assert!(rendered.contains("OutputRef: artifact-123"));
+        assert!(rendered.contains("Metadata:"));
+        assert!(rendered.contains("Preview:"));
+    }
+
+    #[test]
+    fn format_tool_executions_truncates_large_inline_result() {
+        let big_payload = "x".repeat(MAX_TOOL_RESULT_CHARS * 3);
+        let execution = MessageToolExecution {
+            id: "exec-2".to_string(),
+            message_id: "msg-2".to_string(),
+            tool_name: "files.read".to_string(),
+            parameters: serde_json::json!({ "path": "/tmp/file.txt" }),
+            result: serde_json::json!({ "content": big_payload }),
+            success: true,
+            duration_ms: 7,
+            timestamp_ms: 2000,
+            error: None,
+            iteration_number: 1,
+        };
+
+        let rendered = format_tool_executions(&[execution]);
+        assert!(rendered.contains("ResolvedOutputMode: inline"));
+        assert!(rendered.contains("...(truncated)"));
+        assert!(
+            rendered.len() < (MAX_TOOL_RESULT_CHARS * 2),
+            "expected compact envelope rendering, got {} chars",
+            rendered.len()
         );
     }
 }
