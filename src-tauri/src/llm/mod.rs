@@ -809,7 +809,13 @@ pub fn complete_anthropic_with_output_format_with_options(
     output_format: Option<Value>,
     request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
-    let sanitized_output_format = build_anthropic_output_schema(output_format);
+    if output_format.is_some() {
+        log::debug!(
+            "[llm] provider=anthropic model={} output_format suppressed (structured output disabled)",
+            model
+        );
+    }
+    let sanitized_output_format = build_anthropic_output_schema(None);
     validate_anthropic_output_format(sanitized_output_format.as_ref())?;
     let has_output_format = sanitized_output_format.is_some();
 
