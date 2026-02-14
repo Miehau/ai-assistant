@@ -108,22 +108,11 @@ fn build_http_client() -> Client {
     build_http_client_with_timeouts(LLM_HTTP_TIMEOUT_SECS, LLM_HTTP_CONNECT_TIMEOUT_SECS)
 }
 
-fn should_retry_anthropic_without_output_format(error: &str) -> bool {
-    let lowered = error.to_ascii_lowercase();
-    lowered.contains("timed out")
-        || lowered.contains("deadline")
-        || lowered.contains("error sending request for url")
-        || lowered.contains("connection reset")
-        || lowered.contains("stream error")
-        || lowered.contains("http2")
-}
-
-fn controller_output_format_for_provider(provider: &str, output_format: Option<Value>) -> Option<Value> {
-    if provider == "anthropic" {
-        None
-    } else {
-        output_format
-    }
+fn controller_output_format_for_provider(
+    _provider: &str,
+    output_format: Option<Value>,
+) -> Option<Value> {
+    output_format
 }
 
 fn calculate_estimated_cost(model: &str, prompt_tokens: i32, completion_tokens: i32) -> f64 {
@@ -712,47 +701,15 @@ pub fn agent_send_message(
                         } else {
                             let effective_output_format =
                                 controller_output_format_for_provider(&provider, output_format.clone());
-                            let primary = complete_anthropic_with_output_format_with_options(
+                            complete_anthropic_with_output_format_with_options(
                                 &controller_client,
                                 &anthropic_api_key,
                                 &model_for_thread,
                                 system_prompt,
                                 &prepared_messages,
-                                effective_output_format.clone(),
+                                effective_output_format,
                                 Some(&controller_request_options),
-                            );
-                            if effective_output_format.is_some() {
-                                match primary {
-                                    Ok(success) => Ok(success),
-                                    Err(error)
-                                        if should_retry_anthropic_without_output_format(&error) =>
-                                    {
-                                        log::warn!(
-                                            "[agent] controller anthropic call failed with structured output, retrying without output_format and without anthropic cache options: conversation_id={} message_id={} error={}",
-                                            conversation_id_for_thread,
-                                            assistant_message_id_for_thread,
-                                            error
-                                        );
-                                        complete_anthropic_with_output_format_with_options(
-                                            &controller_client,
-                                            &anthropic_api_key,
-                                            &model_for_thread,
-                                            system_prompt,
-                                            &prepared_messages,
-                                            None,
-                                            None,
-                                        )
-                                        .map_err(|retry_error| {
-                                            format!(
-                                                "Anthropic controller retry without output_format failed: initial_error={error}; retry_error={retry_error}"
-                                            )
-                                        })
-                                    }
-                                    Err(error) => Err(error),
-                                }
-                            } else {
-                                primary
-                            }
+                            )
                         }
                     }
                     "deepseek" => {
@@ -1813,37 +1770,12 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_retry_without_output_format_on_timeout_like_errors() {
-        assert!(should_retry_anthropic_without_output_format(
-            "error sending request for url: operation timed out"
-        ));
-        assert!(should_retry_anthropic_without_output_format(
-            "error sending request for url (https://api.anthropic.com/v1/messages)"
-        ));
-        assert!(should_retry_anthropic_without_output_format(
-            "error: stream error in the HTTP/2 framing layer"
-        ));
-    }
-
-    #[test]
-    fn anthropic_retry_without_output_format_skips_rate_limit_errors() {
-        assert!(!should_retry_anthropic_without_output_format(
-            "Anthropic error: 429 Too Many Requests - rate limit exceeded"
-        ));
-        assert!(!should_retry_anthropic_without_output_format(
-            "Anthropic error: 400 Bad Request - invalid output format"
-        ));
-    }
-
-    #[test]
-    fn controller_output_format_for_provider_disables_anthropic_structured_output() {
+    fn controller_output_format_for_provider_preserves_output_format() {
         let format = json!({
             "type": "json_schema",
             "schema": { "type": "object" }
         });
-        assert!(
-            controller_output_format_for_provider("anthropic", Some(format)).is_none()
-        );
+        assert!(controller_output_format_for_provider("anthropic", Some(format)).is_some());
     }
 
     #[test]
