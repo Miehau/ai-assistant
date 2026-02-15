@@ -473,6 +473,51 @@ mod tests {
     }
 
     #[test]
+    fn tool_schemas_compile_and_use_object_args() {
+        let vault_root = std::env::temp_dir().join(format!("vault-root-{}", Uuid::new_v4()));
+        fs::create_dir_all(&vault_root).expect("vault root create failed");
+
+        let db = setup_db(vault_root.to_str().unwrap());
+        let mut registry = ToolRegistry::new();
+        register_file_tools(&mut registry, db.clone()).expect("file tools registration failed");
+        register_search_tool(&mut registry, db.clone()).expect("search tool registration failed");
+        register_pref_tools(&mut registry, db.clone()).expect("pref tools registration failed");
+        register_integration_tools(&mut registry, db.clone())
+            .expect("integration tools registration failed");
+        register_tool_output_tools(&mut registry, db.clone())
+            .expect("tool output tools registration failed");
+        register_web_tools(&mut registry, db.clone()).expect("web tools registration failed");
+
+        for metadata in registry.list_metadata() {
+            for (label, schema) in [
+                ("args", &metadata.args_schema),
+                ("result", &metadata.result_schema),
+            ] {
+                JSONSchema::compile(schema).unwrap_or_else(|err| {
+                    panic!(
+                        "Invalid {label} schema for tool {}: {err}",
+                        metadata.name
+                    )
+                });
+            }
+
+            assert!(
+                metadata.args_schema.is_object(),
+                "args schema for tool {} must be an object",
+                metadata.name
+            );
+            if let Some(schema_type) = metadata.args_schema.get("type").and_then(|v| v.as_str()) {
+                assert_eq!(
+                    schema_type,
+                    "object",
+                    "args schema for tool {} must have type object when present",
+                    metadata.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn search_replace_updates_content() {
         let vault_root = std::env::temp_dir().join(format!("vault-root-{}", Uuid::new_v4()));
         fs::create_dir_all(&vault_root).expect("vault root create failed");

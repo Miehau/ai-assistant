@@ -82,6 +82,32 @@ fn build_openai_compatible_body(
     body
 }
 
+fn validate_openai_output_format(output_format: Option<&Value>) -> Result<(), String> {
+    let Some(output_format) = output_format else {
+        return Ok(());
+    };
+
+    let format_type = output_format
+        .get("type")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "OpenAI preflight: output_format.type must be \"json_schema\"".to_string())?;
+    if format_type != "json_schema" {
+        return Err(format!(
+            "OpenAI preflight: unsupported output_format.type \"{format_type}\""
+        ));
+    }
+
+    let schema = output_format
+        .get("schema")
+        .or_else(|| output_format.get("json_schema").and_then(|value| value.get("schema")))
+        .ok_or_else(|| "OpenAI preflight: missing output_format.schema".to_string())?;
+    if !schema.is_object() {
+        return Err("OpenAI preflight: output_format.schema must be an object".to_string());
+    }
+
+    Ok(())
+}
+
 fn parse_openai_usage(usage: &Value) -> Option<Usage> {
     let prompt_tokens = usage
         .get("prompt_tokens")
@@ -233,6 +259,26 @@ fn build_openai_output_schema(output_format: Option<Value>) -> Option<Value> {
     }))
 }
 
+fn build_openai_request_body(
+    model: &str,
+    messages: &[LlmMessage],
+    stream: bool,
+    include_usage: bool,
+    output_format: Option<Value>,
+    request_options: Option<&LlmRequestOptions>,
+) -> Result<Value, String> {
+    let mut body = build_openai_compatible_body(model, messages, stream, include_usage, request_options);
+
+    if let Some(format_value) = output_format.as_ref() {
+        validate_openai_output_format(Some(format_value))?;
+    }
+    if let Some(openai_output_schema) = build_openai_output_schema(output_format) {
+        body["response_format"] = openai_output_schema;
+    }
+
+    Ok(body)
+}
+
 fn build_anthropic_output_schema(output_format: Option<Value>) -> Option<Value> {
     let mut output = output_format?;
     if let Some(schema) = output.get_mut("schema") {
@@ -367,10 +413,14 @@ pub fn complete_openai_compatible_with_output_format_with_options(
     output_format: Option<Value>,
     request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
-    let mut body = build_openai_compatible_body(model, messages, false, false, request_options);
-    if let Some(openai_output_schema) = build_openai_output_schema(output_format) {
-        body["response_format"] = openai_output_schema;
-    }
+    let body = build_openai_request_body(
+        model,
+        messages,
+        false,
+        false,
+        output_format,
+        request_options,
+    )?;
 
     let mut request = client
         .post(url)
@@ -800,22 +850,14 @@ pub fn json_schema_output_format(schema: Value) -> Value {
     })
 }
 
-pub fn complete_anthropic_with_output_format_with_options(
-    client: &Client,
-    api_key: &str,
+fn build_anthropic_request_body<'a>(
     model: &str,
     system: Option<&str>,
     messages: &[LlmMessage],
     output_format: Option<Value>,
-    request_options: Option<&LlmRequestOptions>,
-) -> Result<StreamResult, String> {
-    if output_format.is_some() {
-        log::debug!(
-            "[llm] provider=anthropic model={} output_format suppressed (structured output disabled)",
-            model
-        );
-    }
-    let sanitized_output_format = build_anthropic_output_schema(None);
+    request_options: Option<&'a LlmRequestOptions>,
+) -> Result<(Value, bool, Option<&'a LlmRequestOptions>), String> {
+    let sanitized_output_format = build_anthropic_output_schema(output_format);
     validate_anthropic_output_format(sanitized_output_format.as_ref())?;
     let has_output_format = sanitized_output_format.is_some();
 
@@ -857,6 +899,26 @@ pub fn complete_anthropic_with_output_format_with_options(
     if let Some(output_format_value) = sanitized_output_format {
         body["output_format"] = output_format_value;
     }
+
+    Ok((body, has_output_format, effective_request_options))
+}
+
+pub fn complete_anthropic_with_output_format_with_options(
+    client: &Client,
+    api_key: &str,
+    model: &str,
+    system: Option<&str>,
+    messages: &[LlmMessage],
+    output_format: Option<Value>,
+    request_options: Option<&LlmRequestOptions>,
+) -> Result<StreamResult, String> {
+    let (body, has_output_format, effective_request_options) = build_anthropic_request_body(
+        model,
+        system,
+        messages,
+        output_format,
+        request_options,
+    )?;
 
     let send_request = |payload: &Value, structured_outputs: bool| -> Result<Value, String> {
         let mut request = client
@@ -1668,6 +1730,73 @@ mod tests {
     }
 
     #[test]
+    fn openai_request_body_includes_response_format_with_strict() {
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+        let format = json!({
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "ok": { "type": "string" }
+                }
+            }
+        });
+        let body = build_openai_request_body(
+            "gpt-5-mini",
+            &messages,
+            false,
+            false,
+            Some(format),
+            None,
+        )
+        .expect("body");
+        let response_format = body.get("response_format").expect("response_format");
+        let json_schema = response_format
+            .get("json_schema")
+            .expect("json_schema");
+        assert_eq!(
+            json_schema.get("strict").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn openai_request_body_omits_response_format_when_none() {
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+        let body =
+            build_openai_request_body("gpt-5-mini", &messages, false, false, None, None)
+                .expect("body");
+        assert!(body.get("response_format").is_none());
+    }
+
+    #[test]
+    fn openai_request_body_rejects_invalid_output_format() {
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+        let err = build_openai_request_body(
+            "gpt-5-mini",
+            &messages,
+            false,
+            false,
+            Some(json!({
+                "type": "json_object",
+                "schema": { "type": "object" }
+            })),
+            None,
+        )
+        .expect_err("should reject");
+        assert!(err.contains("unsupported output_format.type"));
+    }
+
+    #[test]
     fn anthropic_schema_builder_removes_if_then_allof() {
         let output = build_anthropic_output_schema(Some(json!({
             "type": "json_schema",
@@ -1722,6 +1851,39 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_request_body_includes_sanitized_output_format() {
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+        let format = json!({
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "oneOf": [
+                    {
+                        "properties": { "action": { "const": "next_step" } },
+                        "required": ["action"]
+                    }
+                ]
+            }
+        });
+        let (body, has_output_format, _) =
+            build_anthropic_request_body("claude-sonnet", None, &messages, Some(format), None)
+                .expect("body");
+        assert!(has_output_format);
+        let output_format = body.get("output_format").expect("output_format");
+        let schema = output_format.get("schema").expect("schema");
+        assert!(schema.get("oneOf").is_none());
+        assert_eq!(
+            schema
+                .get("additionalProperties")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn anthropic_output_format_preflight_rejects_unsupported_type() {
         let err = validate_anthropic_output_format(Some(&json!({
             "type": "json_object",
@@ -1738,6 +1900,23 @@ mod tests {
         })))
         .expect_err("should reject");
         assert!(err.contains("missing output_format.schema"));
+    }
+
+    #[test]
+    fn anthropic_request_body_rejects_invalid_output_format() {
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("hello"),
+        }];
+        let err = build_anthropic_request_body(
+            "claude-sonnet",
+            None,
+            &messages,
+            Some(json!({ "type": "json_object" })),
+            None,
+        )
+        .expect_err("should reject");
+        assert!(err.contains("unsupported output_format.type"));
     }
 
     #[test]

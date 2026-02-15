@@ -19,6 +19,7 @@ import type {
     ToolExecutionDbRecord
 } from './types/message';
 import type { Attachment, FileMetadata } from './types/attachments';
+import type { AgentTraceEntry } from './types/agent';
 import type { AgentEvent, AgentEventType } from './types/events';
 import type { ToolMetadata } from './types/tools';
 import type { IntegrationMetadata, GoogleCalendarListItem } from './types/integrations';
@@ -52,7 +53,8 @@ export type {
     CreateIntegrationConnectionInput,
     UpdateIntegrationConnectionInput,
     OAuthStartResponse,
-    OAuthSessionStatus
+    OAuthSessionStatus,
+    AgentTraceEntry
 };
 
 // Re-export with original names

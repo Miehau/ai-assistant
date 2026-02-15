@@ -71,3 +71,26 @@ pub struct MessageToolExecutionInput {
     pub error: Option<String>,
     pub iteration_number: i64,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
+pub struct MessageAgentThinking {
+    pub id: String,
+    pub message_id: String,
+    pub stage: String,
+    pub content: String,
+    pub timestamp_ms: i64,
+    pub iteration_number: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Type)]
+pub struct MessageAgentThinkingInput {
+    pub id: String,
+    pub message_id: String,
+    pub stage: String,
+    pub content: String,
+    pub timestamp_ms: i64,
+    pub iteration_number: i64,
+    pub metadata: Option<Value>,
+}

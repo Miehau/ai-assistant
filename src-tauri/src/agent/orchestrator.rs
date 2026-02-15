@@ -4,6 +4,8 @@ use crate::db::{
     PlanStep, ResumeTarget, StepAction, StepResult, StepStatus, ToolBatchToolCall,
     ToolExecutionRecord,
 };
+#[cfg(debug_assertions)]
+use crate::db::{MessageAgentThinkingInput, MessageOperations};
 use crate::events::{
     AgentEvent, EventBus, EVENT_AGENT_COMPLETED, EVENT_AGENT_PHASE_CHANGED,
     EVENT_AGENT_PLAN_ADJUSTED, EVENT_AGENT_PLAN_CREATED, EVENT_AGENT_STEP_COMPLETED,
@@ -237,6 +239,38 @@ impl DynamicController {
                 }
             }
         }
+    }
+
+    #[cfg(debug_assertions)]
+    fn record_trace(
+        &self,
+        stage: &str,
+        content: String,
+        iteration: i64,
+        metadata: Option<Value>,
+    ) {
+        let _ = MessageOperations::save_agent_thinking(
+            &self.db,
+            MessageAgentThinkingInput {
+                id: Uuid::new_v4().to_string(),
+                message_id: self.assistant_message_id.clone(),
+                stage: stage.to_string(),
+                content,
+                timestamp_ms: Utc::now().timestamp_millis(),
+                iteration_number: iteration,
+                metadata,
+            },
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn record_trace(
+        &self,
+        _stage: &str,
+        _content: String,
+        _iteration: i64,
+        _metadata: Option<Value>,
+    ) {
     }
 
     fn finish(&mut self, response: String) -> Result<String, String> {
@@ -1470,6 +1504,15 @@ impl DynamicController {
             error_message,
             args_summary
         );
+        self.record_trace(
+            "tool_preflight_error",
+            error_message.clone(),
+            iteration as i64,
+            Some(json!({
+                "tool": tool_name,
+                "args_summary": args_summary
+            })),
+        );
         self.event_bus.publish(AgentEvent::new_with_timestamp(
             EVENT_TOOL_EXECUTION_COMPLETED,
             json!({
@@ -1611,7 +1654,27 @@ impl DynamicController {
 
         // Build message array instead of single prompt for better caching
         let messages = self.build_controller_messages(&tool_list);
+        let trace_iteration = self.session.step_results.len() as i64 + 1;
+        let prompt_payload =
+            serde_json::to_string_pretty(&messages).unwrap_or_else(|_| "[]".to_string());
+        self.record_trace(
+            "controller_prompt",
+            prompt_payload,
+            trace_iteration,
+            Some(json!({
+                "messages": messages.len(),
+                "available_tools_count": self.tool_registry.list_metadata().len()
+            })),
+        );
         let response = self.call_llm_json(call_llm, &messages, Some(controller_output_format()))?;
+        let response_payload = serde_json::to_string_pretty(&response)
+            .unwrap_or_else(|_| response.to_string());
+        self.record_trace(
+            "controller_output",
+            response_payload,
+            trace_iteration,
+            None,
+        );
         parse_controller_action(&response)
     }
 
