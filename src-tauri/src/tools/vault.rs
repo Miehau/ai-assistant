@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 pub const PREF_VAULT_ROOT: &str = "plugins.files.vault_root";
+pub const PREF_WORK_ROOT: &str = "plugins.files.work_root";
 
 pub struct VaultPath {
     pub full_path: PathBuf,
@@ -24,6 +25,30 @@ pub fn get_vault_root(db: &Db) -> Result<PathBuf, ToolError> {
     Ok(root_path)
 }
 
+pub fn get_work_root(db: &Db) -> Result<PathBuf, ToolError> {
+    let root = PreferenceOperations::get_preference(db, PREF_WORK_ROOT)
+        .map_err(|err| ToolError::new(format!("Failed to load work root: {err}")))?;
+    let root = root.and_then(|value| {
+        if value.trim().is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    });
+    let root_path = match root {
+        Some(value) => PathBuf::from(value),
+        None => std::env::current_dir()
+            .map_err(|err| ToolError::new(format!("Failed to resolve work root: {err}")))?,
+    };
+    let root_path = root_path
+        .canonicalize()
+        .map_err(|err| ToolError::new(format!("Invalid work root: {err}")))?;
+    if !root_path.is_dir() {
+        return Err(ToolError::new("Work root is not a directory"));
+    }
+    Ok(root_path)
+}
+
 pub fn resolve_vault_path(db: &Db, input: &str) -> Result<VaultPath, ToolError> {
     let root = get_vault_root(db)?;
     let relative = normalize_vault_input(&root, input)?;
@@ -35,6 +60,27 @@ pub fn resolve_vault_path(db: &Db, input: &str) -> Result<VaultPath, ToolError> 
         full_path,
         display_path,
     })
+}
+
+pub fn resolve_work_path(db: &Db, input: &str) -> Result<VaultPath, ToolError> {
+    let root = get_work_root(db)?;
+    let relative = normalize_vault_input(&root, input)?;
+    reject_symlink_components(&root, &relative)?;
+    let full_path = root.join(&relative);
+    ensure_inside_root(&root, &full_path)?;
+    let display_path = to_display_path(&root, &full_path);
+    Ok(VaultPath {
+        full_path,
+        display_path,
+    })
+}
+
+pub fn resolve_root_path(db: &Db, root: &str, input: &str) -> Result<VaultPath, ToolError> {
+    match root {
+        "vault" => resolve_vault_path(db, input),
+        "work" => resolve_work_path(db, input),
+        _ => Err(ToolError::new("Invalid root; expected 'vault' or 'work'")),
+    }
 }
 
 pub fn normalize_relative_path(input: &str) -> Result<PathBuf, ToolError> {

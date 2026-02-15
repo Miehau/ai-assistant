@@ -135,6 +135,27 @@ fn parse_openai_usage(usage: &Value) -> Option<Usage> {
     }
 }
 
+fn parse_openai_compatible_response(value: &Value) -> StreamResult {
+    let content = value
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(|content| content.as_str())
+        })
+        .unwrap_or("")
+        .to_string();
+
+    let usage = value.get("usage").and_then(parse_openai_usage);
+
+    StreamResult { content, usage }
+}
+
 fn parse_anthropic_usage(usage: &Value) -> Option<Usage> {
     let prompt_tokens = usage
         .get("input_tokens")
@@ -444,29 +465,13 @@ pub fn complete_openai_compatible_with_output_format_with_options(
         model,
         serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
     );
-
-    let content = value
-        .get("choices")
-        .and_then(|choices| choices.get(0))
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .and_then(|content| content.as_str())
-        .or_else(|| {
-            value
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(|content| content.as_str())
-        })
-        .unwrap_or("")
-        .to_string();
-
-    let usage = value.get("usage").and_then(parse_openai_usage);
+    let result = parse_openai_compatible_response(&value);
 
     log::debug!(
         "[llm] provider=openai_compatible model={} content_len={} usage={:?}",
         model,
-        content.len(),
-        usage.as_ref().map(|u| {
+        result.content.len(),
+        result.usage.as_ref().map(|u| {
             (
                 u.prompt_tokens,
                 u.completion_tokens,
@@ -477,7 +482,7 @@ pub fn complete_openai_compatible_with_output_format_with_options(
         })
     );
 
-    Ok(StreamResult { content, usage })
+    Ok(result)
 }
 
 pub fn stream_openai_with_options<F>(
@@ -1255,9 +1260,6 @@ fn value_to_string(value: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
 
     #[test]
     fn openai_body_includes_prompt_cache_fields() {
@@ -1649,58 +1651,25 @@ mod tests {
 
     #[test]
     fn complete_openai_compatible_parses_cache_metrics_from_mock_response() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
-        let addr = listener.local_addr().expect("listener addr");
-        let handle = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let mut request_buffer = [0u8; 4096];
-            let _ = stream.read(&mut request_buffer);
-
-            let response_body = json!({
-                "choices": [{
-                    "message": { "content": "ok" }
-                }],
-                "usage": {
-                    "prompt_tokens": 1000,
-                    "completion_tokens": 25,
-                    "prompt_tokens_details": {
-                        "cached_tokens": 800
-                    }
+        let response_body = json!({
+            "choices": [{
+                "message": { "content": "ok" }
+            }],
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 25,
+                "prompt_tokens_details": {
+                    "cached_tokens": 800
                 }
-            })
-            .to_string();
-
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                response_body.len(),
-                response_body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("write response");
+            }
         });
 
-        let client = Client::builder().build().expect("client");
-        let url = format!("http://{}/v1/chat/completions", addr);
-        let messages = vec![LlmMessage {
-            role: "user".to_string(),
-            content: json!("hello"),
-        }];
-        let result = complete_openai_compatible_with_options(
-            &client,
-            None,
-            &url,
-            "gpt-5-mini",
-            &messages,
-            None,
-        )
-        .expect("completion");
+        let result = parse_openai_compatible_response(&response_body);
         let usage = result.usage.expect("usage");
         assert_eq!(usage.prompt_tokens, 1000);
         assert_eq!(usage.completion_tokens, 25);
         assert_eq!(usage.cached_prompt_tokens, 800);
-
-        handle.join().expect("join server");
+        assert_eq!(result.content, "ok");
     }
 
     #[test]

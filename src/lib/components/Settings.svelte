@@ -11,12 +11,19 @@
   let { showClose = false, onClose }: { showClose?: boolean; onClose?: () => void } = $props();
 
   const VAULT_ROOT_KEY = "plugins.files.vault_root";
+  const WORK_ROOT_KEY = "plugins.files.work_root";
   let vaultRoot = $state("");
   let savedRoot = $state<string | null>(null);
   let isLoading = $state(true);
   let isSaving = $state(false);
   let statusMessage = $state("");
   let statusTone = $state<"idle" | "success" | "error">("idle");
+  let workRoot = $state("");
+  let savedWorkRoot = $state<string | null>(null);
+  let workLoading = $state(true);
+  let workSaving = $state(false);
+  let workStatusMessage = $state("");
+  let workStatusTone = $state<"idle" | "success" | "error">("idle");
 
   let tools = $state<ToolMetadata[]>([]);
   let toolsLoading = $state(true);
@@ -35,6 +42,7 @@
     }
     if (activeTab === "vault") {
       loadVaultRoot();
+      loadWorkRoot();
     }
   });
 
@@ -59,6 +67,21 @@
     }
   }
 
+  async function loadWorkRoot() {
+    workLoading = true;
+    try {
+      savedWorkRoot = await backend.getPreference(WORK_ROOT_KEY);
+      workRoot = savedWorkRoot ?? "";
+      workStatusMessage = "";
+      workStatusTone = "idle";
+    } catch (error) {
+      workStatusMessage = "Failed to load work directory.";
+      workStatusTone = "error";
+    } finally {
+      workLoading = false;
+    }
+  }
+
   async function browseVaultRoot() {
     const selected = await open({
       directory: true,
@@ -68,6 +91,18 @@
       vaultRoot = selected;
       statusMessage = "";
       statusTone = "idle";
+    }
+  }
+
+  async function browseWorkRoot() {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+    });
+    if (typeof selected === "string") {
+      workRoot = selected;
+      workStatusMessage = "";
+      workStatusTone = "idle";
     }
   }
 
@@ -90,6 +125,24 @@
       statusTone = "error";
     } finally {
       isSaving = false;
+    }
+  }
+
+  async function saveWorkRoot() {
+    const trimmed = workRoot.trim();
+    workSaving = true;
+    try {
+      await backend.setPreference(WORK_ROOT_KEY, trimmed);
+      savedWorkRoot = trimmed;
+      workStatusMessage = trimmed
+        ? "Work directory saved."
+        : "Work directory reset to default.";
+      workStatusTone = "success";
+    } catch (error) {
+      workStatusMessage = "Failed to save work directory.";
+      workStatusTone = "error";
+    } finally {
+      workSaving = false;
     }
   }
 
@@ -436,6 +489,48 @@
                 }`}
               >
                 {statusMessage}
+              </p>
+            {/if}
+          </div>
+        </div>
+
+        <div class="grid grid-cols-[160px_1fr] gap-4 items-start">
+          <div>
+            <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Work directory</p>
+            <p class="text-[11px] text-muted-foreground/70 mt-1">
+              Default download location when no vault path is provided.
+            </p>
+          </div>
+          <div class="space-y-2">
+            <div class="flex flex-wrap gap-2 items-center">
+              <Input
+                placeholder={workLoading ? "Loading..." : "/path/to/your/work"}
+                bind:value={workRoot}
+                class="h-8 text-xs flex-1 min-w-[240px] bg-white/5 border-white/10"
+                readonly={workLoading}
+              />
+              <Button variant="outline" size="sm" onclick={browseWorkRoot} disabled={workLoading}>
+                Browse
+              </Button>
+              <Button size="sm" onclick={saveWorkRoot} disabled={workLoading || workSaving}>
+                {workSaving ? "Saving..." : "Save"}
+              </Button>
+            </div>
+            <p class="text-[11px] text-muted-foreground">
+              Current value:
+              <span class="font-mono">{savedWorkRoot || "Default (cwd)"}</span>
+            </p>
+            {#if workStatusMessage}
+              <p
+                class={`text-[11px] ${
+                  workStatusTone === "success"
+                    ? "text-emerald-400"
+                    : workStatusTone === "error"
+                      ? "text-red-400"
+                      : "text-muted-foreground"
+                }`}
+              >
+                {workStatusMessage}
               </p>
             {/if}
           </div>

@@ -1,5 +1,5 @@
 use crate::db::Db;
-use crate::tools::vault::{ensure_parent_dirs, resolve_vault_path};
+use crate::tools::vault::{ensure_parent_dirs, get_vault_root, get_work_root, resolve_root_path};
 use crate::tools::{
     ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode,
 };
@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 const VAULT_PATH_NOTE: &str =
-    "Paths are relative to the vault root (use \".\" for root; no absolute paths).";
+    "Paths are relative to the selected root (default vault; use root=\"work\" for work directory; use \".\" for root; no absolute paths).";
 const DEFAULT_READ_MAX_LINES: usize = 200;
 const DEFAULT_READ_MAX_CHARS: usize = 20_000;
 
@@ -47,6 +47,7 @@ fn register_list_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String>
         args_schema: json!({
             "type": "object",
             "properties": {
+                "root": { "type": "string", "enum": ["vault", "work"] },
                 "path": { "type": "string" },
                 "depth": { "type": "integer", "minimum": 0 },
                 "include_files": { "type": "boolean" },
@@ -88,19 +89,24 @@ fn register_list_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String>
             .get("include_dirs")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
+        let root = parse_root_arg(&args)?;
         let requested_path = optional_string_arg(&args, "path").unwrap_or_default();
-        let vault_root = crate::tools::vault::get_vault_root(&db)?;
+        let base_root = match root {
+            "vault" => get_vault_root(&db)?,
+            "work" => get_work_root(&db)?,
+            _ => return Err(ToolError::new("Invalid root; expected 'vault' or 'work'")),
+        };
         let (root_path, display_path) = if requested_path.trim().is_empty() {
-            let display = crate::tools::vault::to_display_path(&vault_root, &vault_root);
+            let display = crate::tools::vault::to_display_path(&base_root, &base_root);
             let display = if display.is_empty() {
                 ".".to_string()
             } else {
                 display
             };
-            (vault_root.clone(), display)
+            (base_root.clone(), display)
         } else {
-            let vault_path = resolve_vault_path(&db, &requested_path)?;
-            (vault_path.full_path, vault_path.display_path)
+            let resolved = resolve_root_path(&db, root, &requested_path)?;
+            (resolved.full_path, resolved.display_path)
         };
 
         if !root_path.is_dir() {
@@ -109,7 +115,7 @@ fn register_list_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String>
 
         let mut entries: Vec<Value> = Vec::new();
         list_dir(
-            &vault_root,
+            &base_root,
             &root_path,
             depth,
             include_files,
@@ -142,6 +148,7 @@ fn register_read_tool(
         args_schema: json!({
             "type": "object",
             "properties": {
+                "root": { "type": "string", "enum": ["vault", "work"] },
                 "path": { "type": "string" }
             },
             "required": ["path"],
@@ -161,12 +168,13 @@ fn register_read_tool(
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let path = require_string_arg(&args, "path")?;
-        let vault_path = resolve_vault_path(&db, &path)?;
-        let content = fs::read_to_string(&vault_path.full_path)
+        let resolved = resolve_root_path(&db, root, &path)?;
+        let content = fs::read_to_string(&resolved.full_path)
             .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))?;
         Ok(json!({
-            "path": vault_path.display_path,
+            "path": resolved.display_path,
             "content": content
         }))
     });
@@ -187,6 +195,7 @@ fn register_read_range_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
         args_schema: json!({
             "type": "object",
             "properties": {
+                "root": { "type": "string", "enum": ["vault", "work"] },
                 "path": { "type": "string" },
                 "start_line": { "type": "integer", "minimum": 1 },
                 "end_line": { "type": "integer", "minimum": 1 },
@@ -213,6 +222,7 @@ fn register_read_range_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let path = require_string_arg(&args, "path")?;
         let start_line = args.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
         if start_line == 0 {
@@ -246,8 +256,8 @@ fn register_read_range_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
         let requested_end_line =
             end_line.unwrap_or_else(|| start_line.saturating_add(max_lines.saturating_sub(1)));
 
-        let vault_path = resolve_vault_path(&db, &path)?;
-        let file = fs::File::open(&vault_path.full_path)
+        let resolved = resolve_root_path(&db, root, &path)?;
+        let file = fs::File::open(&resolved.full_path)
             .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))?;
         let mut reader = BufReader::new(file);
 
@@ -297,7 +307,7 @@ fn register_read_range_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), S
         let end_line_actual = last_line_included.unwrap_or(start_line);
 
         Ok(json!({
-            "path": vault_path.display_path,
+            "path": resolved.display_path,
             "start_line": start_line as i64,
             "end_line": end_line_actual as i64,
             "content": content,
@@ -321,6 +331,7 @@ fn register_search_replace_tool(registry: &mut ToolRegistry, db: Db) -> Result<(
         args_schema: json!({
             "type": "object",
             "properties": {
+                "root": { "type": "string", "enum": ["vault", "work"] },
                 "path": { "type": "string" },
                 "query": { "type": "string" },
                 "replace": { "type": "string" },
@@ -347,17 +358,18 @@ fn register_search_replace_tool(registry: &mut ToolRegistry, db: Db) -> Result<(
 
     let handler_db = db.clone();
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let edit = parse_search_replace_args(&args)?;
-        let vault_path = resolve_vault_path(&handler_db, &edit.path)?;
-        let original = fs::read_to_string(&vault_path.full_path)
+        let resolved = resolve_root_path(&handler_db, root, &edit.path)?;
+        let original = fs::read_to_string(&resolved.full_path)
             .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))?;
         let (updated, replacements) = apply_search_replace(&original, &edit)?;
         if replacements > 0 {
-            fs::write(&vault_path.full_path, updated.as_bytes())
+            fs::write(&resolved.full_path, updated.as_bytes())
                 .map_err(|err| ToolError::new(format!("Failed to write file: {err}")))?;
         }
         Ok(json!({
-            "path": vault_path.display_path,
+            "path": resolved.display_path,
             "updated": replacements > 0,
             "replacements": replacements as i64
         }))
@@ -365,12 +377,13 @@ fn register_search_replace_tool(registry: &mut ToolRegistry, db: Db) -> Result<(
 
     let preview_db = db;
     let preview = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let edit = parse_search_replace_args(&args)?;
-        let vault_path = resolve_vault_path(&preview_db, &edit.path)?;
-        let original = fs::read_to_string(&vault_path.full_path)
+        let resolved = resolve_root_path(&preview_db, root, &edit.path)?;
+        let original = fs::read_to_string(&resolved.full_path)
             .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))?;
         let (updated, replacements) = apply_search_replace(&original, &edit)?;
-        let mut preview = build_diff_preview(&vault_path.display_path, &original, &updated);
+        let mut preview = build_diff_preview(&resolved.display_path, &original, &updated);
         if let Some(obj) = preview.as_object_mut() {
             obj.insert("replacements".to_string(), json!(replacements as i64));
             if replacements == 0 {
@@ -399,6 +412,7 @@ fn register_write_tool(
         args_schema: json!({
             "type": "object",
             "properties": {
+                "root": { "type": "string", "enum": ["vault", "work"] },
                 "path": { "type": "string" },
                 "content": { "type": "string" }
             },
@@ -420,24 +434,26 @@ fn register_write_tool(
 
     let handler_db = db.clone();
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let (path, content) = parse_path_content_args(&args)?;
-        let vault_path = resolve_vault_path(&handler_db, &path)?;
-        ensure_parent_dirs(&vault_path.full_path)?;
-        fs::write(&vault_path.full_path, content.as_bytes())
+        let resolved = resolve_root_path(&handler_db, root, &path)?;
+        ensure_parent_dirs(&resolved.full_path)?;
+        fs::write(&resolved.full_path, content.as_bytes())
             .map_err(|err| ToolError::new(format!("Failed to write file: {err}")))?;
         Ok(json!({
-            "path": vault_path.display_path,
+            "path": resolved.display_path,
             "bytes_written": content.len()
         }))
     });
 
     let preview_db = db;
     let preview = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let (path, content) = parse_path_content_args(&args)?;
-        let vault_path = resolve_vault_path(&preview_db, &path)?;
-        let before = read_optional_file(&vault_path.full_path)?;
+        let resolved = resolve_root_path(&preview_db, root, &path)?;
+        let before = read_optional_file(&resolved.full_path)?;
         Ok(build_diff_preview(
-            &vault_path.display_path,
+            &resolved.display_path,
             &before,
             &content,
         ))
@@ -457,6 +473,7 @@ fn register_append_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
         args_schema: json!({
             "type": "object",
             "properties": {
+                "root": { "type": "string", "enum": ["vault", "work"] },
                 "path": { "type": "string" },
                 "content": { "type": "string" }
             },
@@ -477,18 +494,19 @@ fn register_append_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
     };
 
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let (path, content) = parse_path_content_args(&args)?;
-        let vault_path = resolve_vault_path(&db, &path)?;
-        ensure_parent_dirs(&vault_path.full_path)?;
+        let resolved = resolve_root_path(&db, root, &path)?;
+        ensure_parent_dirs(&resolved.full_path)?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&vault_path.full_path)
+            .open(&resolved.full_path)
             .map_err(|err| ToolError::new(format!("Failed to open file: {err}")))?;
         file.write_all(content.as_bytes())
             .map_err(|err| ToolError::new(format!("Failed to append file: {err}")))?;
         Ok(json!({
-            "path": vault_path.display_path,
+            "path": resolved.display_path,
             "bytes_written": content.len()
         }))
     });
@@ -507,6 +525,7 @@ fn register_create_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
         args_schema: json!({
             "type": "object",
             "properties": {
+                "root": { "type": "string", "enum": ["vault", "work"] },
                 "path": { "type": "string" },
                 "content": { "type": "string" }
             },
@@ -528,38 +547,40 @@ fn register_create_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
 
     let handler_db = db.clone();
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let path = require_string_arg(&args, "path")?;
         let content = optional_string_arg(&args, "content");
-        let vault_path = resolve_vault_path(&handler_db, &path)?;
-        if vault_path.full_path.exists() {
+        let resolved = resolve_root_path(&handler_db, root, &path)?;
+        if resolved.full_path.exists() {
             return Err(ToolError::new("File already exists"));
         }
-        ensure_parent_dirs(&vault_path.full_path)?;
+        ensure_parent_dirs(&resolved.full_path)?;
         match content {
             Some(content) => {
-                fs::write(&vault_path.full_path, content.as_bytes())
+                fs::write(&resolved.full_path, content.as_bytes())
                     .map_err(|err| ToolError::new(format!("Failed to create file: {err}")))?;
             }
             None => {
-                fs::File::create(&vault_path.full_path)
+                fs::File::create(&resolved.full_path)
                     .map_err(|err| ToolError::new(format!("Failed to create file: {err}")))?;
             }
         }
         Ok(json!({
-            "path": vault_path.display_path,
+            "path": resolved.display_path,
             "created": true
         }))
     });
 
     let preview_db = db;
     let preview = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let path = require_string_arg(&args, "path")?;
         let content = optional_string_arg(&args, "content").unwrap_or_default();
-        let vault_path = resolve_vault_path(&preview_db, &path)?;
-        if vault_path.full_path.exists() {
+        let resolved = resolve_root_path(&preview_db, root, &path)?;
+        if resolved.full_path.exists() {
             return Err(ToolError::new("File already exists"));
         }
-        Ok(build_diff_preview(&vault_path.display_path, "", &content))
+        Ok(build_diff_preview(&resolved.display_path, "", &content))
     });
 
     registry.register(ToolDefinition {
@@ -576,6 +597,7 @@ fn register_edit_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String>
         args_schema: json!({
             "type": "object",
             "properties": {
+                "root": { "type": "string", "enum": ["vault", "work"] },
                 "path": { "type": "string" },
                 "start_line": { "type": "integer", "minimum": 1 },
                 "end_line": { "type": "integer", "minimum": 1 },
@@ -599,28 +621,30 @@ fn register_edit_tool(registry: &mut ToolRegistry, db: Db) -> Result<(), String>
 
     let handler_db = db.clone();
     let handler = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let edit = parse_edit_args(&args)?;
-        let vault_path = resolve_vault_path(&handler_db, &edit.path)?;
-        let original = fs::read_to_string(&vault_path.full_path)
+        let resolved = resolve_root_path(&handler_db, root, &edit.path)?;
+        let original = fs::read_to_string(&resolved.full_path)
             .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))?;
         let updated = apply_line_edit(&original, edit.start_line, edit.end_line, &edit.content)?;
-        fs::write(&vault_path.full_path, updated.as_bytes())
+        fs::write(&resolved.full_path, updated.as_bytes())
             .map_err(|err| ToolError::new(format!("Failed to edit file: {err}")))?;
         Ok(json!({
-            "path": vault_path.display_path,
+            "path": resolved.display_path,
             "updated": true
         }))
     });
 
     let preview_db = db;
     let preview = Arc::new(move |args: Value, _ctx: ToolExecutionContext| {
+        let root = parse_root_arg(&args)?;
         let edit = parse_edit_args(&args)?;
-        let vault_path = resolve_vault_path(&preview_db, &edit.path)?;
-        let original = fs::read_to_string(&vault_path.full_path)
+        let resolved = resolve_root_path(&preview_db, root, &edit.path)?;
+        let original = fs::read_to_string(&resolved.full_path)
             .map_err(|err| ToolError::new(format!("Failed to read file: {err}")))?;
         let updated = apply_line_edit(&original, edit.start_line, edit.end_line, &edit.content)?;
         Ok(build_diff_preview(
-            &vault_path.display_path,
+            &resolved.display_path,
             &original,
             &updated,
         ))
@@ -660,6 +684,17 @@ fn optional_string_arg(args: &Value, key: &str) -> Option<String> {
     args.get(key)
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
+}
+
+fn parse_root_arg(args: &Value) -> Result<&str, ToolError> {
+    let root = args
+        .get("root")
+        .and_then(|value| value.as_str())
+        .unwrap_or("vault");
+    match root {
+        "vault" | "work" => Ok(root),
+        _ => Err(ToolError::new("Invalid root; expected 'vault' or 'work'")),
+    }
 }
 
 fn parse_path_content_args(args: &Value) -> Result<(String, String), ToolError> {

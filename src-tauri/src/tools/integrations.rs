@@ -2,6 +2,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use reqwest::blocking::Client;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
@@ -12,6 +13,9 @@ use crate::db::{
     UpdateIntegrationConnectionInput,
 };
 use crate::oauth::{google_oauth_config, google_oauth_env_configured, refresh_google_token};
+use crate::tools::vault::ensure_parent_dirs;
+
+const DEFAULT_MAX_GMAIL_ATTACHMENT_BYTES: usize = 26_214_400; // 25 MiB
 
 pub fn register_integration_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     if google_oauth_env_configured() {
@@ -209,6 +213,7 @@ fn get_google_access_token(
 fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     let db_for_list = db.clone();
     let db_for_get = db.clone();
+    let db_for_download = db.clone();
     let db_for_labels = db.clone();
     let db_for_send = db.clone();
     let list_threads = ToolDefinition {
@@ -344,6 +349,206 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
             Ok(minify_gmail_thread(raw, mode, max_messages))
+        }),
+        preview: None,
+    };
+
+    let download_attachment = ToolDefinition {
+        metadata: ToolMetadata {
+            name: "gmail.download_attachment".to_string(),
+            description:
+                "Download a Gmail attachment to the resolved path (work root by default; use path starting with 'vault' to target the vault)."
+                    .to_string(),
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Gmail account."
+                    },
+                    "message_id": { "type": "string" },
+                    "attachment_id": { "type": "string" },
+                    "path": { "type": "string" },
+                    "filename": { "type": "string" },
+                    "mime_type": { "type": "string" },
+                    "max_bytes": { "type": "integer", "minimum": 1 },
+                    "rename_strategy": { "type": "string", "enum": ["safe", "overwrite"] }
+                },
+                "required": ["message_id", "attachment_id"]
+            }),
+            result_schema: json!({
+                "type": "object",
+                "properties": {
+                    "message_id": { "type": "string" },
+                    "attachment_id": { "type": "string" },
+                    "filename": { "type": "string" },
+                    "root": { "type": "string" },
+                    "path": { "type": "string" },
+                    "bytes_written": { "type": "integer" },
+                    "size": { "type": "integer" },
+                    "mime_type": { "type": "string" }
+                }
+            }),
+            requires_approval: false,
+            result_mode: ToolResultMode::Auto,
+        },
+        handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let message_id = args
+                .get("message_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if message_id.is_empty() {
+                return Err(ToolError::new("Missing 'message_id'"));
+            }
+            let attachment_id = args
+                .get("attachment_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if attachment_id.is_empty() {
+                return Err(ToolError::new("Missing 'attachment_id'"));
+            }
+
+            let mut filename = args
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let mime_type = args
+                .get("mime_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let output_dir = args
+                .get("output_dir")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if output_dir.is_empty() {
+                return Err(ToolError::new("Missing 'output_dir'"));
+            }
+            let display_dir = args
+                .get("display_dir")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let root = args
+                .get("root")
+                .and_then(|v| v.as_str())
+                .unwrap_or("work")
+                .trim()
+                .to_string();
+            let rename_strategy = args
+                .get("rename_strategy")
+                .and_then(|v| v.as_str())
+                .unwrap_or("safe");
+            let max_bytes = args
+                .get("max_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(DEFAULT_MAX_GMAIL_ATTACHMENT_BYTES as u64) as usize;
+
+            if filename.is_empty() {
+                filename = format!("attachment-{attachment_id}");
+            }
+            if !has_extension(&filename) && !mime_type.is_empty() {
+                if let Some(ext) = extension_from_mime_type(&mime_type) {
+                    filename = format!("{filename}.{ext}");
+                }
+            }
+            filename = sanitize_segment(&filename);
+            if filename.is_empty() {
+                filename = format!("attachment-{attachment_id}");
+            }
+
+            let connection = get_connection(&db_for_download, connection_id, "gmail")?;
+            let token = get_google_access_token(&db_for_download, &connection)?;
+
+            let url = format!(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}"
+            );
+            let client = Client::new();
+            let response = client
+                .get(url)
+                .bearer_auth(token)
+                .send()
+                .map_err(|err| ToolError::new(format!("Failed to call Gmail API: {err}")))?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(ToolError::new(format!("Gmail API error: HTTP {status}")));
+            }
+
+            let payload = response
+                .json::<Value>()
+                .map_err(|err| ToolError::new(format!("Failed to parse Gmail response: {err}")))?;
+            let data = payload
+                .get("data")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if data.is_empty() {
+                return Err(ToolError::new("Gmail attachment payload missing data"));
+            }
+            let size = payload.get("size").and_then(|v| v.as_i64()).unwrap_or(-1);
+            if size >= 0 && size as usize > max_bytes {
+                return Err(ToolError::new("Attachment exceeds max_bytes"));
+            }
+            let bytes = URL_SAFE_NO_PAD.decode(data.as_bytes()).map_err(|err| {
+                ToolError::new(format!("Failed to decode Gmail attachment: {err}"))
+            })?;
+            if bytes.len() > max_bytes {
+                return Err(ToolError::new("Attachment exceeds max_bytes"));
+            }
+
+            let base_dir = PathBuf::from(&output_dir);
+            if base_dir.exists() && !base_dir.is_dir() {
+                return Err(ToolError::new("output_dir must be a directory"));
+            }
+            std::fs::create_dir_all(&base_dir)
+                .map_err(|err| ToolError::new(format!("Failed to create output directory: {err}")))?;
+
+            let (target_path, display_path) = if rename_strategy == "safe" {
+                ensure_unique_path(&base_dir, &display_dir, &filename)?
+            } else {
+                let target_path = base_dir.join(&filename);
+                let display_path = join_display_path(&display_dir, &filename);
+                (target_path, display_path)
+            };
+            ensure_parent_dirs(&target_path)?;
+            std::fs::write(&target_path, &bytes)
+                .map_err(|err| ToolError::new(format!("Failed to write attachment: {err}")))?;
+
+            let final_filename = target_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&filename)
+                .to_string();
+
+            let mut result = serde_json::Map::new();
+            result.insert("message_id".to_string(), json!(message_id));
+            result.insert("attachment_id".to_string(), json!(attachment_id));
+            result.insert("filename".to_string(), json!(final_filename));
+            result.insert("root".to_string(), json!(root));
+            result.insert("path".to_string(), json!(display_path));
+            result.insert("bytes_written".to_string(), json!(bytes.len() as i64));
+            if size >= 0 {
+                result.insert("size".to_string(), json!(size));
+            }
+            if !mime_type.is_empty() {
+                result.insert("mime_type".to_string(), json!(mime_type));
+            }
+
+            Ok(Value::Object(result))
         }),
         preview: None,
     };
@@ -498,6 +703,7 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
 
     registry.register(list_threads)?;
     registry.register(get_thread)?;
+    registry.register(download_attachment)?;
     registry.register(list_labels)?;
     registry.register(send_message)?;
     Ok(())
@@ -645,6 +851,78 @@ fn decode_gmail_body(data: &str) -> Option<String> {
     }
     let decoded = URL_SAFE_NO_PAD.decode(data.as_bytes()).ok()?;
     String::from_utf8(decoded).ok()
+}
+
+fn ensure_unique_path(
+    base_dir: &PathBuf,
+    display_dir: &str,
+    filename: &str,
+) -> Result<(PathBuf, String), ToolError> {
+    let target = base_dir.join(filename);
+    if !target.exists() {
+        return Ok((target, join_display_path(display_dir, filename)));
+    }
+    let (stem, ext) = split_extension(filename);
+    for counter in 1..=500 {
+        let candidate = if ext.is_empty() {
+            format!("{stem}-{counter}")
+        } else {
+            format!("{stem}-{counter}.{ext}")
+        };
+        let candidate_path = base_dir.join(&candidate);
+        if !candidate_path.exists() {
+            let display_path = join_display_path(display_dir, &candidate);
+            return Ok((candidate_path, display_path));
+        }
+    }
+    Err(ToolError::new("Failed to generate unique filename"))
+}
+
+fn join_display_path(display_dir: &str, filename: &str) -> String {
+    let trimmed = display_dir.trim();
+    if trimmed.is_empty() {
+        filename.to_string()
+    } else {
+        format!("{}/{}", trimmed.trim_end_matches('/'), filename)
+    }
+}
+
+fn split_extension(file_name: &str) -> (String, String) {
+    let path = PathBuf::from(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(file_name)
+        .to_string();
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    (stem, ext)
+}
+
+fn sanitize_segment(segment: &str) -> String {
+    let mut sanitized = String::new();
+    for ch in segment.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    sanitized.trim_matches('_').to_string()
+}
+
+fn has_extension(name: &str) -> bool {
+    PathBuf::from(name).extension().is_some()
+}
+
+fn extension_from_mime_type(mime_type: &str) -> Option<String> {
+    let mime = mime_type.parse::<mime::Mime>().ok()?;
+    mime_guess::get_mime_extensions(&mime)
+        .and_then(|exts| exts.first())
+        .map(|ext| ext.to_string())
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1386,6 +1664,7 @@ mod tests {
         let tool_names = [
             "gmail.list_threads",
             "gmail.get_thread",
+            "gmail.download_attachment",
             "gmail.list_labels",
             "gmail.send_message",
             "gcal.list_calendars",
@@ -1420,6 +1699,10 @@ mod tests {
         let cases = [
             ("gmail.list_threads", json!({})),
             ("gmail.get_thread", json!({ "thread_id": "thread-123" })),
+            (
+                "gmail.download_attachment",
+                json!({ "message_id": "message-123", "attachment_id": "att-1" }),
+            ),
             (
                 "gmail.send_message",
                 json!({
