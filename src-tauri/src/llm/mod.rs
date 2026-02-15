@@ -1656,7 +1656,15 @@ mod tests {
             }
         });
         let built = build_openai_output_schema(Some(source.clone())).expect("output");
-        assert_eq!(built, source);
+        let expected = json!({
+            "type": "json_schema",
+            "json_schema": {
+                "schema": source.get("schema").cloned().expect("schema"),
+                "name": "response",
+                "strict": true
+            }
+        });
+        assert_eq!(built, expected);
     }
 
     #[test]
