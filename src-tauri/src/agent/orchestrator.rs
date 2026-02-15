@@ -2661,6 +2661,7 @@ fn format_tool_execution_summary_block(exec: &ToolExecutionRecord) -> String {
         })
         .unwrap_or_else(|| "none".to_string());
 
+    let is_persist = resolved_output_mode == "persist";
     let metadata_value = if let Some(value) = exec
         .result
         .as_ref()
@@ -2669,9 +2670,18 @@ fn format_tool_execution_summary_block(exec: &ToolExecutionRecord) -> String {
     {
         value.clone()
     } else if let Some(value) = exec.result.as_ref() {
-        compute_output_metadata(value)
+        if is_persist {
+            Value::Null
+        } else {
+            compute_output_metadata(value)
+        }
     } else {
         Value::Null
+    };
+    let metadata_value = if is_persist {
+        strip_metadata_id_hints(&metadata_value)
+    } else {
+        metadata_value
     };
     let metadata_summary = if metadata_value.is_null() {
         "none".to_string()
@@ -2682,39 +2692,8 @@ fn format_tool_execution_summary_block(exec: &ToolExecutionRecord) -> String {
         )
     };
 
-    let preview = if !exec.success {
-        let error = exec.error.as_deref().unwrap_or("Tool execution failed");
-        format!(
-            "Error: {}",
-            truncate_with_notice(error, CONTROLLER_TOOL_SUMMARY_MAX_RESULT_CHARS)
-        )
-    } else if let Some(value) = exec.result.as_ref() {
-        if let Some(preview) = value.get("preview").and_then(|value| value.as_str()) {
-            let mut summary =
-                truncate_with_notice(preview, CONTROLLER_TOOL_SUMMARY_MAX_RESULT_CHARS);
-            if value
-                .get("preview_truncated")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-            {
-                summary.push_str(" ...(truncated)");
-            }
-            summary
-        } else {
-            let (summary, truncated) =
-                summarize_tool_output_value(value, CONTROLLER_TOOL_SUMMARY_MAX_RESULT_CHARS);
-            if truncated {
-                format!("{summary} ...(truncated)")
-            } else {
-                summary
-            }
-        }
-    } else {
-        "none".to_string()
-    };
-
-    format!(
-        "Tool: {} | ExecutionId: {} | Success: {} | RequestedOutputMode: {} | ResolvedOutputMode: {} | ForcedPersist: {} | ForcedReason: {} | OutputRef: {} | Args: {} | Metadata: {} | Preview: {}",
+    let mut summary = format!(
+        "Tool: {} | ExecutionId: {} | Success: {} | RequestedOutputMode: {} | ResolvedOutputMode: {} | ForcedPersist: {} | ForcedReason: {} | OutputRef: {} | Args: {} | Metadata: {}",
         exec.tool_name,
         exec.execution_id,
         exec.success,
@@ -2724,9 +2703,34 @@ fn format_tool_execution_summary_block(exec: &ToolExecutionRecord) -> String {
         forced_reason,
         output_ref,
         args,
-        metadata_summary,
-        preview
-    )
+        metadata_summary
+    );
+
+    if !exec.success {
+        let error = exec.error.as_deref().unwrap_or("Tool execution failed");
+        summary.push_str(" | Error: ");
+        summary.push_str(&truncate_with_notice(
+            error,
+            CONTROLLER_TOOL_SUMMARY_MAX_RESULT_CHARS,
+        ));
+        return summary;
+    }
+
+    if is_persist {
+        summary.push_str(
+            " | Note: Exact values require tool_outputs.extract (omit id to hydrate latest output_ref).",
+        );
+        return summary;
+    }
+
+    let output_json = exec
+        .result
+        .as_ref()
+        .map(|value| serde_json::to_string(value).unwrap_or_else(|_| value.to_string()))
+        .unwrap_or_else(|| "none".to_string());
+    summary.push_str(" | Output: ");
+    summary.push_str(&output_json);
+    summary
 }
 
 fn format_tool_execution_batch_summary_line(exec: &ToolExecutionRecord) -> String {
@@ -2757,6 +2761,17 @@ fn summarize_tool_args(args: &Value, max_len: usize) -> String {
     }
     let truncated: String = raw.chars().take(max_len).collect();
     format!("{truncated}...")
+}
+
+fn strip_metadata_id_hints(metadata: &Value) -> Value {
+    match metadata {
+        Value::Object(map) => {
+            let mut cleaned = map.clone();
+            cleaned.remove("id_hints");
+            Value::Object(cleaned)
+        }
+        other => other.clone(),
+    }
 }
 
 fn should_persist_tool_output(
@@ -4085,17 +4100,21 @@ extra suffix"#;
         assert!(summary.contains("RequestedOutputMode: persist"));
         assert!(summary.contains("ResolvedOutputMode: persist"));
         assert!(summary.contains("OutputRef: artifact-123"));
+        assert!(!summary.contains("preview"));
+        assert!(summary.contains("Exact values require tool_outputs.extract"));
     }
 
     #[test]
-    fn format_tool_execution_summary_block_truncates_large_inline_payload() {
+    fn format_tool_execution_summary_block_includes_full_inline_payload() {
+        let payload = json!({
+            "thread_id": "19c4ca084d0de349",
+            "subject": "Hello"
+        });
         let exec = ToolExecutionRecord {
             execution_id: "exec-2".to_string(),
             tool_name: "files.read".to_string(),
             args: json!({ "path": "/tmp/notes.txt" }),
-            result: Some(json!({
-                "content": "x".repeat(CONTROLLER_TOOL_SUMMARY_MAX_RESULT_CHARS * 3)
-            })),
+            result: Some(payload.clone()),
             success: true,
             error: None,
             duration_ms: 8,
@@ -4109,7 +4128,8 @@ extra suffix"#;
 
         let summary = format_tool_execution_summary_block(&exec);
         assert!(summary.contains("ResolvedOutputMode: inline"));
-        assert!(summary.contains("...(truncated)"));
+        let expected_json = serde_json::to_string(&payload).expect("serialize payload");
+        assert!(summary.contains(&expected_json));
     }
 
     #[test]
@@ -4161,6 +4181,16 @@ extra suffix"#;
 
         let result = validate_tool_execution_preflight("tool_outputs.extract", &args);
         assert!(result.is_ok(), "missing id should be hydrated later");
+    }
+
+    #[test]
+    fn controller_prompt_includes_no_id_invention_rule() {
+        assert!(
+            CONTROLLER_PROMPT_BASE.contains(
+                "If output is persisted, do not invent IDs or values; call tool_outputs.extract to obtain exact values."
+            ),
+            "controller prompt must include persisted output rule"
+        );
     }
 
     // ---- Phase 3: Schema hardening regression tests ----

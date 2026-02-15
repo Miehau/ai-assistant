@@ -564,24 +564,25 @@ pub trait BranchOperations: DbOperations {
 
     /// Repair message tree by adding orphaned messages to their conversation's main branch
     fn repair_message_tree(&self) -> Result<usize, DatabaseError> {
-        let binding = self.conn();
-        let conn = binding.lock().unwrap();
+        // Get all orphaned messages grouped by conversation.
+        // Scope the DB lock to avoid re-entrant locking when repairing conversations.
+        let orphaned: Vec<(String, String, i64)> = {
+            let binding = self.conn();
+            let conn = binding.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.conversation_id, m.created_at
+                 FROM messages m
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM message_tree mt WHERE mt.message_id = m.id
+                 )
+                 ORDER BY m.conversation_id, m.created_at",
+            )?;
 
-        // Get all orphaned messages grouped by conversation
-        let mut stmt = conn.prepare(
-            "SELECT m.id, m.conversation_id, m.created_at
-             FROM messages m
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM message_tree mt WHERE mt.message_id = m.id
-             )
-             ORDER BY m.conversation_id, m.created_at",
-        )?;
-
-        let orphaned: Vec<(String, String, i64)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-            .collect::<RusqliteResult<Vec<_>>>()?;
-
-        drop(stmt);
+            let rows = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<RusqliteResult<Vec<_>>>()?;
+            rows
+        };
 
         if orphaned.is_empty() {
             return Ok(0);
