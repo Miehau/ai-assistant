@@ -86,6 +86,20 @@ const cancelledAssistantMessageIds = new Set<string>();
 const TOOL_ACTIVITY_LIMIT = 8;
 const toolCallsByMessageId = new Map<string, Map<string, ToolCallRecord>>();
 
+function normalizeSuccess(value: unknown): boolean | undefined {
+  if (value === true || value === false) return value;
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1') return true;
+    if (normalized === 'false' || normalized === '0') return false;
+  }
+  return undefined;
+}
+
 export type ToolActivityEntry = {
   execution_id: string;
   tool_name: string;
@@ -114,12 +128,14 @@ function upsertToolCall(
   }
 
   const existing = entries.get(executionId);
+  const normalizedSuccess =
+    payload.success === undefined ? undefined : normalizeSuccess(payload.success as unknown);
   const next: ToolCallRecord = {
     execution_id: executionId,
     tool_name: payload.tool_name ?? existing?.tool_name ?? 'unknown',
     args: payload.args ?? existing?.args ?? {},
     result: payload.result ?? existing?.result,
-    success: payload.success ?? existing?.success,
+    success: normalizedSuccess ?? existing?.success,
     error: payload.error ?? existing?.error,
     duration_ms: payload.duration_ms ?? existing?.duration_ms,
     started_at: payload.started_at ?? existing?.started_at,
@@ -132,6 +148,19 @@ function upsertToolCall(
       msg.id === messageId ? { ...msg, tool_calls: getToolCallsForMessage(messageId) } : msg
     )
   );
+}
+
+function updateToolCallByExecutionId(
+  executionId: string,
+  payload: Partial<ToolCallRecord>
+): boolean {
+  let updated = false;
+  for (const [messageId, entries] of toolCallsByMessageId.entries()) {
+    if (!entries.has(executionId)) continue;
+    updated = true;
+    upsertToolCall(messageId, executionId, payload);
+  }
+  return updated;
 }
 
 function ensureAssistantMessageForToolExecution(messageId: string, timestamp: number) {
@@ -212,7 +241,8 @@ function upsertToolActivityFromExecution(execution: {
   timestamp_ms: number;
   error?: string | null;
 }) {
-  const status: ToolActivityEntry['status'] = execution.success ? 'completed' : 'failed';
+  const normalizedSuccess = normalizeSuccess(execution.success as unknown) ?? false;
+  const status: ToolActivityEntry['status'] = normalizedSuccess ? 'completed' : 'failed';
   toolActivity.update((entries) => {
     let updated = false;
     const next = entries.map((entry) => {
@@ -323,11 +353,12 @@ export async function startAgentEvents() {
       const isAssistant = payload.role !== 'user';
       if (isAssistant && payload.tool_executions && payload.tool_executions.length > 0) {
         for (const execution of payload.tool_executions) {
+          const normalizedSuccess = normalizeSuccess(execution.success as unknown);
           upsertToolCall(payload.message_id, execution.id, {
             tool_name: execution.tool_name,
             args: execution.parameters ?? {},
             result: execution.result,
-            success: execution.success,
+            success: normalizedSuccess ?? execution.success,
             error: execution.error ?? undefined,
             duration_ms: execution.duration_ms,
             completed_at: execution.timestamp_ms,
@@ -336,7 +367,7 @@ export async function startAgentEvents() {
           upsertToolActivityFromExecution({
             execution_id: execution.id,
             tool_name: execution.tool_name,
-            success: execution.success,
+            success: normalizedSuccess ?? execution.success,
             duration_ms: execution.duration_ms,
             timestamp_ms: execution.timestamp_ms,
             error: execution.error,
@@ -596,20 +627,24 @@ export async function startAgentEvents() {
         return;
       }
 
+      const normalizedSuccess = normalizeSuccess(payload.success as unknown);
+      const completionUpdate: Partial<ToolCallRecord> = {
+        tool_name: payload.tool_name,
+        result: payload.result,
+        error: payload.error,
+        duration_ms: payload.duration_ms,
+        completed_at: payload.timestamp_ms,
+        ...(normalizedSuccess !== undefined ? { success: normalizedSuccess } : {}),
+      };
+
       if (payload.message_id) {
         ensureAssistantMessageForToolExecution(payload.message_id, payload.timestamp_ms);
-        upsertToolCall(payload.message_id, payload.execution_id, {
-          tool_name: payload.tool_name,
-          result: payload.result,
-          success: payload.success,
-          error: payload.error,
-          duration_ms: payload.duration_ms,
-          completed_at: payload.timestamp_ms,
-        });
+        upsertToolCall(payload.message_id, payload.execution_id, completionUpdate);
       }
 
       toolActivity.update((entries) => {
-        const status: ToolActivityEntry['status'] = payload.success ? 'completed' : 'failed';
+        const status: ToolActivityEntry['status'] =
+          normalizedSuccess === undefined ? 'failed' : normalizedSuccess ? 'completed' : 'failed';
         let updated = false;
         const next = entries.map((entry) => {
           if (entry.execution_id !== payload.execution_id) {
@@ -639,6 +674,8 @@ export async function startAgentEvents() {
 
         return next.slice(0, TOOL_ACTIVITY_LIMIT);
       });
+
+      updateToolCallByExecutionId(payload.execution_id, completionUpdate);
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED) {
