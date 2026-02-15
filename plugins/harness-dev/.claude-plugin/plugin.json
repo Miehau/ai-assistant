@@ -1,0 +1,14 @@
+{
+  "name": "harness-dev",
+  "version": "1.0.0",
+  "description": "Harness Engineering workflow: invariant enforcement, entropy detection, progressive disclosure, and knowledge gardening for the AI agent codebase.",
+  "commands": ["commands/harness-dev.md"],
+  "agents": [
+    "agents/code-explorer.md",
+    "agents/code-architect.md",
+    "agents/code-reviewer.md",
+    "agents/invariant-enforcer.md",
+    "agents/entropy-scanner.md",
+    "agents/knowledge-gardener.md"
+  ]
+}
