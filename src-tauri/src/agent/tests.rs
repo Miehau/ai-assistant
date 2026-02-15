@@ -9,7 +9,7 @@ use std::sync::{
 use serde_json::{json, Value};
 
 use super::DynamicController;
-use crate::db::Db;
+use crate::db::{ConversationOperations, Db};
 use crate::events::EventBus;
 use crate::llm::{LlmMessage, StreamResult};
 use crate::tools::{
@@ -65,6 +65,8 @@ fn register_echo_tool(registry: &mut ToolRegistry) {
 
 fn build_controller(tool_registry: ToolRegistry) -> DynamicController {
     let db = setup_db();
+    db.get_or_create_conversation("conv-1")
+        .expect("create conversation");
     let event_bus = EventBus::new();
     let approvals = ApprovalStore::new();
     let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -150,8 +152,8 @@ fn controller_drops_oversized_tool_batch() {
     register_echo_tool(&mut registry);
 
     let mut controller = build_controller(registry);
-    controller.session.config.max_tool_calls_per_step = 1;
-    controller.cancel_flag.store(false, Ordering::Relaxed);
+    controller.test_session_mut().config.max_tool_calls_per_step = 1;
+    controller.test_cancel_flag().store(false, Ordering::Relaxed);
 
     let mut responses = VecDeque::from(vec![
         json!({
@@ -180,7 +182,7 @@ fn controller_drops_oversized_tool_batch() {
         .expect("run");
 
     let last = controller
-        .session
+        .test_session()
         .step_results
         .last()
         .expect("step result");
@@ -226,7 +228,7 @@ fn controller_rejects_invalid_args() {
         .expect("run");
 
     let last = controller
-        .session
+        .test_session()
         .step_results
         .last()
         .expect("step result");

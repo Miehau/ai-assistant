@@ -21,6 +21,7 @@ use crate::tools::{
     PendingToolApprovalInput, ToolApprovalDecision, ToolDefinition, ToolExecutionContext,
     ToolRegistry, ToolResultMode,
 };
+use crate::tools::{resolve_vault_path, resolve_work_path};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -620,6 +621,18 @@ impl DynamicController {
             self.last_step_result.as_ref(),
             &self.session.step_results,
         );
+        let args = match hydrate_download_path_for_execution(tool_name, args.clone(), &self.db) {
+            Ok(args) => args,
+            Err(err) => {
+                return Ok(self.build_preflight_failed_step_result(
+                    step_id,
+                    tool_name,
+                    args,
+                    iteration,
+                    err,
+                ));
+            }
+        };
 
         let tool = match self.tool_registry.get(tool_name) {
             Some(tool) => tool,
@@ -1167,6 +1180,27 @@ impl DynamicController {
             );
 
             let iteration = iteration_cursor;
+            let args = match hydrate_download_path_for_execution(&tool_name, args.clone(), &self.db)
+            {
+                Ok(args) => args,
+                Err(err) => {
+                    let failed = self.build_preflight_failed_step_result(
+                        step_id,
+                        &tool_name,
+                        args,
+                        iteration,
+                        err,
+                    );
+                    if let Some(exec) = failed.tool_executions.last() {
+                        results_summary.push(build_tool_batch_result_summary(exec));
+                        aggregated_tool_executions.push(exec.clone());
+                    }
+                    if first_error.is_none() {
+                        first_error = failed.error;
+                    }
+                    continue;
+                }
+            };
             let tool = match self.tool_registry.get(&tool_name) {
                 Some(tool) => tool.clone(),
                 None => {
@@ -1761,6 +1795,21 @@ impl DynamicController {
 
     pub fn requested_user_input(&self) -> bool {
         self.requested_user_input
+    }
+}
+
+#[cfg(test)]
+impl DynamicController {
+    pub(super) fn test_session_mut(&mut self) -> &mut AgentSession {
+        &mut self.session
+    }
+
+    pub(super) fn test_session(&self) -> &AgentSession {
+        &self.session
+    }
+
+    pub(super) fn test_cancel_flag(&self) -> &Arc<AtomicBool> {
+        &self.cancel_flag
     }
 }
 
@@ -2423,6 +2472,87 @@ fn normalize_tool_args(args: Value) -> Value {
         }
         other => other,
     }
+}
+
+fn hydrate_download_path_for_execution(
+    tool_name: &str,
+    args: Value,
+    db: &crate::db::Db,
+) -> Result<Value, String> {
+    if tool_name != "gmail.download_attachment" {
+        return Ok(args);
+    }
+
+    let mut args = normalize_tool_args(args);
+    let Some(map) = args.as_object_mut() else {
+        return Err("Invalid tool args: expected object".to_string());
+    };
+
+    let mut path = map
+        .get("path")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let legacy_vault_path = map
+        .get("vault_path")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let legacy_work_path = map
+        .get("work_path")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if path.is_empty() {
+        if !legacy_vault_path.is_empty() {
+            let trimmed = legacy_vault_path.trim_start_matches('/');
+            path = if trimmed.is_empty() {
+                "vault".to_string()
+            } else {
+                format!("vault/{trimmed}")
+            };
+        } else if !legacy_work_path.is_empty() {
+            path = legacy_work_path;
+        }
+    }
+
+    let (root, subpath) = if path.is_empty() {
+        ("work", ".".to_string())
+    } else if path == "vault" {
+        ("vault", ".".to_string())
+    } else if let Some(rest) = path.strip_prefix("vault/") {
+        let trimmed = rest.trim();
+        ("vault", if trimmed.is_empty() { ".".to_string() } else { trimmed.to_string() })
+    } else {
+        ("work", path.clone())
+    };
+
+    let resolved = match root {
+        "vault" => resolve_vault_path(db, &subpath).map_err(|err| err.message)?,
+        "work" => resolve_work_path(db, &subpath).map_err(|err| err.message)?,
+        _ => return Err("Invalid root; expected 'vault' or 'work'".to_string()),
+    };
+
+    map.insert("root".to_string(), Value::String(root.to_string()));
+    map.insert(
+        "output_dir".to_string(),
+        Value::String(resolved.full_path.to_string_lossy().to_string()),
+    );
+    map.insert(
+        "display_dir".to_string(),
+        Value::String(resolved.display_path.clone()),
+    );
+    if !path.is_empty() {
+        map.insert("path".to_string(), Value::String(path));
+    }
+    map.remove("vault_path");
+    map.remove("work_path");
+
+    Ok(args)
 }
 
 fn parse_output_mode_hint(value: Option<&str>) -> Result<OutputModeHint, String> {

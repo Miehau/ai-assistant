@@ -24,6 +24,7 @@ pub use integrations::register_integration_tools;
 pub use prefs::register_pref_tools;
 pub use search::register_search_tool;
 pub use tool_outputs::register_tool_output_tools;
+pub use vault::{resolve_vault_path, resolve_work_path};
 pub use web::register_web_tools;
 
 #[derive(Clone, Debug, Serialize)]
@@ -250,8 +251,9 @@ impl ApprovalStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        register_file_tools, register_search_tool, ToolDefinition, ToolError, ToolExecutionContext,
-        ToolMetadata, ToolRegistry, ToolResultMode,
+        register_file_tools, register_integration_tools, register_pref_tools, register_search_tool,
+        register_tool_output_tools, register_web_tools, ToolDefinition, ToolError,
+        ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode, JSONSchema,
     };
     use crate::db::{Db, PreferenceOperations};
     use serde_json::json;
@@ -409,6 +411,72 @@ mod tests {
                 .unwrap_or(0);
             assert!(results_len > 0);
         }
+    }
+
+    #[test]
+    fn file_tools_support_work_root() {
+        let vault_root = std::env::temp_dir().join(format!("vault-root-{}", Uuid::new_v4()));
+        let work_root = std::env::temp_dir().join(format!("work-root-{}", Uuid::new_v4()));
+        fs::create_dir_all(&vault_root).expect("vault root create failed");
+        fs::create_dir_all(&work_root).expect("work root create failed");
+
+        let db = setup_db(vault_root.to_str().unwrap());
+        db.set_preference("plugins.files.work_root", work_root.to_str().unwrap())
+            .expect("set work root failed");
+        let mut registry = ToolRegistry::new();
+        register_file_tools(&mut registry, db).expect("file tools registration failed");
+
+        call_tool(
+            &registry,
+            "files.create",
+            json!({
+                "path": "notes/work.txt",
+                "content": "Hello work\n",
+                "root": "work"
+            }),
+        );
+
+        let read = call_tool(
+            &registry,
+            "files.read",
+            json!({
+                "path": "notes/work.txt",
+                "root": "work"
+            }),
+        );
+        let content = read
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(content.contains("Hello work"));
+    }
+
+    #[test]
+    fn work_root_rejects_path_traversal() {
+        let vault_root = std::env::temp_dir().join(format!("vault-root-{}", Uuid::new_v4()));
+        let work_root = std::env::temp_dir().join(format!("work-root-{}", Uuid::new_v4()));
+        fs::create_dir_all(&vault_root).expect("vault root create failed");
+        fs::create_dir_all(&work_root).expect("work root create failed");
+
+        let db = setup_db(vault_root.to_str().unwrap());
+        db.set_preference("plugins.files.work_root", work_root.to_str().unwrap())
+            .expect("set work root failed");
+        let mut registry = ToolRegistry::new();
+        register_file_tools(&mut registry, db).expect("file tools registration failed");
+
+        let tool = registry.get("files.read").expect("missing files.read");
+        let err = (tool.handler)(
+            json!({
+                "path": "../escape.txt",
+                "root": "work"
+            }),
+            ToolExecutionContext,
+        )
+        .expect_err("path traversal should fail");
+        assert!(err
+            .message
+            .to_lowercase()
+            .contains("path traversal"));
     }
 
     #[test]
