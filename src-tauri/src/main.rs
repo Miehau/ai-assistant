@@ -86,6 +86,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::agent_send_message,
             commands::agent_cancel,
+            commands::agent_get_trace,
             commands::agent_generate_title,
             commands::get_models,
             commands::add_model,

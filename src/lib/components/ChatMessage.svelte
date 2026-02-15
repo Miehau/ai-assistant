@@ -5,7 +5,9 @@
   import { onMount } from "svelte";
   import { renderMarkdown } from "$lib/utils/markdownRenderer";
   import type { Attachment } from "$lib/types";
+  import type { AgentTraceEntry } from "$lib/types/agent";
   import { fileService } from "$lib/services/fileService";
+  import { getAgentTrace } from "$lib/services/agentTrace";
   import { onDestroy } from "svelte";
   import { getCachedParse, setCachedParse } from "$lib/utils/markdownCache";
 
@@ -17,6 +19,8 @@
   export let conversationId: string | undefined = undefined;
   export let isStreaming: boolean = false;
 
+  const isDev = import.meta.env.DEV;
+
   // Track loading states for attachments
   let loadingStates: Record<string, boolean> = {};
   let loadedImages: Record<string, string> = {};
@@ -26,6 +30,13 @@
   let imageModalOpen = false;
   let currentImageSrc = "";
   let currentImageAlt = "";
+
+  // Agent trace state (dev-only)
+  let traceOpen = false;
+  let traceEntries: AgentTraceEntry[] = [];
+  let traceLoading = false;
+  let traceError: string | null = null;
+  let TracePanel: any = null;
 
   // Load file data from the backend if needed
   async function loadFileData(attachment: Attachment, index: number) {
@@ -244,6 +255,37 @@
     currentImageAlt = "";
   }
 
+  async function ensureTracePanelLoaded() {
+    if (!TracePanel) {
+      const module = await import("./chat/AgentTracePanel.svelte");
+      TracePanel = module.default;
+    }
+  }
+
+  async function loadTrace() {
+    if (!messageId) return;
+    traceLoading = true;
+    traceError = null;
+    try {
+      traceEntries = await getAgentTrace(messageId);
+    } catch (error) {
+      traceError = error instanceof Error ? error.message : "Failed to load trace";
+    } finally {
+      traceLoading = false;
+    }
+  }
+
+  async function toggleTrace() {
+    if (!isDev || type !== "received" || !messageId) return;
+    traceOpen = !traceOpen;
+    if (traceOpen) {
+      await ensureTracePanelLoaded();
+      if (!traceLoading && traceEntries.length === 0) {
+        await loadTrace();
+      }
+    }
+  }
+
 </script>
 
 <div
@@ -287,6 +329,30 @@
             {/await}
           {/each}
         </div>
+      {/if}
+
+      {#if isDev && type === 'received' && messageId}
+        <div class="mt-2 flex items-center justify-end">
+          <button
+            class="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            onclick={toggleTrace}
+            type="button"
+          >
+            {traceOpen ? "Hide trace" : "Show trace"}
+          </button>
+        </div>
+        {#if traceOpen}
+          {#if TracePanel}
+            <svelte:component
+              this={TracePanel}
+              entries={traceEntries}
+              loading={traceLoading}
+              error={traceError}
+            />
+          {:else}
+            <div class="mt-2 text-[11px] text-muted-foreground">Loading trace viewer...</div>
+          {/if}
+        {/if}
       {/if}
 
     </div>

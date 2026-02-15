@@ -1,6 +1,7 @@
 use super::DbOperations;
 use crate::db::models::{
-    IncomingAttachment, Message, MessageAttachment, MessageToolExecution, MessageToolExecutionInput,
+    IncomingAttachment, Message, MessageAgentThinking, MessageAgentThinkingInput, MessageAttachment,
+    MessageToolExecution, MessageToolExecutionInput,
 };
 use base64::Engine;
 use chrono::{TimeZone, Utc};
@@ -124,6 +125,78 @@ pub trait MessageOperations: DbOperations {
             error: input.error,
             iteration_number: input.iteration_number,
         })
+    }
+
+    fn save_agent_thinking(
+        &self,
+        input: MessageAgentThinkingInput,
+    ) -> RusqliteResult<MessageAgentThinking> {
+        let binding = self.conn();
+        let conn = binding.lock().unwrap();
+
+        let metadata_text = input
+            .metadata
+            .as_ref()
+            .map(|value| value.to_string());
+
+        conn.execute(
+            "INSERT INTO message_agent_thinking (
+                id, message_id, stage, content, timestamp, iteration_number, metadata
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                input.id,
+                input.message_id,
+                input.stage,
+                input.content,
+                input.timestamp_ms,
+                input.iteration_number,
+                metadata_text
+            ],
+        )?;
+
+        Ok(MessageAgentThinking {
+            id: input.id,
+            message_id: input.message_id,
+            stage: input.stage,
+            content: input.content,
+            timestamp_ms: input.timestamp_ms,
+            iteration_number: input.iteration_number,
+            metadata: input.metadata,
+        })
+    }
+
+    fn get_agent_thinking(
+        &self,
+        message_id: &str,
+    ) -> RusqliteResult<Vec<MessageAgentThinking>> {
+        let binding = self.conn();
+        let conn = binding.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT id, message_id, stage, content, timestamp, iteration_number, metadata
+             FROM message_agent_thinking
+             WHERE message_id = ?1
+             ORDER BY timestamp ASC",
+        )?;
+
+        let rows = stmt.query_map(params![message_id], |row| {
+            let metadata_text: Option<String> = row.get(6)?;
+            let metadata = metadata_text
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+
+            Ok(MessageAgentThinking {
+                id: row.get(0)?,
+                message_id: row.get(1)?,
+                stage: row.get(2)?,
+                content: row.get(3)?,
+                timestamp_ms: row.get(4)?,
+                iteration_number: row.get(5)?,
+                metadata,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>()
     }
 
     fn get_messages(&self, conversation_id: &str) -> RusqliteResult<Vec<Message>> {

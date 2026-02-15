@@ -36,6 +36,16 @@ export type AgentStepStatus =
   | 'Failed'
   | 'Skipped';
 
+export type AgentTraceEntry = {
+  id: string;
+  message_id: string;
+  stage: string;
+  content: string;
+  timestamp_ms: number;
+  iteration_number: number;
+  metadata?: Record<string, unknown> | null;
+};
+
 export function getPhaseLabel(phase: PhaseKind | null): string {
   if (!phase) return 'Idle';
   if (typeof phase === 'string') {

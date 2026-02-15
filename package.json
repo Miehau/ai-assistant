@@ -9,7 +9,8 @@
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build",
     "dev": "bun run dev:web",
-    "build": "bun run build:web && bun run build:tauri"
+    "build": "bun run build:web && bun run build:tauri",
+    "preflight": "bun run build:web && cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "license": "MIT",
   "dependencies": {

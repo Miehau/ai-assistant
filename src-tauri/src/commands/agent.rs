@@ -2,9 +2,11 @@ use crate::agent::prompts::RESPONDER_PROMPT;
 use crate::agent::DynamicController;
 use crate::db::{
     BranchOperations, ConversationOperations, CustomBackendOperations, Db, IncomingAttachment,
-    MessageAttachment, MessageOperations, MessageToolExecution, MessageToolExecutionInput,
-    ModelOperations, SaveMessageUsageInput, UsageOperations,
+    MessageAgentThinking, MessageAttachment, MessageOperations, MessageToolExecution,
+    MessageToolExecutionInput, ModelOperations, SaveMessageUsageInput, UsageOperations,
 };
+#[cfg(debug_assertions)]
+use crate::db::MessageAgentThinkingInput;
 use crate::events::{
     AgentEvent, EventBus, EVENT_ASSISTANT_STREAM_CHUNK, EVENT_ASSISTANT_STREAM_COMPLETED,
     EVENT_ASSISTANT_STREAM_STARTED, EVENT_CONVERSATION_UPDATED, EVENT_MESSAGE_SAVED,
@@ -88,6 +90,40 @@ fn cancel_token(message_id: &str) -> bool {
     } else {
         false
     }
+}
+
+#[cfg(debug_assertions)]
+fn record_agent_trace(
+    db: &Db,
+    message_id: &str,
+    stage: &str,
+    content: String,
+    iteration: i64,
+    metadata: Option<Value>,
+) {
+    let _ = MessageOperations::save_agent_thinking(
+        db,
+        MessageAgentThinkingInput {
+            id: Uuid::new_v4().to_string(),
+            message_id: message_id.to_string(),
+            stage: stage.to_string(),
+            content,
+            timestamp_ms: Utc::now().timestamp_millis(),
+            iteration_number: iteration,
+            metadata,
+        },
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn record_agent_trace(
+    _db: &Db,
+    _message_id: &str,
+    _stage: &str,
+    _content: String,
+    _iteration: i64,
+    _metadata: Option<Value>,
+) {
 }
 
 fn build_http_client_with_timeouts(timeout_secs: u64, connect_timeout_secs: u64) -> Client {
@@ -875,6 +911,16 @@ pub fn agent_send_message(
                     &tool_execution_inputs,
                     &draft,
                 );
+                record_agent_trace(
+                    &db,
+                    &assistant_message_id_for_thread,
+                    "responder_prompt",
+                    responder_prompt.clone(),
+                    0,
+                    Some(json!({
+                        "tool_executions": tool_execution_inputs.len()
+                    })),
+                );
 
                 let responder_messages = vec![LlmMessage {
                     role: "user".to_string(),
@@ -1025,6 +1071,14 @@ pub fn agent_send_message(
                         final_response = draft.clone();
                     }
                 }
+                record_agent_trace(
+                    &db,
+                    &assistant_message_id_for_thread,
+                    "responder_output",
+                    final_response.clone(),
+                    0,
+                    None,
+                );
 
                 if responder_usage.is_none() && !final_response.is_empty() {
                     responder_usage = Some(Usage {
@@ -1270,6 +1324,14 @@ pub fn agent_cancel(payload: AgentCancelPayload) -> Result<(), String> {
     } else {
         Err("No active agent request for message_id".to_string())
     }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn agent_get_trace(
+    state: State<'_, Db>,
+    message_id: String,
+) -> Result<Vec<MessageAgentThinking>, String> {
+    MessageOperations::get_agent_thinking(&*state, &message_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command(rename_all = "snake_case")]
