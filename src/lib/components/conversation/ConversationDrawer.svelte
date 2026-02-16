@@ -113,7 +113,7 @@
     onkeydown={(e) => e.key === 'Escape' && (isOpen = false)}
   ></div>
   <div
-    class="fixed inset-y-0 left-[58px] z-30 w-[360px] glass-panel border-r-0 shadow-2xl flex flex-col rounded-r-2xl overflow-hidden"
+    class="fixed inset-y-0 left-0 z-30 w-[360px] glass-panel border-r-0 shadow-2xl flex flex-col rounded-r-2xl overflow-hidden"
     transition:fly={{ x: -360, duration: 200 }}
   >
     <div class="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-white/5 shrink-0">

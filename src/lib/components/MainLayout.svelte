@@ -20,7 +20,7 @@
 
   <Navbar />
 
-  <div class="app-content pl-[72px] pt-8 h-screen min-h-0 {isChatRoute ? 'overflow-hidden' : 'overflow-y-auto'}">
+  <div class="app-content pt-8 h-screen min-h-0 {isChatRoute ? 'overflow-hidden' : 'overflow-y-auto'}">
     <slot />
   </div>
 </div>
