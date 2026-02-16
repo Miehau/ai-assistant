@@ -271,6 +271,97 @@
     box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.02);
   }
 
+  .nav-drawer {
+    background: rgba(14, 14, 16, 0.92);
+    backdrop-filter: blur(18px) saturate(140%);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 12px 0 40px rgba(0, 0, 0, 0.55);
+  }
+
+  .nav-overlay {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+
+  .nav-overlay-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .nav-panel {
+    opacity: 0;
+    transform: translateX(-100%);
+    pointer-events: none;
+    transition: transform 0.22s ease, opacity 0.18s ease;
+    will-change: transform, opacity;
+  }
+
+  .nav-panel-open {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+
+  .nav-toggle {
+    background: rgba(12, 12, 14, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(12px) saturate(160%);
+  }
+
+  .nav-toggle:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .nav-section-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    justify-content: flex-start;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.78);
+    font-size: 0.875rem;
+    text-align: left;
+    appearance: none;
+    transition: all 0.2s ease;
+    text-decoration: none;
+  }
+
+  .nav-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .nav-item:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 1px rgba(82, 183, 136, 0.45),
+      0 0 0 4px rgba(82, 183, 136, 0.18);
+  }
+
+  .nav-item-active {
+    border-color: rgba(82, 183, 136, 0.45);
+    background: rgba(82, 183, 136, 0.12);
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .nav-item-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
   .chat-panel {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.06);

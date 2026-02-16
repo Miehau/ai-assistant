@@ -1,18 +1,16 @@
 <script lang="ts">
-  import Triangle from "lucide-svelte/icons/triangle";
-  import Bot from "lucide-svelte/icons/bot";
+  import { fade, fly } from "svelte/transition";
+  import { onMount } from "svelte";
   import SquareTerminal from "lucide-svelte/icons/square-terminal";
   import CodeXML from "lucide-svelte/icons/code-xml";
   import Settings2 from "lucide-svelte/icons/settings-2";
-  import LifeBuoy from "lucide-svelte/icons/life-buoy";
-  import Book from "lucide-svelte/icons/book";
-  import SquareUser from "lucide-svelte/icons/square-user";
   import Users from "lucide-svelte/icons/users";
   import History from "lucide-svelte/icons/history";
   import TrendingUp from "lucide-svelte/icons/trending-up";
   import Network from "lucide-svelte/icons/network";
+  import PanelLeftOpen from "lucide-svelte/icons/panel-left-open";
+  import PanelLeftClose from "lucide-svelte/icons/panel-left-close";
   import { Button } from "$lib/components/ui/button/index.js";
-  import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import { page } from "$app/stores";
   import ConversationDrawer from "$lib/components/conversation/ConversationDrawer.svelte";
   import BranchDrawer from "$lib/components/branch/BranchDrawer.svelte";
@@ -20,171 +18,221 @@
   import { currentConversation } from "$lib/services/conversation";
 
   $: currentPath = $page.url.pathname;
+  $: hasConversation = Boolean($currentConversation?.id);
 
   let isConversationDrawerOpen = false;
   let isBranchDrawerOpen = false;
   let isSettingsDrawerOpen = false;
+  let isNavOpen = false;
+  $: isAnyDrawerOpen = isConversationDrawerOpen || isBranchDrawerOpen || isSettingsDrawerOpen;
+
+  function toggleNav() {
+    const next = !isNavOpen;
+    isNavOpen = next;
+    if (next) {
+      isConversationDrawerOpen = false;
+      isSettingsDrawerOpen = false;
+      isBranchDrawerOpen = false;
+    }
+  }
+
+  function closeNav() {
+    isNavOpen = false;
+  }
 
   function toggleConversationDrawer() {
     isConversationDrawerOpen = !isConversationDrawerOpen;
+    closeNav();
   }
 
   function toggleBranchDrawer() {
+    if (!hasConversation) return;
     isBranchDrawerOpen = !isBranchDrawerOpen;
+    closeNav();
   }
 
   function toggleSettingsDrawer() {
     isSettingsDrawerOpen = !isSettingsDrawerOpen;
+    closeNav();
   }
 
   function handleBranchDrawerClose() {
     isBranchDrawerOpen = false;
   }
+
+  function navItemClasses(active: boolean, disabled = false) {
+    return [
+      "nav-item",
+      active ? "nav-item-active" : "",
+      disabled ? "nav-item-disabled" : ""
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function shouldIgnoreShortcut(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) return false;
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+    return target.isContentEditable;
+  }
+
+  onMount(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (isAnyDrawerOpen) return;
+      if (shouldIgnoreShortcut(event.target)) return;
+
+      const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && key === "b" && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        toggleNav();
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => {
+      window.removeEventListener("keydown", handler);
+    };
+  });
 </script>
 
-<Tooltip.Provider>
-  <aside class="fixed left-0 top-8 bottom-0 z-20 flex w-14 flex-col nav-rail">
-    <nav class="grid gap-1 px-2 py-3">
-      <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        {#snippet child({ props })}
-          <a href="/" {...props}>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-9 w-9 rounded-lg transition-all {currentPath === '/' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
-              aria-label="Playground"
+{#if !isNavOpen && !isAnyDrawerOpen}
+  <div class="fixed left-3 top-11 z-30">
+    <Button
+      variant="ghost"
+      size="icon"
+      class="nav-toggle rounded-xl"
+      aria-label="Open navigation"
+      onclick={toggleNav}
+    >
+      <PanelLeftOpen class="size-5" />
+    </Button>
+  </div>
+{/if}
+
+  <div
+    class="fixed inset-0 z-30 bg-black/45 backdrop-blur-sm nav-overlay"
+    class:nav-overlay-open={isNavOpen}
+    onclick={closeNav}
+    role="button"
+    tabindex={isNavOpen ? 0 : -1}
+    aria-hidden={!isNavOpen}
+    onkeydown={(e) => {
+      if (!isNavOpen) return;
+      if (e.key === "Escape") closeNav();
+    }}
+  ></div>
+  <aside
+    class="fixed left-0 top-8 bottom-0 z-40 w-[260px] nav-drawer nav-panel rounded-r-2xl overflow-hidden"
+    class:nav-panel-open={isNavOpen}
+    aria-hidden={!isNavOpen}
+    onclick={(event) => event.stopPropagation()}
+  >
+    <div class="flex h-full flex-col">
+      <div class="flex items-center justify-between border-b border-white/10 px-4 py-4">
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Navigation</span>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="rounded-lg"
+          aria-label="Close navigation"
+          onclick={closeNav}
+        >
+          <PanelLeftClose class="size-5" />
+        </Button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+        <div class="space-y-2">
+          <p class="nav-section-label">Core</p>
+          <div class="grid gap-1">
+            <a
+              href="/"
+              class={navItemClasses(currentPath === "/")}
+              aria-current={currentPath === "/" ? "page" : undefined}
+              onclick={closeNav}
             >
-              <SquareTerminal class="size-5" />
-            </Button>
-          </a>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Playground</Tooltip.Content>
-    </Tooltip.Root>
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        {#snippet child({ props })}
-          <a href="/models" {...props}>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-9 w-9 rounded-lg transition-all {currentPath === '/models' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
-              aria-label="Models"
+              <SquareTerminal class="size-4" />
+              <span>Chat</span>
+            </a>
+            <a
+              href="/assistants"
+              class={navItemClasses(currentPath === "/assistants")}
+              aria-current={currentPath === "/assistants" ? "page" : undefined}
+              onclick={closeNav}
             >
-              <CodeXML class="size-5" />
-            </Button>
-          </a>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>API</Tooltip.Content>
-    </Tooltip.Root>
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        {#snippet child({ props })}
-          <a href="/assistants" {...props}>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-9 w-9 rounded-lg transition-all {currentPath === '/assistants' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
-              aria-label="Assistants"
+              <Users class="size-4" />
+              <span>Assistants</span>
+            </a>
+            <a
+              href="/models"
+              class={navItemClasses(currentPath === "/models")}
+              aria-current={currentPath === "/models" ? "page" : undefined}
+              onclick={closeNav}
             >
-              <Users class="size-5" />
-            </Button>
-          </a>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Assistants</Tooltip.Content>
-    </Tooltip.Root>
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        {#snippet child({ props })}
-          <Button
-            {...props}
-            variant="ghost"
-            size="icon"
-            class="h-9 w-9 rounded-lg transition-all {isConversationDrawerOpen ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
-            aria-label="Conversation History"
-            onclick={toggleConversationDrawer}
-          >
-            <History class="size-5" />
-          </Button>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Conversation History</Tooltip.Content>
-    </Tooltip.Root>
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        {#snippet child({ props })}
-          <a href="/usage" {...props}>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-9 w-9 rounded-lg transition-all {currentPath === '/usage' ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
-              aria-label="Usage Statistics"
+              <CodeXML class="size-4" />
+              <span>Models</span>
+            </a>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <p class="nav-section-label">Context</p>
+          <div class="grid gap-1">
+            <button
+              type="button"
+              class={navItemClasses(isConversationDrawerOpen)}
+              onclick={toggleConversationDrawer}
             >
-              <TrendingUp class="size-5" />
-            </Button>
-          </a>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Usage Statistics</Tooltip.Content>
-    </Tooltip.Root>
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        {#snippet child({ props })}
-          <Button
-            {...props}
-            variant="ghost"
-            size="icon"
-            class="h-9 w-9 rounded-lg transition-all {isSettingsDrawerOpen ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
-            aria-label="Settings"
-            onclick={toggleSettingsDrawer}
-          >
-            <Settings2 class="size-5" />
-          </Button>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Settings</Tooltip.Content>
-    </Tooltip.Root>
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        {#snippet child({ props })}
-          <Button
-            {...props}
-            variant="ghost"
-            size="icon"
-            class="h-9 w-9 rounded-lg transition-all {isBranchDrawerOpen ? 'bg-white/10 ring-1 ring-white/15 shadow-sm' : 'hover:bg-white/5'}"
-            aria-label="Branch Tree"
-            onclick={toggleBranchDrawer}
-          >
-            <Network class="size-5" />
-          </Button>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Branch Tree</Tooltip.Content>
-    </Tooltip.Root>
-  </nav>
-  <nav class="mt-auto grid gap-1 px-2 pb-3">
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        {#snippet child({ props })}
-          <Button
-            {...props}
-            variant="ghost"
-            size="icon"
-            class="h-9 w-9 rounded-lg transition-all hover:bg-white/5"
-            aria-label="Help"
-          >
-            <LifeBuoy class="size-5" />
-          </Button>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content side="right" sideOffset={5}>Help</Tooltip.Content>
-    </Tooltip.Root>
-  </nav>
-</aside>
-</Tooltip.Provider>
+              <History class="size-4" />
+              <span>Conversation History</span>
+            </button>
+            <button
+              type="button"
+              class={navItemClasses(isBranchDrawerOpen, !hasConversation)}
+              onclick={toggleBranchDrawer}
+              aria-disabled={!hasConversation}
+            >
+              <Network class="size-4" />
+              <span>Branch Tree</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <p class="nav-section-label">Insights</p>
+          <div class="grid gap-1">
+            <a
+              href="/usage"
+              class={navItemClasses(currentPath === "/usage")}
+              aria-current={currentPath === "/usage" ? "page" : undefined}
+              onclick={closeNav}
+            >
+              <TrendingUp class="size-4" />
+              <span>Usage</span>
+            </a>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <p class="nav-section-label">System</p>
+          <div class="grid gap-1">
+            <button
+              type="button"
+              class={navItemClasses(isSettingsDrawerOpen)}
+              onclick={toggleSettingsDrawer}
+            >
+              <Settings2 class="size-4" />
+              <span>Settings</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
 
 <ConversationDrawer bind:isOpen={isConversationDrawerOpen} />
 <SettingsDrawer bind:isOpen={isSettingsDrawerOpen} />
