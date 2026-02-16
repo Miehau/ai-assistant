@@ -132,31 +132,45 @@ export class AnthropicService extends LLMService {
 
       console.log('Claude structured completion with schema:', schema.name);
 
-      // Use the native SDK with structured outputs
-      // Note: As of the SDK version, we need to use the raw API for output_format
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-beta': 'structured-outputs-2025-11-13',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model,
-          messages: claudeMessages,
-          system: systemContent,
-          max_tokens: options?.max_tokens ?? 4096,
-          temperature: options?.temperature,
-          top_p: options?.top_p,
-          output_format: {
-            type: 'json_schema',
-            schema: schema.schema
-          }
-        }),
-        signal: options?.signal
-      });
+      // Use the raw API for structured outputs (output_config.format)
+      const timeoutMs = 120_000; // 2 minute timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      // Forward external signal to our controller
+      if (options?.signal) {
+        options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+      }
+
+      let response: Response;
+      try {
+        response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
+          },
+          body: JSON.stringify({
+            model,
+            messages: claudeMessages,
+            system: systemContent,
+            max_tokens: options?.max_tokens ?? 4096,
+            temperature: options?.temperature,
+            top_p: options?.top_p,
+            output_config: {
+              format: {
+                type: 'json_schema',
+                schema: schema.schema
+              }
+            }
+          }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
