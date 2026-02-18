@@ -5,13 +5,145 @@ use crate::db::models::{
 };
 use base64::Engine;
 use chrono::{TimeZone, Utc};
-use rusqlite::{params, Result as RusqliteResult};
+use rusqlite::{params, params_from_iter, OptionalExtension, Result as RusqliteResult};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use tauri::api::path;
 use uuid::Uuid;
+
+const ATTACHMENT_BASE64_CACHE_MAX_ENTRIES: usize = 64;
+
+struct AttachmentBase64Cache {
+    order: VecDeque<String>,
+    entries: HashMap<String, String>,
+}
+
+impl AttachmentBase64Cache {
+    fn new() -> Self {
+        Self {
+            order: VecDeque::new(),
+            entries: HashMap::new(),
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<String> {
+        if let Some(value) = self.entries.get(key).cloned() {
+            if let Some(pos) = self.order.iter().position(|entry| entry == key) {
+                self.order.remove(pos);
+            }
+            self.order.push_back(key.to_string());
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, key: String, value: String) {
+        if self.entries.contains_key(&key) {
+            self.order.retain(|entry| entry != &key);
+        }
+        self.entries.insert(key.clone(), value);
+        self.order.push_back(key);
+        while self.order.len() > ATTACHMENT_BASE64_CACHE_MAX_ENTRIES {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+    }
+}
+
+static ATTACHMENT_BASE64_CACHE: OnceLock<Mutex<AttachmentBase64Cache>> = OnceLock::new();
+
+fn attachment_cache() -> &'static Mutex<AttachmentBase64Cache> {
+    ATTACHMENT_BASE64_CACHE.get_or_init(|| Mutex::new(AttachmentBase64Cache::new()))
+}
+
+#[derive(Debug, Clone)]
+pub struct PromptHistoryOptions {
+    pub max_messages: Option<usize>,
+    pub max_total_chars: Option<usize>,
+    pub attachments_full_window: usize,
+    pub include_attachments: bool,
+    pub include_tool_executions: bool,
+}
+
+impl PromptHistoryOptions {
+    pub fn new() -> Self {
+        Self {
+            max_messages: None,
+            max_total_chars: None,
+            attachments_full_window: 0,
+            include_attachments: true,
+            include_tool_executions: true,
+        }
+    }
+}
+
+fn attachments_dir() -> RusqliteResult<PathBuf> {
+    let app_dir = path::app_data_dir(&tauri::Config::default()).ok_or_else(|| {
+        rusqlite::Error::InvalidParameterName("Failed to get app directory".into())
+    })?;
+    Ok(app_dir.join("dev.michalmlak.ai_agent").join("attachments"))
+}
+
+fn read_attachment_base64_cached(
+    attachment_id: &str,
+    attachment_type: &str,
+    file_path: &str,
+    attachments_dir: &PathBuf,
+) -> RusqliteResult<String> {
+    if let Ok(mut cache) = attachment_cache().lock() {
+        if let Some(cached) = cache.get(attachment_id) {
+            return Ok(cached);
+        }
+    }
+
+    let full_path = attachments_dir.join(file_path);
+    let file_content = fs::read(&full_path)
+        .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
+    let base64_data = base64::engine::general_purpose::STANDARD.encode(file_content);
+    let data_url = format!("data:{};base64,{}", attachment_type, base64_data);
+
+    if let Ok(mut cache) = attachment_cache().lock() {
+        cache.insert(attachment_id.to_string(), data_url.clone());
+    }
+
+    Ok(data_url)
+}
+
+fn trim_messages_by_char_budget(
+    mut messages: Vec<Message>,
+    max_total_chars: Option<usize>,
+) -> Vec<Message> {
+    let Some(limit) = max_total_chars else {
+        return messages;
+    };
+
+    let mut total_chars: usize = messages
+        .iter()
+        .map(|message| message.content.chars().count())
+        .sum();
+
+    while total_chars > limit && messages.len() > 1 {
+        if let Some(first) = messages.first() {
+            total_chars = total_chars.saturating_sub(first.content.chars().count());
+        }
+        messages.remove(0);
+    }
+
+    messages
+}
+
+fn build_in_clause(placeholders: usize) -> String {
+    std::iter::repeat("?")
+        .take(placeholders)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 pub trait MessageOperations: DbOperations {
     fn save_message(
@@ -204,10 +336,7 @@ pub trait MessageOperations: DbOperations {
 
         let binding = self.conn();
         let conn = binding.lock().unwrap();
-        let app_dir = path::app_data_dir(&tauri::Config::default()).ok_or_else(|| {
-            rusqlite::Error::InvalidParameterName("Failed to get app directory".into())
-        })?;
-        let attachments_dir = app_dir.join("dev.michalmlak.ai_agent").join("attachments");
+        let attachments_dir = attachments_dir()?;
 
         log::debug!("📁 Setup time: {:?}", start_time.elapsed());
         let messages_query_start = Instant::now();
@@ -259,11 +388,7 @@ pub trait MessageOperations: DbOperations {
             } else {
                 // For binary attachments, read from filesystem and encode
                 let file_path: String = row.get(3)?;
-                let full_path = attachments_dir.join(&file_path);
-                let file_content = fs::read(&full_path)
-                    .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
-                let base64_data = base64::engine::general_purpose::STANDARD.encode(file_content);
-                format!("data:{};base64,{}", attachment_type, base64_data)
+                read_attachment_base64_cached(&row.get::<_, String>(1)?, &attachment_type, &file_path, &attachments_dir)?
             };
 
             // Get updated_at timestamp if available, otherwise use created_at
@@ -355,6 +480,288 @@ pub trait MessageOperations: DbOperations {
             attachments_start.elapsed()
         );
         log::debug!("⏱️  Total get_messages time: {:?}", start_time.elapsed());
+
+        Ok(messages)
+    }
+
+    fn get_previous_message_id(
+        &self,
+        conversation_id: &str,
+        exclude_message_id: &str,
+    ) -> RusqliteResult<Option<String>> {
+        let binding = self.conn();
+        let conn = binding.lock().unwrap();
+
+        conn.query_row(
+            "SELECT id
+             FROM messages
+             WHERE conversation_id = ?1 AND id != ?2
+             ORDER BY created_at DESC
+             LIMIT 1",
+            params![conversation_id, exclude_message_id],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    fn get_messages_for_prompt(
+        &self,
+        conversation_id: &str,
+        options: PromptHistoryOptions,
+    ) -> RusqliteResult<Vec<Message>> {
+        let start_time = Instant::now();
+
+        let binding = self.conn();
+        let conn = binding.lock().unwrap();
+
+        let messages_query_start = Instant::now();
+        let mut messages_stmt = if let Some(_limit) = options.max_messages {
+            conn.prepare(
+                "SELECT id, conversation_id, role, content, created_at
+                 FROM (
+                     SELECT id, conversation_id, role, content, created_at
+                     FROM messages
+                     WHERE conversation_id = ?1
+                     ORDER BY created_at DESC
+                     LIMIT ?2
+                 )
+                 ORDER BY created_at ASC",
+            )?
+        } else {
+            conn.prepare(
+                "SELECT id, conversation_id, role, content, created_at
+                 FROM messages
+                 WHERE conversation_id = ?1
+                 ORDER BY created_at ASC",
+            )?
+        };
+
+        let mut messages: Vec<Message> = if let Some(limit) = options.max_messages {
+            messages_stmt
+                .query_map(params![conversation_id, limit as i64], |row| {
+                    let timestamp: i64 = row.get(4)?;
+                    Ok(Message {
+                        id: row.get(0)?,
+                        conversation_id: row.get(1)?,
+                        role: row.get(2)?,
+                        content: row.get(3)?,
+                        created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
+                        attachments: Vec::new(),
+                        tool_executions: Vec::new(),
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            messages_stmt
+                .query_map(params![conversation_id], |row| {
+                    let timestamp: i64 = row.get(4)?;
+                    Ok(Message {
+                        id: row.get(0)?,
+                        conversation_id: row.get(1)?,
+                        role: row.get(2)?,
+                        content: row.get(3)?,
+                        created_at: Utc.timestamp_opt(timestamp, 0).single().unwrap(),
+                        attachments: Vec::new(),
+                        tool_executions: Vec::new(),
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        log::debug!(
+            "📨 Prompt messages query time: {:?}",
+            messages_query_start.elapsed()
+        );
+
+        messages = trim_messages_by_char_budget(messages, options.max_total_chars);
+
+        if messages.is_empty() {
+            log::debug!(
+                "⏱️  Prompt get_messages time (empty): {:?}",
+                start_time.elapsed()
+            );
+            return Ok(messages);
+        }
+
+        let message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+
+        if options.include_attachments && !message_ids.is_empty() {
+            let attachments_start = Instant::now();
+            let full_window = options
+                .attachments_full_window
+                .min(message_ids.len());
+            let full_attachment_message_ids: HashSet<String> = messages
+                .iter()
+                .rev()
+                .take(full_window)
+                .map(|message| message.id.clone())
+                .collect();
+
+            let attachments_dir = if full_window > 0 {
+                Some(attachments_dir()?)
+            } else {
+                None
+            };
+
+            let mut message_map: HashMap<String, &mut Message> =
+                messages.iter_mut().map(|m| (m.id.clone(), m)).collect();
+
+            let placeholders = build_in_clause(message_ids.len());
+            let attachments_sql = format!(
+                "SELECT message_id, id, name, data, attachment_type, created_at, description, transcript,
+                        file_path, size_bytes, mime_type, thumbnail_path, updated_at
+                 FROM message_attachments
+                 WHERE message_id IN ({})",
+                placeholders
+            );
+            let mut attachments_stmt = conn.prepare(&attachments_sql)?;
+
+            let attachments = attachments_stmt.query_map(params_from_iter(message_ids.iter()), |row| {
+                let message_id: String = row.get(0)?;
+                let attachment_id: String = row.get(1)?;
+                let name: String = row.get(2)?;
+                let data_field: String = row.get(3)?;
+                let attachment_type: String = row.get(4)?;
+                let timestamp: i64 = row.get(5)?;
+                let created_at = Utc.timestamp_opt(timestamp, 0).single().unwrap();
+                let description: Option<String> = row.get(6)?;
+                let transcript: Option<String> = row.get(7)?;
+                let file_path_db: Option<String> = row.get(8).ok();
+                let size_bytes: Option<u64> = row.get(9).ok();
+                let mime_type: Option<String> = row.get(10).ok();
+                let thumbnail_path: Option<String> = row.get(11).ok();
+                let updated_at_timestamp: Option<i64> = row.get(12).ok();
+                let updated_at = updated_at_timestamp
+                    .and_then(|ts| Utc.timestamp_opt(ts, 0).single());
+
+                let should_load_data = full_attachment_message_ids.contains(&message_id);
+                let is_text = attachment_type.starts_with("text/")
+                    || attachment_type.starts_with("application/json");
+
+                let data = if should_load_data {
+                    if is_text {
+                        data_field.clone()
+                    } else if let Some(dir) = attachments_dir.as_ref() {
+                        let file_path = file_path_db
+                            .clone()
+                            .unwrap_or_else(|| data_field.clone());
+                        read_attachment_base64_cached(
+                            &attachment_id,
+                            &attachment_type,
+                            &file_path,
+                            dir,
+                        )?
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
+                let file_path = file_path_db.or_else(|| {
+                    if is_text {
+                        None
+                    } else {
+                        Some(data_field.clone())
+                    }
+                });
+
+                Ok((
+                    message_id,
+                    MessageAttachment {
+                        id: Some(attachment_id),
+                        message_id: None,
+                        name,
+                        data,
+                        attachment_type,
+                        description,
+                        transcript,
+                        created_at: Some(created_at),
+                        updated_at,
+                        attachment_url: None,
+                        file_path,
+                        size_bytes,
+                        mime_type,
+                        thumbnail_path,
+                    },
+                ))
+            })?;
+
+            for attachment in attachments {
+                if let Ok((message_id, mut attachment)) = attachment {
+                    if let Some(message) = message_map.get_mut(&message_id) {
+                        attachment.message_id = Some(message_id.clone());
+                        message.attachments.push(attachment);
+                    }
+                }
+            }
+
+            log::debug!(
+                "📎 Prompt attachments processing time: {:?}",
+                attachments_start.elapsed()
+            );
+        }
+
+        if options.include_tool_executions && !message_ids.is_empty() {
+            let tool_executions_start = Instant::now();
+            let placeholders = build_in_clause(message_ids.len());
+            let tool_sql = format!(
+                "SELECT message_id, id, tool_name, parameters, result, success, duration, timestamp, error, iteration_number
+                 FROM message_tool_executions
+                 WHERE message_id IN ({})",
+                placeholders
+            );
+            let mut tool_exec_stmt = conn.prepare(&tool_sql)?;
+            let tool_execs =
+                tool_exec_stmt.query_map(params_from_iter(message_ids.iter()), |row| {
+                    let message_id: String = row.get(0)?;
+                    let timestamp_ms: i64 = row.get(7)?;
+
+                    let parameters_raw: String = row.get(3)?;
+                    let result_raw: String = row.get(4)?;
+                    let parameters = serde_json::from_str(&parameters_raw)
+                        .unwrap_or_else(|_| Value::String(parameters_raw));
+                    let result =
+                        serde_json::from_str(&result_raw).unwrap_or_else(|_| Value::String(result_raw));
+
+                    Ok((
+                        message_id,
+                        MessageToolExecution {
+                            id: row.get(1)?,
+                            message_id: row.get(0)?,
+                            tool_name: row.get(2)?,
+                            parameters,
+                            result,
+                            success: row.get(5)?,
+                            duration_ms: row.get(6)?,
+                            timestamp_ms,
+                            error: row.get(8)?,
+                            iteration_number: row.get(9)?,
+                        },
+                    ))
+                })?;
+
+            let mut message_map: HashMap<String, &mut Message> =
+                messages.iter_mut().map(|m| (m.id.clone(), m)).collect();
+
+            for tool_exec in tool_execs {
+                if let Ok((message_id, exec)) = tool_exec {
+                    if let Some(message) = message_map.get_mut(&message_id) {
+                        message.tool_executions.push(exec);
+                    }
+                }
+            }
+
+            log::debug!(
+                "🧰 Prompt tool executions processing time: {:?}",
+                tool_executions_start.elapsed()
+            );
+        }
+
+        log::debug!(
+            "⏱️  Total get_messages_for_prompt time: {:?}",
+            start_time.elapsed()
+        );
 
         Ok(messages)
     }

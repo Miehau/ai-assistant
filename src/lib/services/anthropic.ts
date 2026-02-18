@@ -105,8 +105,7 @@ export class AnthropicService extends LLMService {
   }
 
   /**
-   * Structured completion using Claude's output_format parameter
-   * Requires anthropic-beta: structured-outputs-2025-11-13 header
+   * Structured completion using Claude's output_config.format parameter (GA)
    */
   async structuredCompletion<T = any>(
     model: string,
