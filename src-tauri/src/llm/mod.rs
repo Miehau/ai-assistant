@@ -8,8 +8,6 @@ const PROVIDER_ERROR_BODY_MAX_CHARS: usize = 2_000;
 const ANTHROPIC_CACHE_BLOCK_MAX_CHARS: usize = 2_500;
 const ANTHROPIC_CACHE_INTERVAL_BLOCKS: usize = 16;
 const ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS: usize = 4;
-const ANTHROPIC_BETA_STRUCTURED_OUTPUTS: &str = "structured-outputs-2025-11-13";
-const ANTHROPIC_BETA_PROMPT_CACHING: &str = "prompt-caching-2024-07-31";
 
 #[derive(Clone, Debug)]
 pub struct Usage {
@@ -339,33 +337,6 @@ pub(crate) fn validate_anthropic_output_format(
     Ok(())
 }
 
-fn anthropic_prompt_cache_enabled(request_options: Option<&LlmRequestOptions>) -> bool {
-    request_options
-        .map(|options| !options.anthropic_cache_breakpoints.is_empty())
-        .unwrap_or(false)
-}
-
-fn anthropic_beta_header(
-    structured_outputs: bool,
-    request_options: Option<&LlmRequestOptions>,
-) -> Option<String> {
-    let mut beta_features = Vec::new();
-
-    // Avoid combining structured outputs and prompt caching in a single request.
-    // Controller requests using structured schemas can stall when both betas are enabled.
-    if !structured_outputs && anthropic_prompt_cache_enabled(request_options) {
-        beta_features.push(ANTHROPIC_BETA_PROMPT_CACHING);
-    }
-    if structured_outputs {
-        beta_features.push(ANTHROPIC_BETA_STRUCTURED_OUTPUTS);
-    }
-
-    if beta_features.is_empty() {
-        None
-    } else {
-        Some(beta_features.join(","))
-    }
-}
 
 pub fn complete_openai(
     client: &Client,
@@ -855,23 +826,15 @@ pub fn json_schema_output_format(schema: Value) -> Value {
     })
 }
 
-fn build_anthropic_request_body<'a>(
+fn build_anthropic_request_body(
     model: &str,
     system: Option<&str>,
     messages: &[LlmMessage],
     output_format: Option<Value>,
-    request_options: Option<&'a LlmRequestOptions>,
-) -> Result<(Value, bool, Option<&'a LlmRequestOptions>), String> {
+    request_options: Option<&LlmRequestOptions>,
+) -> Result<Value, String> {
     let sanitized_output_format = build_anthropic_output_schema(output_format);
     validate_anthropic_output_format(sanitized_output_format.as_ref())?;
-    let has_output_format = sanitized_output_format.is_some();
-
-    // Keep prompt caching disabled when structured outputs are enabled.
-    let effective_request_options = if has_output_format {
-        None
-    } else {
-        request_options
-    };
 
     let (merged_system, anthropic_messages) = split_anthropic_system_prefix(system, messages);
     let mut block_index = 0usize;
@@ -880,13 +843,13 @@ fn build_anthropic_request_body<'a>(
         merged_system.as_deref(),
         &mut block_index,
         &mut cache_control_count,
-        effective_request_options,
+        request_options,
     );
     let formatted_messages = format_anthropic_messages(
         &anthropic_messages,
         &mut block_index,
         &mut cache_control_count,
-        effective_request_options,
+        request_options,
     );
 
     let mut body = serde_json::json!({
@@ -902,10 +865,12 @@ fn build_anthropic_request_body<'a>(
     }
 
     if let Some(output_format_value) = sanitized_output_format {
-        body["output_format"] = output_format_value;
+        body["output_config"] = serde_json::json!({
+            "format": output_format_value
+        });
     }
 
-    Ok((body, has_output_format, effective_request_options))
+    Ok(body)
 }
 
 pub fn complete_anthropic_with_output_format_with_options(
@@ -917,7 +882,7 @@ pub fn complete_anthropic_with_output_format_with_options(
     output_format: Option<Value>,
     request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
-    let (body, has_output_format, effective_request_options) = build_anthropic_request_body(
+    let body = build_anthropic_request_body(
         model,
         system,
         messages,
@@ -925,31 +890,22 @@ pub fn complete_anthropic_with_output_format_with_options(
         request_options,
     )?;
 
-    let send_request = |payload: &Value, structured_outputs: bool| -> Result<Value, String> {
-        let mut request = client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("Content-Type", "application/json")
-            .header("x-api-key", api_key)
-            .header("anthropic-version", "2023-06-01");
+    let response = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("Content-Type", "application/json")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&body)
+        .send()
+        .map_err(|e| e.to_string())?;
 
-        if let Some(beta_header) =
-            anthropic_beta_header(structured_outputs, effective_request_options)
-        {
-            request = request.header("anthropic-beta", beta_header);
-        }
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_body = compact_error_body(response.text().unwrap_or_default());
+        return Err(format!("Anthropic error: {status} - {error_body}"));
+    }
 
-        let response = request.json(payload).send().map_err(|e| e.to_string())?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = compact_error_body(response.text().unwrap_or_default());
-            return Err(format!("Anthropic error: {status} - {body}"));
-        }
-
-        response.json().map_err(|e| e.to_string())
-    };
-
-    let value = send_request(&body, has_output_format)?;
+    let value: Value = response.json().map_err(|e| e.to_string())?;
 
     log::debug!(
         "[llm] provider=anthropic model={} raw_response={}",
@@ -1028,16 +984,14 @@ where
         body["system"] = system_blocks;
     }
 
-    let mut request = client
+    let response = client
         .post("https://api.anthropic.com/v1/messages")
         .header("Content-Type", "application/json")
         .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01");
-    if let Some(beta_header) = anthropic_beta_header(false, request_options) {
-        request = request.header("anthropic-beta", beta_header);
-    }
-
-    let response = request.json(&body).send().map_err(|e| e.to_string())?;
+        .header("anthropic-version", "2023-06-01")
+        .json(&body)
+        .send()
+        .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -1319,46 +1273,6 @@ mod tests {
         assert_eq!(usage.completion_tokens, 75);
         assert_eq!(usage.cache_read_input_tokens, 1000);
         assert_eq!(usage.cache_creation_input_tokens, 200);
-    }
-
-    #[test]
-    fn anthropic_beta_header_prefers_structured_outputs_over_prompt_caching() {
-        let options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: vec![0],
-        };
-
-        let beta = anthropic_beta_header(true, Some(&options)).expect("beta header");
-        assert!(!beta.contains(ANTHROPIC_BETA_PROMPT_CACHING));
-        assert!(beta.contains(ANTHROPIC_BETA_STRUCTURED_OUTPUTS));
-    }
-
-    #[test]
-    fn anthropic_beta_header_includes_prompt_caching_without_structured_outputs() {
-        let options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: vec![0],
-        };
-
-        let beta = anthropic_beta_header(false, Some(&options)).expect("beta header");
-        assert!(beta.contains(ANTHROPIC_BETA_PROMPT_CACHING));
-        assert!(!beta.contains(ANTHROPIC_BETA_STRUCTURED_OUTPUTS));
-    }
-
-    #[test]
-    fn anthropic_beta_header_omits_prompt_caching_without_breakpoints() {
-        let options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: Vec::new(),
-        };
-
-        let beta = anthropic_beta_header(true, Some(&options)).expect("beta header");
-        assert!(!beta.contains(ANTHROPIC_BETA_PROMPT_CACHING));
-        assert!(beta.contains(ANTHROPIC_BETA_STRUCTURED_OUTPUTS));
-        assert!(anthropic_beta_header(false, Some(&options)).is_none());
     }
 
     #[test]
@@ -1837,12 +1751,12 @@ mod tests {
                 ]
             }
         });
-        let (body, has_output_format, _) =
+        let body =
             build_anthropic_request_body("claude-sonnet", None, &messages, Some(format), None)
                 .expect("body");
-        assert!(has_output_format);
-        let output_format = body.get("output_format").expect("output_format");
-        let schema = output_format.get("schema").expect("schema");
+        let output_config = body.get("output_config").expect("output_config");
+        let format_obj = output_config.get("format").expect("format");
+        let schema = format_obj.get("schema").expect("schema");
         assert!(schema.get("oneOf").is_none());
         assert_eq!(
             schema

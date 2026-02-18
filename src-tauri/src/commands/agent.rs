@@ -3,7 +3,8 @@ use crate::agent::DynamicController;
 use crate::db::{
     BranchOperations, ConversationOperations, CustomBackendOperations, Db, IncomingAttachment,
     MessageAgentThinking, MessageAttachment, MessageOperations, MessageToolExecution,
-    MessageToolExecutionInput, ModelOperations, SaveMessageUsageInput, UsageOperations,
+    MessageToolExecutionInput, ModelOperations, PromptHistoryOptions, SaveMessageUsageInput,
+    UsageOperations,
 };
 #[cfg(debug_assertions)]
 use crate::db::MessageAgentThinkingInput;
@@ -52,6 +53,9 @@ const OPENAI_PROMPT_CACHE_RETENTION: &str = "24h";
 const CACHE_DIAGNOSTICS_MIN_REQUESTS: u32 = 6;
 const CACHE_DIAGNOSTICS_MIN_PROMPT_TOKENS: i64 = 4096;
 const CACHE_DIAGNOSTICS_MIN_HIT_RATIO: f64 = 0.10;
+const PROMPT_HISTORY_MAX_MESSAGES: usize = 48;
+const PROMPT_HISTORY_MAX_CHARS: usize = 120_000;
+const PROMPT_ATTACHMENTS_FULL_WINDOW: usize = 4;
 
 fn get_pricing() -> &'static HashMap<String, PricingEntry> {
     PRICING.get_or_init(|| {
@@ -145,9 +149,13 @@ fn build_http_client() -> Client {
 }
 
 fn controller_output_format_for_provider(
-    _provider: &str,
+    provider: &str,
     output_format: Option<Value>,
 ) -> Option<Value> {
+    // Anthropic structured outputs cause request timeouts; rely on JSON-in-text parsing instead.
+    if provider == "anthropic" {
+        return None;
+    }
     output_format
 }
 
@@ -527,18 +535,12 @@ pub fn agent_send_message(
 
     let assistant_message_id = assistant_message_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let history =
-        MessageOperations::get_messages(&*state, &conversation_id).map_err(|e| e.to_string())?;
-
     let main_branch = BranchOperations::get_or_create_main_branch(&*state, &conversation_id)
         .map_err(|e| e.to_string())?;
 
-    let parent_message_id = history
-        .iter()
-        .rev()
-        .skip(1)
-        .find(|message| message.id != user_message_id)
-        .map(|message| message.id.clone());
+    let parent_message_id =
+        MessageOperations::get_previous_message_id(&*state, &conversation_id, &user_message_id)
+            .map_err(|e| e.to_string())?;
 
     let _ = BranchOperations::create_message_tree_node(
         &*state,
@@ -547,33 +549,6 @@ pub fn agent_send_message(
         &main_branch.id,
         false,
     );
-
-    let mut messages: Vec<LlmMessage> = Vec::new();
-    for message in history {
-        let content = if message.role == "user" {
-            let mapped_attachments = map_message_attachments(&message.attachments);
-            if mapped_attachments.is_empty() {
-                json!(message.content)
-            } else {
-                build_user_content(&message.content, &mapped_attachments)
-            }
-        } else {
-            let mut content_text = message.content.clone();
-            if !message.tool_executions.is_empty() {
-                let tool_summary = format_tool_executions(&message.tool_executions);
-                if !tool_summary.is_empty() {
-                    content_text.push_str("\n\n");
-                    content_text.push_str(&tool_summary);
-                }
-            }
-            json!(content_text)
-        };
-
-        messages.push(LlmMessage {
-            role: message.role,
-            content,
-        });
-    }
 
     let provider = provider.to_lowercase();
     let model = model.clone();
@@ -614,6 +589,69 @@ pub fn agent_send_message(
     let cancel_token_for_thread = register_cancel_token(&assistant_message_id);
 
     std::thread::spawn(move || {
+        let mut prompt_options = PromptHistoryOptions::new();
+        prompt_options.max_messages = Some(PROMPT_HISTORY_MAX_MESSAGES);
+        prompt_options.max_total_chars = Some(PROMPT_HISTORY_MAX_CHARS);
+        prompt_options.attachments_full_window = PROMPT_ATTACHMENTS_FULL_WINDOW;
+        prompt_options.include_attachments = true;
+        prompt_options.include_tool_executions = true;
+
+        let prompt_history = MessageOperations::get_messages_for_prompt(
+            &db,
+            &conversation_id_for_thread,
+            prompt_options,
+        );
+
+        let mut messages: Vec<LlmMessage> = Vec::new();
+        match prompt_history {
+            Ok(history) if !history.is_empty() => {
+                for message in history {
+                    let content = if message.role == "user" {
+                        let mapped_attachments = map_message_attachments(&message.attachments);
+                        if mapped_attachments.is_empty() {
+                            json!(message.content)
+                        } else {
+                            build_user_content(&message.content, &mapped_attachments)
+                        }
+                    } else {
+                        let mut content_text = message.content.clone();
+                        if !message.tool_executions.is_empty() {
+                            let tool_summary = format_tool_executions(&message.tool_executions);
+                            if !tool_summary.is_empty() {
+                                content_text.push_str("\n\n");
+                                content_text.push_str(&tool_summary);
+                            }
+                        }
+                        json!(content_text)
+                    };
+
+                    messages.push(LlmMessage {
+                        role: message.role,
+                        content,
+                    });
+                }
+            }
+            Ok(_) | Err(_) => {
+                if let Err(error) = prompt_history {
+                    log::warn!(
+                        "[agent] prompt history load failed: conversation_id={} message_id={} error={}",
+                        conversation_id_for_thread,
+                        assistant_message_id_for_thread,
+                        error
+                    );
+                }
+                let fallback_content = if attachments.is_empty() {
+                    json!(content.clone())
+                } else {
+                    build_user_content(&content, &attachments)
+                };
+                messages.push(LlmMessage {
+                    role: "user".to_string(),
+                    content: fallback_content,
+                });
+            }
+        }
+
         log::info!(
             "[agent] worker started: conversation_id={} message_id={} provider={} model={}",
             conversation_id_for_thread,
@@ -1493,20 +1531,35 @@ fn build_user_content(content: &str, attachments: &[IncomingAttachment]) -> serd
 
     for attachment in attachments {
         let attachment_type = attachment.attachment_type.as_str();
+        let data = attachment.data.trim();
         if attachment_type.starts_with("text") || attachment_type.starts_with("application/json") {
-            text.push_str(&format!(
-                "\n\n[Attached file: {}]\n```\n{}\n```\n",
-                attachment.name, attachment.data
-            ));
+            if data.is_empty() {
+                text.push_str(&format!(
+                    "\n\n[Attached file: {}] (content omitted)",
+                    attachment.name
+                ));
+            } else {
+                text.push_str(&format!(
+                    "\n\n[Attached file: {}]\n```\n{}\n```\n",
+                    attachment.name, attachment.data
+                ));
+            }
         } else if attachment_type.starts_with("image") {
             image_names.push(attachment.name.clone());
-            image_entries.push(json!({
-                "type": "image_url",
-                "image_url": {
-                    "url": attachment.data,
-                    "detail": "auto"
-                }
-            }));
+            if !data.is_empty() {
+                image_entries.push(json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": attachment.data,
+                        "detail": "auto"
+                    }
+                }));
+            }
+        } else if data.is_empty() {
+            text.push_str(&format!(
+                "\n\n[Attached file: {}] (content omitted)",
+                attachment.name
+            ));
         }
     }
 
@@ -1832,12 +1885,12 @@ mod tests {
     }
 
     #[test]
-    fn controller_output_format_for_provider_preserves_output_format() {
+    fn controller_output_format_for_provider_skips_anthropic() {
         let format = json!({
             "type": "json_schema",
             "schema": { "type": "object" }
         });
-        assert!(controller_output_format_for_provider("anthropic", Some(format)).is_some());
+        assert!(controller_output_format_for_provider("anthropic", Some(format)).is_none());
     }
 
     #[test]
