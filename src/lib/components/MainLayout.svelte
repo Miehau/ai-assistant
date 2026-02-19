@@ -1,8 +1,14 @@
 <script lang="ts">
   import { page } from "$app/stores";
   import Navbar from "$lib/components/Navbar.svelte";
+  import { lastNonSettingsPath } from "$lib/stores/navigation";
 
   $: isChatRoute = $page.url.pathname === "/";
+  $: if ($page.url.pathname !== "/settings") {
+    lastNonSettingsPath.set(
+      `${$page.url.pathname}${$page.url.search}${$page.url.hash}`
+    );
+  }
 </script>
 
 <div class="app-shell">

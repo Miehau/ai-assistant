@@ -19,7 +19,7 @@ use crate::tools::{
     get_conversation_tool_approval_override, get_tool_approval_override,
     load_conversation_tool_approval_overrides, load_tool_approval_overrides, ApprovalStore,
     PendingToolApprovalInput, ToolApprovalDecision, ToolDefinition, ToolExecutionContext,
-    ToolRegistry, ToolResultMode,
+    ToolMetadata, ToolRegistry, ToolResultMode,
 };
 use crate::tools::{resolve_vault_path, resolve_work_path};
 use chrono::Utc;
@@ -51,6 +51,7 @@ const OUTPUT_METADATA_MAX_ITEM_TYPE_HINTS: usize = 8;
 const OUTPUT_METADATA_SCAN_MAX_DEPTH: usize = 4;
 const OUTPUT_METADATA_SCAN_MAX_ARRAY_ITEMS: usize = 24;
 const OUTPUT_METADATA_MAX_SERIALIZED_CHARS: usize = 1_600;
+const TOOL_DEPENDENCY_NOTE: &str = "NOTE: If you need IDs or fields from this tool's output for other tool calls, run this tool first (single tool step) and use its output in a later step. Do not combine dependent calls in the same tool_batch.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OutputModeHint {
@@ -1084,6 +1085,14 @@ impl DynamicController {
     ) -> Result<StepResult, String> {
         let completed_at = Utc::now();
         let requested_calls = calls.len();
+        let (calls, dependency_dropped) = isolate_gmail_list_threads_batch(calls);
+        if dependency_dropped > 0 {
+            log::warn!(
+                "[tool_batch] gmail.list_threads must run alone; dropped {} other call(s)",
+                dependency_dropped
+            );
+        }
+        let mut dropped_calls = dependency_dropped;
 
         if calls.is_empty() {
             let error = "tool_batch requires at least one tool call".to_string();
@@ -1127,15 +1136,16 @@ impl DynamicController {
                 completed_at,
             });
         }
-        let (calls, dropped_calls) =
+        let (calls, capacity_dropped) =
             clamp_tool_batch_calls_to_remaining_capacity(calls, remaining_capacity);
-        if dropped_calls > 0 {
+        dropped_calls += capacity_dropped;
+        if capacity_dropped > 0 {
             log::warn!(
                 "[tool_batch] requested {} calls but only {} are allowed in one step; executing first {} and dropping {}",
                 requested_calls,
                 remaining_capacity,
                 calls.len(),
-                dropped_calls
+                capacity_dropped
             );
         }
 
@@ -1683,6 +1693,7 @@ impl DynamicController {
                     tool.requires_approval = *value;
                 }
             }
+            annotate_dependency_tool_descriptions(&mut tools);
             serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string())
         };
 
@@ -1835,6 +1846,59 @@ fn clamp_tool_batch_calls_to_remaining_capacity(
     }
     let dropped = calls.len() - capacity;
     (calls.into_iter().take(capacity).collect(), dropped)
+}
+
+fn annotate_dependency_tool_descriptions(tools: &mut [ToolMetadata]) {
+    for tool in tools {
+        if !tool_name_likely_produces_ids(&tool.name) {
+            continue;
+        }
+        if tool.description.contains(TOOL_DEPENDENCY_NOTE) {
+            continue;
+        }
+        let trimmed = tool.description.trim_end();
+        if trimmed.is_empty() {
+            tool.description = TOOL_DEPENDENCY_NOTE.to_string();
+        } else {
+            tool.description = format!("{trimmed} {TOOL_DEPENDENCY_NOTE}");
+        }
+    }
+}
+
+fn tool_name_likely_produces_ids(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    let patterns = [
+        ".list",
+        ".search",
+        ".query",
+        ".find",
+        ".lookup",
+        ".discover",
+    ];
+    patterns.iter().any(|pattern| lower.contains(pattern))
+}
+
+fn isolate_gmail_list_threads_batch(
+    calls: Vec<ControllerToolCallSpec>,
+) -> (Vec<ControllerToolCallSpec>, usize) {
+    let has_list_threads = calls
+        .iter()
+        .any(|call| call.tool.trim() == "gmail.list_threads");
+    if !has_list_threads || calls.len() <= 1 {
+        return (calls, 0);
+    }
+
+    let mut kept = Vec::new();
+    let mut dropped = 0usize;
+    for call in calls {
+        if kept.is_empty() && call.tool.trim() == "gmail.list_threads" {
+            kept.push(call);
+        } else {
+            dropped += 1;
+        }
+    }
+
+    (kept, dropped)
 }
 
 struct ParallelToolRunResult {
@@ -4261,6 +4325,27 @@ extra suffix"#;
     }
 
     #[test]
+    fn annotate_dependency_tool_descriptions_appends_note() {
+        let mut tools = vec![ToolMetadata {
+            name: "gmail.list_threads".to_string(),
+            description: "List Gmail threads for the connected account.".to_string(),
+            args_schema: json!({}),
+            result_schema: json!({}),
+            requires_approval: false,
+            result_mode: ToolResultMode::Auto,
+        }];
+
+        annotate_dependency_tool_descriptions(&mut tools);
+
+        assert!(
+            tools[0]
+                .description
+                .contains("Do not combine dependent calls in the same tool_batch"),
+            "expected dependency note to be appended to list tool description"
+        );
+    }
+
+    #[test]
     fn format_tool_execution_summary_block_includes_envelope_fields() {
         let exec = ToolExecutionRecord {
             execution_id: "exec-1".to_string(),
@@ -4383,6 +4468,26 @@ extra suffix"#;
                 "If output is persisted, do not invent IDs or values; call tool_outputs.extract to obtain exact values."
             ),
             "controller prompt must include persisted output rule"
+        );
+    }
+
+    #[test]
+    fn controller_prompt_includes_dependency_rule() {
+        assert!(
+            CONTROLLER_PROMPT_BASE.contains(
+                "Use tool_batch only for independent tools. If any tool args depend on output of another tool"
+            ),
+            "controller prompt should include dependency rule"
+        );
+    }
+
+    #[test]
+    fn controller_prompt_discourages_gmail_list_threads_in_batch() {
+        assert!(
+            CONTROLLER_PROMPT_BASE.contains(
+                "Do not mix gmail.list_threads with any other tool in a tool_batch"
+            ),
+            "controller prompt should discourage gmail.list_threads batching"
         );
     }
 

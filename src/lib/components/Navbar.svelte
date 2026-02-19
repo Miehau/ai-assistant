@@ -11,27 +11,29 @@
   import PanelLeftOpen from "lucide-svelte/icons/panel-left-open";
   import PanelLeftClose from "lucide-svelte/icons/panel-left-close";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { goto } from "$app/navigation";
   import { page } from "$app/stores";
   import ConversationDrawer from "$lib/components/conversation/ConversationDrawer.svelte";
   import BranchDrawer from "$lib/components/branch/BranchDrawer.svelte";
   import SettingsDrawer from "$lib/components/SettingsDrawer.svelte";
   import { currentConversation } from "$lib/services/conversation";
+  import { settingsDrawerOpen } from "$lib/stores/drawers";
 
   $: currentPath = $page.url.pathname;
   $: hasConversation = Boolean($currentConversation?.id);
 
   let isConversationDrawerOpen = false;
   let isBranchDrawerOpen = false;
-  let isSettingsDrawerOpen = false;
   let isNavOpen = false;
-  $: isAnyDrawerOpen = isConversationDrawerOpen || isBranchDrawerOpen || isSettingsDrawerOpen;
+  $: isAnyDrawerOpen =
+    isConversationDrawerOpen || isBranchDrawerOpen || $settingsDrawerOpen;
 
   function toggleNav() {
     const next = !isNavOpen;
     isNavOpen = next;
     if (next) {
       isConversationDrawerOpen = false;
-      isSettingsDrawerOpen = false;
+      $settingsDrawerOpen = false;
       isBranchDrawerOpen = false;
     }
   }
@@ -52,7 +54,7 @@
   }
 
   function toggleSettingsDrawer() {
-    isSettingsDrawerOpen = !isSettingsDrawerOpen;
+    $settingsDrawerOpen = !$settingsDrawerOpen;
     closeNav();
   }
 
@@ -68,6 +70,17 @@
     ]
       .filter(Boolean)
       .join(" ");
+  }
+
+  function handleNavigate(event: MouseEvent, path: string) {
+    if (event.defaultPrevented) return;
+    if (event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+    event.preventDefault();
+    closeNav();
+    if (path === currentPath) return;
+    void goto(path);
   }
 
   function shouldIgnoreShortcut(target: EventTarget | null) {
@@ -153,7 +166,7 @@
               href="/"
               class={navItemClasses(currentPath === "/")}
               aria-current={currentPath === "/" ? "page" : undefined}
-              onclick={closeNav}
+              onclick={(event) => handleNavigate(event, "/")}
             >
               <SquareTerminal class="size-4" />
               <span>Chat</span>
@@ -162,7 +175,7 @@
               href="/assistants"
               class={navItemClasses(currentPath === "/assistants")}
               aria-current={currentPath === "/assistants" ? "page" : undefined}
-              onclick={closeNav}
+              onclick={(event) => handleNavigate(event, "/assistants")}
             >
               <Users class="size-4" />
               <span>Assistants</span>
@@ -171,7 +184,7 @@
               href="/models"
               class={navItemClasses(currentPath === "/models")}
               aria-current={currentPath === "/models" ? "page" : undefined}
-              onclick={closeNav}
+              onclick={(event) => handleNavigate(event, "/models")}
             >
               <CodeXML class="size-4" />
               <span>Models</span>
@@ -209,7 +222,7 @@
               href="/usage"
               class={navItemClasses(currentPath === "/usage")}
               aria-current={currentPath === "/usage" ? "page" : undefined}
-              onclick={closeNav}
+              onclick={(event) => handleNavigate(event, "/usage")}
             >
               <TrendingUp class="size-4" />
               <span>Usage</span>
@@ -222,7 +235,7 @@
           <div class="grid gap-1">
             <button
               type="button"
-              class={navItemClasses(isSettingsDrawerOpen)}
+              class={navItemClasses($settingsDrawerOpen)}
               onclick={toggleSettingsDrawer}
             >
               <Settings2 class="size-4" />
@@ -235,7 +248,7 @@
   </aside>
 
 <ConversationDrawer bind:isOpen={isConversationDrawerOpen} />
-<SettingsDrawer bind:isOpen={isSettingsDrawerOpen} />
+<SettingsDrawer bind:isOpen={$settingsDrawerOpen} />
 {#if $currentConversation?.id}
   <BranchDrawer
     conversationId={$currentConversation.id}
