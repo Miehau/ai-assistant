@@ -33,7 +33,7 @@ const models = modelsData as ModelData;
 
 /**
  * Calculate the cost for a given model based on token usage
- * @param modelId - The model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-5-20250929')
+ * @param modelId - The model identifier (e.g., 'gpt-4o', 'claude-sonnet-4-6')
  * @param promptTokens - Number of input/prompt tokens
  * @param completionTokens - Number of output/completion tokens
  * @returns The estimated cost in USD

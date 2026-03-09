@@ -9,7 +9,7 @@ export const MODEL_CONFIG = {
 	},
 	userFacing: {
 		provider: 'anthropic' as const,
-		model: 'claude-3-sonnet-20240229',
+		model: 'claude-sonnet-4-6',
 		temperature: 0.7,
 		max_tokens: 4000,
 		stream: true

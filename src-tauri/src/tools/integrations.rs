@@ -216,6 +216,7 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
     let db_for_download = db.clone();
     let db_for_labels = db.clone();
     let db_for_send = db.clone();
+    let db_for_draft = db.clone();
     let list_threads = ToolDefinition {
         metadata: ToolMetadata {
             name: "gmail.list_threads".to_string(),
@@ -701,11 +702,143 @@ fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), Strin
         preview: None,
     };
 
+    let draft_email = ToolDefinition {
+        metadata: ToolMetadata {
+            name: "gmail.draft_email".to_string(),
+            description: "Save an email as a Gmail draft. All fields are optional so you can create partial drafts. Pass thread_id and in_reply_to to draft a reply inside an existing thread.".to_string(),
+            args_schema: json!({
+                "type": "object",
+                "properties": {
+                    "connection_id": {
+                        "type": "string",
+                        "description": "Optional. Omit to use the default connected Gmail account."
+                    },
+                    "to": { "type": "array", "items": { "type": "string" } },
+                    "cc": { "type": "array", "items": { "type": "string" } },
+                    "bcc": { "type": "array", "items": { "type": "string" } },
+                    "subject": { "type": "string" },
+                    "body": { "type": "string" },
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Optional. Place draft inside an existing thread."
+                    },
+                    "in_reply_to": {
+                        "type": "string",
+                        "description": "Optional. Message-ID of the email being replied to (sets In-Reply-To and References headers)."
+                    }
+                }
+            }),
+            result_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "message": { "type": "object" }
+                }
+            }),
+            requires_approval: false,
+            result_mode: ToolResultMode::Inline,
+        },
+        handler: std::sync::Arc::new(move |args, _ctx: ToolExecutionContext| {
+            let connection_id = args
+                .get("connection_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let connection = get_connection(&db_for_draft, connection_id, "gmail")?;
+            let token = get_google_access_token(&db_for_draft, &connection)?;
+
+            let to_list = args
+                .get("to")
+                .and_then(|v| v.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let cc_list = args
+                .get("cc")
+                .and_then(|v| v.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let bcc_list = args
+                .get("bcc")
+                .and_then(|v| v.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let subject = args.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+            let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            let in_reply_to = args
+                .get("in_reply_to")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let mut headers = Vec::new();
+            if !to_list.is_empty() {
+                headers.push(format!("To: {to_list}"));
+            }
+            if !cc_list.is_empty() {
+                headers.push(format!("Cc: {cc_list}"));
+            }
+            if !bcc_list.is_empty() {
+                headers.push(format!("Bcc: {bcc_list}"));
+            }
+            if !subject.is_empty() {
+                headers.push(format!("Subject: {subject}"));
+            }
+            if !in_reply_to.is_empty() {
+                headers.push(format!("In-Reply-To: {in_reply_to}"));
+                headers.push(format!("References: {in_reply_to}"));
+            }
+            headers.push("MIME-Version: 1.0".to_string());
+            headers.push("Content-Type: text/plain; charset=\"UTF-8\"".to_string());
+
+            let raw_email = format!("{}\r\n\r\n{}", headers.join("\r\n"), body);
+            let encoded = URL_SAFE_NO_PAD.encode(raw_email.as_bytes());
+
+            let mut message_payload = json!({ "raw": encoded });
+            if let Some(thread_id) = args.get("thread_id").and_then(|v| v.as_str()) {
+                if !thread_id.trim().is_empty() {
+                    message_payload["threadId"] = json!(thread_id);
+                }
+            }
+
+            let client = Client::new();
+            let response = client
+                .post("https://gmail.googleapis.com/gmail/v1/users/me/drafts")
+                .bearer_auth(token)
+                .json(&json!({ "message": message_payload }))
+                .send()
+                .map_err(|err| ToolError::new(format!("Failed to call Gmail API: {err}")))?;
+
+            let status = response.status();
+            if !status.is_success() {
+                return Err(ToolError::new(format!("Gmail API error: HTTP {status}")));
+            }
+
+            response
+                .json::<Value>()
+                .map_err(|err| ToolError::new(format!("Failed to parse Gmail response: {err}")))
+        }),
+        preview: None,
+    };
+
     registry.register(list_threads)?;
     registry.register(get_thread)?;
     registry.register(download_attachment)?;
     registry.register(list_labels)?;
     registry.register(send_message)?;
+    registry.register(draft_email)?;
     Ok(())
 }
 
