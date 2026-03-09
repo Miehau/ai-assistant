@@ -10,6 +10,8 @@ mod files;
 mod integrations;
 mod prefs;
 mod search;
+mod shell;
+mod subagent;
 mod tool_outputs;
 mod vault;
 mod web;
@@ -23,6 +25,8 @@ pub use files::register_file_tools;
 pub use integrations::register_integration_tools;
 pub use prefs::register_pref_tools;
 pub use search::register_search_tool;
+pub use shell::register_shell_tools;
+pub use subagent::register_subagent_tools;
 pub use tool_outputs::register_tool_output_tools;
 pub use vault::{resolve_vault_path, resolve_work_path};
 pub use web::register_web_tools;
@@ -65,7 +69,14 @@ pub type ToolPreviewHandler =
     dyn Fn(Value, ToolExecutionContext) -> Result<Value, ToolError> + Send + Sync;
 
 #[derive(Clone, Debug, Default)]
-pub struct ToolExecutionContext;
+pub struct ToolExecutionContext {
+    pub cancel_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub conversation_id: Option<String>,
+    pub session_id: Option<String>,
+    pub is_sub_agent: bool,
+}
 
 #[derive(Clone, Debug)]
 pub struct ToolError {
@@ -252,7 +263,8 @@ impl ApprovalStore {
 mod tests {
     use super::{
         register_file_tools, register_integration_tools, register_pref_tools, register_search_tool,
-        register_tool_output_tools, register_web_tools, ToolDefinition, ToolError,
+        register_shell_tools, register_tool_output_tools, register_web_tools, ToolDefinition,
+        ToolError,
         ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode, JSONSchema,
     };
     use crate::db::{Db, PreferenceOperations};
@@ -276,7 +288,7 @@ mod tests {
         args: serde_json::Value,
     ) -> serde_json::Value {
         let tool = registry.get(name).expect("missing tool");
-        let ctx = ToolExecutionContext;
+        let ctx = ToolExecutionContext::default();
         (tool.handler)(args, ctx).expect("tool execution failed")
     }
 
@@ -470,7 +482,7 @@ mod tests {
                 "path": "../escape.txt",
                 "root": "work"
             }),
-            ToolExecutionContext,
+            ToolExecutionContext::default(),
         )
         .expect_err("path traversal should fail");
         assert!(err
@@ -555,6 +567,7 @@ mod tests {
         register_tool_output_tools(&mut registry, db.clone())
             .expect("tool output tools registration failed");
         register_web_tools(&mut registry, db.clone()).expect("web tools registration failed");
+        register_shell_tools(&mut registry, db.clone()).expect("shell tools registration failed");
 
         for metadata in registry.list_metadata() {
             for (label, schema) in [
@@ -656,5 +669,78 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         assert!(content.contains("Delta"));
+    }
+
+    #[test]
+    fn shell_exec_runs_echo_and_returns_stdout() {
+        let db = setup_db("/tmp");
+        let mut registry = ToolRegistry::new();
+        register_shell_tools(&mut registry, db).expect("shell tools registration failed");
+
+        let result = call_tool(
+            &registry,
+            "shell.exec",
+            json!({ "command": "echo", "args": ["hello world"] }),
+        );
+
+        assert_eq!(result["success"], json!(true));
+        assert_eq!(result["exit_code"], json!(0));
+        assert!(result["stdout"]
+            .as_str()
+            .unwrap_or("")
+            .contains("hello world"));
+        assert_eq!(result["truncated"], json!(false));
+    }
+
+    #[test]
+    fn shell_exec_captures_nonzero_exit_code() {
+        let db = setup_db("/tmp");
+        let mut registry = ToolRegistry::new();
+        register_shell_tools(&mut registry, db).expect("shell tools registration failed");
+
+        let result = call_tool(
+            &registry,
+            "shell.exec",
+            json!({ "command": "sh", "args": ["-c", "exit 42"] }),
+        );
+
+        assert_eq!(result["success"], json!(false));
+        assert_eq!(result["exit_code"], json!(42));
+    }
+
+    #[test]
+    fn shell_exec_rejects_missing_working_dir() {
+        let db = setup_db("/tmp");
+        let mut registry = ToolRegistry::new();
+        register_shell_tools(&mut registry, db).expect("shell tools registration failed");
+
+        let tool = registry.get("shell.exec").expect("missing shell.exec");
+        let err = (tool.handler)(
+            json!({ "command": "echo", "working_dir": "/nonexistent-dir-xyz-123" }),
+            ToolExecutionContext::default(),
+        )
+        .expect_err("should fail for missing working_dir");
+
+        assert!(err.message.contains("working_dir"));
+    }
+
+    #[test]
+    fn shell_exec_timeout_returns_failure_result() {
+        let db = setup_db("/tmp");
+        let mut registry = ToolRegistry::new();
+        register_shell_tools(&mut registry, db).expect("shell tools registration failed");
+
+        let result = call_tool(
+            &registry,
+            "shell.exec",
+            json!({ "command": "sleep", "args": ["10"], "timeout_ms": 100 }),
+        );
+
+        assert_eq!(result["success"], json!(false));
+        assert_eq!(result["exit_code"], json!(-1));
+        assert!(result["stderr"]
+            .as_str()
+            .unwrap_or("")
+            .contains("timed out"));
     }
 }

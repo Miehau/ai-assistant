@@ -254,15 +254,10 @@ fn llm_request_options(
     }
 
     if provider == "anthropic" {
-        let anthropic_cache_breakpoints = if phase == "responder" {
-            vec![0]
-        } else {
-            Vec::new()
-        };
         return LlmRequestOptions {
             prompt_cache_key: None,
             prompt_cache_retention: None,
-            anthropic_cache_breakpoints,
+            anthropic_cache_breakpoints: vec![0],
         };
     }
 
@@ -889,7 +884,13 @@ pub fn agent_send_message(
                 user_message_id_for_thread.clone(),
                 assistant_message_id_for_thread.clone(),
             ) {
-                Ok(controller) => Some(controller),
+                Ok(mut controller) => {
+                    controller.set_provider_info(
+                        provider.clone(),
+                        model_for_thread.clone(),
+                    );
+                    Some(controller)
+                }
                 Err(error) => {
                     draft = format!("Agent setup error: {}", error);
                     None
@@ -1840,9 +1841,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn llm_request_options_disables_anthropic_cache_for_controller_phase() {
+    fn llm_request_options_enables_anthropic_cache_for_controller_phase() {
         let options = llm_request_options("anthropic", "conv-1", "controller", "claude-sonnet");
-        assert!(options.anthropic_cache_breakpoints.is_empty());
+        assert_eq!(options.anthropic_cache_breakpoints, vec![0]);
     }
 
     #[test]
@@ -1852,9 +1853,9 @@ mod tests {
     }
 
     #[test]
-    fn llm_request_options_disables_anthropic_cache_for_other_phases() {
+    fn llm_request_options_enables_anthropic_cache_for_other_phases() {
         let options = llm_request_options("anthropic", "conv-1", "triage", "claude-sonnet");
-        assert!(options.anthropic_cache_breakpoints.is_empty());
+        assert_eq!(options.anthropic_cache_breakpoints, vec![0]);
     }
 
     #[test]
@@ -1873,9 +1874,9 @@ mod tests {
     }
 
     #[test]
-    fn cache_diagnostics_disabled_for_anthropic_controller_without_breakpoints() {
+    fn cache_diagnostics_enabled_for_anthropic_controller_with_breakpoints() {
         let options = llm_request_options("anthropic", "conv-1", "controller", "claude-sonnet");
-        assert!(!cache_diagnostics_enabled("anthropic", &options));
+        assert!(cache_diagnostics_enabled("anthropic", &options));
     }
 
     #[test]

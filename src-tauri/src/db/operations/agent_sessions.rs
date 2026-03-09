@@ -15,9 +15,9 @@ pub trait AgentSessionOperations: DbOperations {
         conn.execute(
             "INSERT INTO agent_sessions (
                 id, conversation_id, message_id, phase, phase_data, config,
-                created_at, updated_at, completed_at
+                created_at, updated_at, completed_at, parent_session_id
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 session.id,
                 session.conversation_id,
@@ -28,7 +28,24 @@ pub trait AgentSessionOperations: DbOperations {
                 session.created_at.timestamp(),
                 session.updated_at.timestamp(),
                 session.completed_at.map(|v| v.timestamp()),
+                session.parent_session_id,
             ],
+        )?;
+
+        Ok(())
+    }
+
+    fn update_agent_session_parent(
+        &self,
+        session_id: &str,
+        parent_session_id: Option<&str>,
+    ) -> RusqliteResult<()> {
+        let binding = self.conn();
+        let conn = binding.lock().unwrap();
+
+        conn.execute(
+            "UPDATE agent_sessions SET parent_session_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![parent_session_id, Utc::now().timestamp(), session_id],
         )?;
 
         Ok(())
@@ -218,6 +235,7 @@ pub trait AgentSessionOperations: DbOperations {
                 created_at: Utc.timestamp_opt(created_at, 0).single().unwrap(),
                 updated_at: Utc.timestamp_opt(updated_at, 0).single().unwrap(),
                 completed_at: completed_at.and_then(|ts| Utc.timestamp_opt(ts, 0).single()),
+                parent_session_id: None,
             }));
         }
 
