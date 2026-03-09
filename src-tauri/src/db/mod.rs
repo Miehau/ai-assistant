@@ -366,6 +366,8 @@ impl Db {
                 updated_at INTEGER NOT NULL
             );"),
             M::up("CREATE INDEX IF NOT EXISTS idx_integration_connections_integration ON integration_connections(integration_id);"),
+            // Sub-agent traceability: link child sessions to parent
+            M::up("ALTER TABLE agent_sessions ADD COLUMN parent_session_id TEXT;"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();

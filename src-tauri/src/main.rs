@@ -68,11 +68,24 @@ fn main() {
                 .expect("Failed to register integration tools");
             tools::register_tool_output_tools(&mut tool_registry, db.clone())
                 .expect("Failed to register tool output tools");
+            tools::register_shell_tools(&mut tool_registry, db.clone())
+                .expect("Failed to register shell tools");
+            let approval_store = tools::ApprovalStore::new();
+            // Clone the registry snapshot before registering the subagent tool,
+            // so sub-agents get all tools registered up to this point.
+            let subagent_tool_registry = tool_registry.clone();
+            tools::register_subagent_tools(
+                &mut tool_registry,
+                db.clone(),
+                event_bus.clone(),
+                subagent_tool_registry,
+                approval_store.clone(),
+            )
+            .expect("Failed to register subagent tools");
             log::info!(
                 "[tools] registered {} tools",
                 tool_registry.list_metadata().len()
             );
-            let approval_store = tools::ApprovalStore::new();
             let oauth_store = oauth::OAuthSessionStore::new();
 
             app.manage(db);

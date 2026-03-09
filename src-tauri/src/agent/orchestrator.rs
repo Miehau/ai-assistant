@@ -115,6 +115,9 @@ pub struct DynamicController {
     last_step_result: Option<StepResult>,
     tool_calls_in_current_step: u32,
     requested_user_input: bool,
+    provider: Option<String>,
+    model: Option<String>,
+    is_sub_agent: bool,
 }
 
 impl DynamicController {
@@ -143,6 +146,7 @@ impl DynamicController {
             created_at: now,
             updated_at: now,
             completed_at: None,
+            parent_session_id: None,
         };
 
         AgentSessionOperations::save_agent_session(&db, &session).map_err(|e| e.to_string())?;
@@ -160,7 +164,40 @@ impl DynamicController {
             last_step_result: None,
             tool_calls_in_current_step: 0,
             requested_user_input: false,
+            provider: None,
+            model: None,
+            is_sub_agent: false,
         })
+    }
+
+    pub fn set_provider_info(&mut self, provider: String, model: String) {
+        self.provider = Some(provider);
+        self.model = Some(model);
+    }
+
+    pub fn set_parent_session_id(&mut self, parent_session_id: String) {
+        self.session.parent_session_id = Some(parent_session_id);
+        self.is_sub_agent = true;
+        // Update the persisted session to link child → parent
+        let _ = self.db.update_agent_session_parent(
+            &self.session.id,
+            self.session.parent_session_id.as_deref(),
+        );
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session.id
+    }
+
+    fn build_tool_execution_context(&self) -> ToolExecutionContext {
+        ToolExecutionContext {
+            cancel_flag: Some(self.cancel_flag.clone()),
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            conversation_id: Some(self.session.conversation_id.clone()),
+            session_id: Some(self.session.id.clone()),
+            is_sub_agent: self.is_sub_agent,
+        }
     }
 
     pub fn run<F>(&mut self, user_message: &str, call_llm: &mut F) -> Result<String, String>
@@ -413,7 +450,7 @@ impl DynamicController {
                     .get(tool_name)
                     .and_then(|tool_def| tool_def.preview.as_ref())
                     .and_then(|preview_fn| {
-                        preview_fn(normalize_tool_args(args.clone()), ToolExecutionContext).ok()
+                        preview_fn(normalize_tool_args(args.clone()), ToolExecutionContext::default()).ok()
                     })
             })
         } else {
@@ -670,7 +707,7 @@ impl DynamicController {
         if requires_approval {
             let preview = match tool.preview.as_ref() {
                 Some(preview_fn) => Some(
-                    preview_fn(args.clone(), ToolExecutionContext).map_err(|err| err.message)?,
+                    preview_fn(args.clone(), ToolExecutionContext::default()).map_err(|err| err.message)?,
                 ),
                 None => None,
             };
@@ -1317,9 +1354,10 @@ impl DynamicController {
         for call in runnable_calls {
             let cancel_flag = self.cancel_flag.clone();
             let call_for_panic = call.clone();
+            let ctx = self.build_tool_execution_context();
             handles.push(std::thread::spawn(move || {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    execute_parallel_tool_call(call, timeout_ms, cancel_flag)
+                    execute_parallel_tool_call(call, timeout_ms, cancel_flag, ctx)
                 }))
                 .unwrap_or_else(|_| ParallelToolRunResult::from_panic(call_for_panic))
             }));
@@ -1617,11 +1655,20 @@ impl DynamicController {
         tool: &crate::tools::ToolDefinition,
         args: Value,
     ) -> Result<Value, String> {
+        let ctx = self.build_tool_execution_context();
+        // Sub-agent tools run a full controller loop with many LLM turns;
+        // skip the outer timeout and rely on the inner cancel_flag instead.
+        let timeout_ms = if tool.metadata.name == "agent.spawn" {
+            0
+        } else {
+            self.session.config.tool_execution_timeout_ms
+        };
         execute_tool_handler_with_timeout(
             self.cancel_flag.clone(),
-            self.session.config.tool_execution_timeout_ms,
+            timeout_ms,
             tool.handler.clone(),
             args,
+            ctx,
         )
     }
 
@@ -1943,6 +1990,7 @@ fn execute_parallel_tool_call(
     call: ParallelToolCallInput,
     timeout_ms: u64,
     cancel_flag: Arc<AtomicBool>,
+    ctx: ToolExecutionContext,
 ) -> ParallelToolRunResult {
     let start = Instant::now();
     let mut output_delivery: Option<OutputDeliveryResolution> = None;
@@ -1953,6 +2001,7 @@ fn execute_parallel_tool_call(
         timeout_ms,
         call.tool.handler.clone(),
         call.args.clone(),
+        ctx,
     );
 
     let (success, output, error) = match execution_result {
@@ -2074,14 +2123,15 @@ fn execute_tool_handler_with_timeout(
     timeout_ms: u64,
     handler: Arc<crate::tools::ToolHandler>,
     args: Value,
+    ctx: ToolExecutionContext,
 ) -> Result<Value, String> {
     if timeout_ms == 0 {
-        return (handler)(args, ToolExecutionContext).map_err(|err| err.message);
+        return (handler)(args, ctx).map_err(|err| err.message);
     }
 
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send((handler)(args, ToolExecutionContext));
+        let _ = tx.send((handler)(args, ctx));
     });
 
     let timeout = Duration::from_millis(timeout_ms);
