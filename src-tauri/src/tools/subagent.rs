@@ -103,7 +103,7 @@ pub fn register_subagent_tools(
         let model = model_override.unwrap_or_else(|| {
             ctx.model
                 .as_deref()
-                .unwrap_or("claude-sonnet-4-5-20250929")
+                .unwrap_or("claude-sonnet-4-6")
                 .to_string()
         });
 

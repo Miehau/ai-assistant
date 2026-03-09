@@ -70,6 +70,8 @@ fn main() {
                 .expect("Failed to register tool output tools");
             tools::register_shell_tools(&mut tool_registry, db.clone())
                 .expect("Failed to register shell tools");
+            tools::register_anthropic_tools(&mut tool_registry, db.clone())
+                .expect("Failed to register Anthropic tools");
             let approval_store = tools::ApprovalStore::new();
             // Clone the registry snapshot before registering the subagent tool,
             // so sub-agents get all tools registered up to this point.

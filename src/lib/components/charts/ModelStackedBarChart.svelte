@@ -122,6 +122,8 @@
       .replace('claude-3-sonnet', 'C3-Sonnet')
       .replace('claude-3-haiku', 'C3-Haiku')
       .replace('claude-3.5-sonnet', 'C3.5-S')
+      .replace('claude-sonnet-4-6', 'C4.6-Sonnet')
+      .replace('claude-opus-4-6', 'C4.6-Opus')
       .replace('claude-sonnet-4', 'C4-Sonnet')
       .replace('claude-opus-4', 'C4-Opus');
   }

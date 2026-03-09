@@ -6,7 +6,6 @@ use std::process::Command;
 
 const PROVIDER_ERROR_BODY_MAX_CHARS: usize = 2_000;
 const ANTHROPIC_CACHE_BLOCK_MAX_CHARS: usize = 2_500;
-const ANTHROPIC_CACHE_INTERVAL_BLOCKS: usize = 16;
 const ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS: usize = 4;
 
 #[derive(Clone, Debug)]
@@ -676,38 +675,21 @@ fn split_anthropic_text_for_cache(input: &str) -> Vec<(String, bool)> {
     blocks
 }
 
-fn should_apply_anthropic_cache_control(
-    block_index: usize,
-    explicit_breakpoints: &[usize],
-    cache_enabled: bool,
-) -> bool {
-    if !cache_enabled {
-        return false;
-    }
-
-    explicit_breakpoints.contains(&block_index)
-        || (block_index > 0 && block_index % ANTHROPIC_CACHE_INTERVAL_BLOCKS == 0)
+fn is_anthropic_cache_enabled(request_options: Option<&LlmRequestOptions>) -> bool {
+    request_options
+        .map(|options| !options.anthropic_cache_breakpoints.is_empty())
+        .unwrap_or(false)
 }
 
 fn format_anthropic_system(
     system: Option<&str>,
-    block_index: &mut usize,
     cache_control_count: &mut usize,
-    request_options: Option<&LlmRequestOptions>,
+    cache_enabled: bool,
 ) -> Option<Value> {
     let text = system?;
     if text.trim().is_empty() {
         return None;
     }
-
-    let (explicit_breakpoints, cache_enabled) = request_options
-        .map(|options| {
-            (
-                options.anthropic_cache_breakpoints.as_slice(),
-                !options.anthropic_cache_breakpoints.is_empty(),
-            )
-        })
-        .unwrap_or((&[] as &[usize], false));
 
     let mut content_blocks = Vec::new();
     let chunks = chunk_text_by_chars(text, ANTHROPIC_CACHE_BLOCK_MAX_CHARS);
@@ -720,15 +702,15 @@ fn format_anthropic_system(
             "type": "text",
             "text": chunk
         });
-        if (should_apply_anthropic_cache_control(*block_index, explicit_breakpoints, cache_enabled)
-            || (cache_enabled && chunk_idx + 1 == chunk_count))
+        // Only mark the LAST system block — caches the entire system prompt prefix
+        if cache_enabled
+            && chunk_idx + 1 == chunk_count
             && *cache_control_count < ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS
         {
             block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
             *cache_control_count += 1;
         }
         content_blocks.push(block);
-        *block_index += 1;
     }
 
     if content_blocks.is_empty() {
@@ -740,47 +722,29 @@ fn format_anthropic_system(
 
 fn format_anthropic_messages(
     messages: &[LlmMessage],
-    block_index: &mut usize,
     cache_control_count: &mut usize,
-    request_options: Option<&LlmRequestOptions>,
+    cache_enabled: bool,
 ) -> Vec<Value> {
-    let (explicit_breakpoints, cache_enabled) = request_options
-        .map(|options| {
-            (
-                options.anthropic_cache_breakpoints.as_slice(),
-                !options.anthropic_cache_breakpoints.is_empty(),
-            )
-        })
-        .unwrap_or((&[] as &[usize], false));
+    // Phase 1: Format all messages into blocks without cache_control
+    let non_system: Vec<&LlmMessage> = messages.iter().filter(|m| m.role != "system").collect();
+    let mut formatted: Vec<Value> = Vec::new();
+    // Track (formatted_index, last_block_index) for each message so we can add
+    // cache_control to the last block of selected messages in phase 2.
+    let mut message_last_block_indices: Vec<(usize, usize)> = Vec::new();
 
-    let mut formatted = Vec::new();
-    for message in messages.iter().filter(|m| m.role != "system") {
+    for message in &non_system {
         let text = value_to_string(&message.content);
         let chunks = split_anthropic_text_for_cache(&text);
-        let chunk_count = chunks.len();
         let mut content_blocks = Vec::new();
 
-        for (chunk_idx, (chunk, section_boundary)) in chunks.into_iter().enumerate() {
+        for (chunk, _section_boundary) in chunks {
             if chunk.is_empty() {
                 continue;
             }
-            let mut block = serde_json::json!({
+            content_blocks.push(serde_json::json!({
                 "type": "text",
                 "text": chunk
-            });
-            if (should_apply_anthropic_cache_control(
-                *block_index,
-                explicit_breakpoints,
-                cache_enabled,
-            ) || (cache_enabled && section_boundary)
-                || (cache_enabled && chunk_idx + 1 == chunk_count))
-                && *cache_control_count < ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS
-            {
-                block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
-                *cache_control_count += 1;
-            }
-            content_blocks.push(block);
-            *block_index += 1;
+            }));
         }
 
         if content_blocks.is_empty() {
@@ -788,13 +752,47 @@ fn format_anthropic_messages(
                 "type": "text",
                 "text": ""
             }));
-            *block_index += 1;
         }
+
+        let last_block_idx = content_blocks.len().saturating_sub(1);
+        let formatted_idx = formatted.len();
+        message_last_block_indices.push((formatted_idx, last_block_idx));
 
         formatted.push(serde_json::json!({
             "role": message.role,
             "content": content_blocks
         }));
+    }
+
+    // Phase 2: Add cache_control to messages from the END (maximizes cached prefix).
+    // Skip the very last message (it's the newest, will change next turn).
+    // Work backwards through the remaining messages.
+    if cache_enabled && !message_last_block_indices.is_empty() {
+        let candidates: Vec<(usize, usize)> = if message_last_block_indices.len() > 1 {
+            // Skip last message, iterate remaining from end
+            message_last_block_indices[..message_last_block_indices.len() - 1]
+                .iter()
+                .rev()
+                .copied()
+                .collect()
+        } else {
+            // Only one message — mark it (better than nothing)
+            message_last_block_indices.clone()
+        };
+
+        for (fmt_idx, block_idx) in candidates {
+            if *cache_control_count >= ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS {
+                break;
+            }
+            if let Some(msg) = formatted.get_mut(fmt_idx) {
+                if let Some(blocks) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
+                    if let Some(block) = blocks.get_mut(block_idx) {
+                        block["cache_control"] = serde_json::json!({ "type": "ephemeral" });
+                        *cache_control_count += 1;
+                    }
+                }
+            }
+        }
     }
 
     formatted
@@ -836,20 +834,18 @@ fn build_anthropic_request_body(
     let sanitized_output_format = build_anthropic_output_schema(output_format);
     validate_anthropic_output_format(sanitized_output_format.as_ref())?;
 
+    let cache_enabled = is_anthropic_cache_enabled(request_options);
     let (merged_system, anthropic_messages) = split_anthropic_system_prefix(system, messages);
-    let mut block_index = 0usize;
     let mut cache_control_count = 0usize;
     let formatted_system = format_anthropic_system(
         merged_system.as_deref(),
-        &mut block_index,
         &mut cache_control_count,
-        request_options,
+        cache_enabled,
     );
     let formatted_messages = format_anthropic_messages(
         &anthropic_messages,
-        &mut block_index,
         &mut cache_control_count,
-        request_options,
+        cache_enabled,
     );
 
     let mut body = serde_json::json!({
@@ -882,13 +878,16 @@ pub fn complete_anthropic_with_output_format_with_options(
     output_format: Option<Value>,
     request_options: Option<&LlmRequestOptions>,
 ) -> Result<StreamResult, String> {
-    let body = build_anthropic_request_body(
+    let mut body = build_anthropic_request_body(
         model,
         system,
         messages,
         output_format,
         request_options,
     )?;
+
+    // Use streaming to avoid HTTP timeout on long-running structured output requests.
+    body["stream"] = serde_json::json!(true);
 
     let response = client
         .post("https://api.anthropic.com/v1/messages")
@@ -905,43 +904,9 @@ pub fn complete_anthropic_with_output_format_with_options(
         return Err(format!("Anthropic error: {status} - {error_body}"));
     }
 
-    let value: Value = response.json().map_err(|e| e.to_string())?;
-
-    log::debug!(
-        "[llm] provider=anthropic model={} raw_response={}",
-        model,
-        serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
-    );
-
-    let content = value
-        .get("content")
-        .and_then(|content| content.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|block| block.get("text"))
-        .and_then(|text| text.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| {
-            "Anthropic structured output missing expected content[0].text".to_string()
-        })?;
-
-    let usage = value.get("usage").and_then(parse_anthropic_usage);
-
-    log::debug!(
-        "[llm] provider=anthropic model={} content_len={} usage={:?}",
-        model,
-        content.len(),
-        usage.as_ref().map(|u| {
-            (
-                u.prompt_tokens,
-                u.completion_tokens,
-                u.cached_prompt_tokens,
-                u.cache_read_input_tokens,
-                u.cache_creation_input_tokens,
-            )
-        })
-    );
-
-    Ok(StreamResult { content, usage })
+    // Collect streamed chunks silently (no on_chunk callback needed for controller).
+    let mut noop = |_: &str| {};
+    read_anthropic_sse(response, &mut noop)
 }
 
 pub fn stream_anthropic_with_options<F>(
@@ -956,20 +921,18 @@ pub fn stream_anthropic_with_options<F>(
 where
     F: FnMut(&str),
 {
+    let cache_enabled = is_anthropic_cache_enabled(request_options);
     let (merged_system, anthropic_messages) = split_anthropic_system_prefix(system, messages);
-    let mut block_index = 0usize;
     let mut cache_control_count = 0usize;
     let formatted_system = format_anthropic_system(
         merged_system.as_deref(),
-        &mut block_index,
         &mut cache_control_count,
-        request_options,
+        cache_enabled,
     );
     let formatted_messages = format_anthropic_messages(
         &anthropic_messages,
-        &mut block_index,
         &mut cache_control_count,
-        request_options,
+        cache_enabled,
     );
 
     let mut body = serde_json::json!({
@@ -999,6 +962,16 @@ where
         return Err(format!("Anthropic error: {status} - {body}"));
     }
 
+    read_anthropic_sse(response, on_chunk)
+}
+
+fn read_anthropic_sse<F>(
+    response: reqwest::blocking::Response,
+    on_chunk: &mut F,
+) -> Result<StreamResult, String>
+where
+    F: FnMut(&str),
+{
     let mut reader = BufReader::new(response);
     let mut line = String::new();
     let mut content = String::new();
@@ -1035,6 +1008,11 @@ where
                     let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
                     if delta_type == "text_delta" {
                         if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                            content.push_str(text);
+                            on_chunk(text);
+                        }
+                    } else if delta_type == "json_delta" {
+                        if let Some(text) = delta.get("partial_json").and_then(|v| v.as_str()) {
                             content.push_str(text);
                             on_chunk(text);
                         }
@@ -1326,155 +1304,79 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_format_marks_cache_breakpoints() {
-        let options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: vec![0],
-        };
+    fn anthropic_format_omits_cache_when_disabled() {
         let messages = vec![LlmMessage {
             role: "user".to_string(),
-            content: json!("stable prefix\nSTATE SUMMARY:\ndynamic suffix"),
+            content: json!("hello world"),
         }];
-        let mut block_index = 0usize;
         let mut cache_control_count = 0usize;
-        let formatted = format_anthropic_messages(
-            &messages,
-            &mut block_index,
-            &mut cache_control_count,
-            Some(&options),
-        );
-        let first_block = &formatted[0]["content"][0];
-        assert_eq!(
-            first_block
-                .get("cache_control")
-                .and_then(|v| v.get("type"))
-                .and_then(|v| v.as_str()),
-            Some("ephemeral")
-        );
-    }
-
-    #[test]
-    fn anthropic_format_omits_cache_breakpoints_without_request_options() {
-        let messages = vec![LlmMessage {
-            role: "user".to_string(),
-            content: json!("stable prefix\nSTATE SUMMARY:\ndynamic suffix"),
-        }];
-        let mut block_index = 0usize;
-        let mut cache_control_count = 0usize;
-        let formatted = format_anthropic_messages(
-            &messages,
-            &mut block_index,
-            &mut cache_control_count,
-            None,
-        );
+        let formatted = format_anthropic_messages(&messages, &mut cache_control_count, false);
         let blocks = formatted[0]["content"].as_array().expect("content array");
         assert!(
             blocks
                 .iter()
                 .all(|block| block.get("cache_control").is_none()),
-            "cache_control markers should be absent without request options"
+            "cache_control markers should be absent when cache is disabled"
         );
     }
 
     #[test]
-    fn anthropic_format_marks_stable_prefix_boundary_for_cache() {
-        let options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: vec![0],
-        };
-        let stable_prefix = "a".repeat(ANTHROPIC_CACHE_BLOCK_MAX_CHARS + 20);
-        let messages = vec![LlmMessage {
-            role: "user".to_string(),
-            content: json!(format!("{stable_prefix}\nSTATE SUMMARY:\ndynamic suffix")),
-        }];
-        let mut block_index = 0usize;
+    fn anthropic_format_marks_last_message_before_newest() {
+        // With 3 messages, cache should be on the second-to-last (index 1),
+        // NOT on the last (index 2) which is the newest/changing message.
+        let messages = vec![
+            LlmMessage {
+                role: "user".to_string(),
+                content: json!("first message"),
+            },
+            LlmMessage {
+                role: "assistant".to_string(),
+                content: json!("second message"),
+            },
+            LlmMessage {
+                role: "user".to_string(),
+                content: json!("third newest message"),
+            },
+        ];
         let mut cache_control_count = 0usize;
-        let formatted = format_anthropic_messages(
-            &messages,
-            &mut block_index,
-            &mut cache_control_count,
-            Some(&options),
-        );
-        let blocks = formatted[0]["content"].as_array().expect("content array");
+        let formatted = format_anthropic_messages(&messages, &mut cache_control_count, true);
 
+        // Message at index 1 (second-to-last) should have cache_control
+        let msg1_blocks = formatted[1]["content"].as_array().expect("content array");
+        let last_block = msg1_blocks.last().unwrap();
         assert_eq!(
-            blocks[1]
+            last_block
                 .get("cache_control")
                 .and_then(|v| v.get("type"))
                 .and_then(|v| v.as_str()),
-            Some("ephemeral")
+            Some("ephemeral"),
+            "second-to-last message should have cache_control"
         );
-    }
 
-    #[test]
-    fn anthropic_format_adds_periodic_cache_breakpoints() {
-        let options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: vec![0],
-        };
-        let message =
-            "a".repeat(ANTHROPIC_CACHE_BLOCK_MAX_CHARS * (ANTHROPIC_CACHE_INTERVAL_BLOCKS + 2));
-        let messages = vec![LlmMessage {
-            role: "user".to_string(),
-            content: json!(message),
-        }];
-        let mut block_index = 0usize;
-        let mut cache_control_count = 0usize;
-        let formatted = format_anthropic_messages(
-            &messages,
-            &mut block_index,
-            &mut cache_control_count,
-            Some(&options),
-        );
-        let blocks = formatted[0]["content"].as_array().expect("content array");
-
-        assert_eq!(
-            blocks[ANTHROPIC_CACHE_INTERVAL_BLOCKS]
-                .get("cache_control")
-                .and_then(|v| v.get("type"))
-                .and_then(|v| v.as_str()),
-            Some("ephemeral")
-        );
-    }
-
-    #[test]
-    fn anthropic_format_marks_controller_section_boundaries_for_cache() {
-        let options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: vec![0],
-        };
-        let messages = vec![LlmMessage {
-            role: "user".to_string(),
-            content: json!(
-                "prefix\nSTATE SUMMARY:\nstate\nLAST TOOL OUTPUT:\noutput\nLIMITS:\nlimits"
-            ),
-        }];
-        let mut block_index = 0usize;
-        let mut cache_control_count = 0usize;
-        let formatted = format_anthropic_messages(
-            &messages,
-            &mut block_index,
-            &mut cache_control_count,
-            Some(&options),
-        );
-        let blocks = formatted[0]["content"].as_array().expect("content array");
+        // Last message (newest) should NOT have cache_control
+        let msg2_blocks = formatted[2]["content"].as_array().expect("content array");
         assert!(
-            blocks.len() >= 4,
-            "expected split into at least controller sections"
+            msg2_blocks
+                .iter()
+                .all(|block| block.get("cache_control").is_none()),
+            "newest message should NOT have cache_control"
         );
+    }
+
+    #[test]
+    fn anthropic_format_single_message_gets_cache() {
+        // With only 1 message, it should still get cached (better than nothing)
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!("only message"),
+        }];
+        let mut cache_control_count = 0usize;
+        let formatted = format_anthropic_messages(&messages, &mut cache_control_count, true);
+        let blocks = formatted[0]["content"].as_array().expect("content array");
         assert_eq!(
-            blocks[1]
-                .get("cache_control")
-                .and_then(|v| v.get("type"))
-                .and_then(|v| v.as_str()),
-            Some("ephemeral")
-        );
-        assert_eq!(
-            blocks[2]
+            blocks
+                .last()
+                .unwrap()
                 .get("cache_control")
                 .and_then(|v| v.get("type"))
                 .and_then(|v| v.as_str()),
@@ -1483,73 +1385,49 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_format_marks_responder_section_boundaries_for_cache() {
-        let options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: vec![0],
-        };
-        let messages = vec![LlmMessage {
-            role: "user".to_string(),
-            content: json!(
-                "prefix\nUSER REQUEST:\nrequest\nRECENT MESSAGES:\nhistory\nTOOL OUTPUTS (if any):\noutputs\nCONTROLLER DRAFT (if any):\ndraft\nInstructions:\nfinalize"
-            ),
-        }];
-        let mut block_index = 0usize;
+    fn anthropic_system_only_marks_last_block() {
+        let long_system = "a".repeat(ANTHROPIC_CACHE_BLOCK_MAX_CHARS * 3);
         let mut cache_control_count = 0usize;
-        let formatted = format_anthropic_messages(
-            &messages,
-            &mut block_index,
-            &mut cache_control_count,
-            Some(&options),
-        );
-        let blocks = formatted[0]["content"].as_array().expect("content array");
-        assert!(
-            blocks.len() >= 5,
-            "expected split into responder sections, got {}",
-            blocks.len()
-        );
-        assert!(
-            blocks.iter().skip(1).take(3).all(|block| block
-                .get("cache_control")
-                .and_then(|v| v.get("type"))
-                .and_then(|v| v.as_str())
-                == Some("ephemeral")),
-            "expected responder section boundaries to carry cache markers"
-        );
+        let system_blocks =
+            format_anthropic_system(Some(&long_system), &mut cache_control_count, true)
+                .expect("system blocks");
+        let blocks = system_blocks.as_array().expect("array");
+        assert!(blocks.len() >= 3, "should have multiple blocks");
+
+        // Only the last block should have cache_control
+        for (i, block) in blocks.iter().enumerate() {
+            if i + 1 == blocks.len() {
+                assert!(
+                    block.get("cache_control").is_some(),
+                    "last system block should have cache_control"
+                );
+            } else {
+                assert!(
+                    block.get("cache_control").is_none(),
+                    "non-last system block should NOT have cache_control"
+                );
+            }
+        }
+        assert_eq!(cache_control_count, 1);
     }
 
     #[test]
     fn anthropic_format_limits_cache_control_blocks_per_request() {
-        let options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: vec![0],
-        };
-        let messages = vec![
-            LlmMessage {
-                role: "user".to_string(),
-                content: json!(
-                    "prefix\nSTATE SUMMARY:\nstate\nLAST TOOL OUTPUT:\noutput\nLIMITS:\nlimits"
-                ),
-            },
-            LlmMessage {
-                role: "assistant".to_string(),
-                content: json!(
-                    "extra\nSTATE SUMMARY:\nmore\nLAST TOOL OUTPUT:\nmore\nLIMITS:\nmore"
-                ),
-            },
-        ];
-        let mut block_index = 0usize;
+        // With many messages, total cache_control markers should not exceed the limit
+        let messages: Vec<LlmMessage> = (0..10)
+            .map(|i| LlmMessage {
+                role: if i % 2 == 0 {
+                    "user".to_string()
+                } else {
+                    "assistant".to_string()
+                },
+                content: json!(format!("message {i}")),
+            })
+            .collect();
         let mut cache_control_count = 0usize;
-        let formatted = format_anthropic_messages(
-            &messages,
-            &mut block_index,
-            &mut cache_control_count,
-            Some(&options),
-        );
+        let formatted = format_anthropic_messages(&messages, &mut cache_control_count, true);
 
-        let marked = formatted
+        let marked: usize = formatted
             .iter()
             .filter_map(|message| message.get("content").and_then(|v| v.as_array()))
             .flat_map(|blocks| blocks.iter())
@@ -1560,6 +1438,50 @@ mod tests {
             marked <= ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS,
             "expected no more than {} cache_control blocks, found {marked}",
             ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS
+        );
+    }
+
+    #[test]
+    fn anthropic_cache_breakpoints_placed_near_end_of_conversation() {
+        // With 10 messages and cache enabled, breakpoints should be on messages
+        // near the end (not at the beginning)
+        let messages: Vec<LlmMessage> = (0..10)
+            .map(|i| LlmMessage {
+                role: if i % 2 == 0 {
+                    "user".to_string()
+                } else {
+                    "assistant".to_string()
+                },
+                content: json!(format!("message {i}")),
+            })
+            .collect();
+        let mut cache_control_count = 0usize;
+        let formatted = format_anthropic_messages(&messages, &mut cache_control_count, true);
+
+        // First few messages should NOT have cache_control
+        for i in 0..5 {
+            let blocks = formatted[i]["content"].as_array().expect("content array");
+            assert!(
+                blocks
+                    .iter()
+                    .all(|block| block.get("cache_control").is_none()),
+                "early message {i} should NOT have cache_control"
+            );
+        }
+
+        // Last message (index 9) should NOT have cache_control (it's the newest)
+        let last_blocks = formatted[9]["content"].as_array().expect("content array");
+        assert!(
+            last_blocks
+                .iter()
+                .all(|block| block.get("cache_control").is_none()),
+            "newest message should NOT have cache_control"
+        );
+
+        // Messages near the end (but not the last) should have cache_control
+        assert!(
+            cache_control_count > 0,
+            "should have placed some cache breakpoints"
         );
     }
 

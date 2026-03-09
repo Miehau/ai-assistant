@@ -152,7 +152,8 @@ fn controller_output_format_for_provider(
     provider: &str,
     output_format: Option<Value>,
 ) -> Option<Value> {
-    // Anthropic structured outputs cause request timeouts; rely on JSON-in-text parsing instead.
+    // Anthropic structured outputs use streaming internally to avoid timeouts,
+    // but the controller's respond action streams separately via the responder path.
     if provider == "anthropic" {
         return None;
     }

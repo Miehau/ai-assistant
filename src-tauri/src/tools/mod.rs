@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
 use uuid::Uuid;
 
+mod anthropic;
 mod approvals;
 mod files;
 mod integrations;
@@ -16,6 +17,7 @@ mod tool_outputs;
 mod vault;
 mod web;
 
+pub use anthropic::register_anthropic_tools;
 pub use approvals::{
     get_conversation_tool_approval_override, get_tool_approval_override,
     load_conversation_tool_approval_overrides, load_tool_approval_overrides,
@@ -262,9 +264,9 @@ impl ApprovalStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        register_file_tools, register_integration_tools, register_pref_tools, register_search_tool,
-        register_shell_tools, register_tool_output_tools, register_web_tools, ToolDefinition,
-        ToolError,
+        register_anthropic_tools, register_file_tools, register_integration_tools,
+        register_pref_tools, register_search_tool, register_shell_tools,
+        register_tool_output_tools, register_web_tools, ToolDefinition, ToolError,
         ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode, JSONSchema,
     };
     use crate::db::{Db, PreferenceOperations};
@@ -568,6 +570,8 @@ mod tests {
             .expect("tool output tools registration failed");
         register_web_tools(&mut registry, db.clone()).expect("web tools registration failed");
         register_shell_tools(&mut registry, db.clone()).expect("shell tools registration failed");
+        register_anthropic_tools(&mut registry, db.clone())
+            .expect("anthropic tools registration failed");
 
         for metadata in registry.list_metadata() {
             for (label, schema) in [
