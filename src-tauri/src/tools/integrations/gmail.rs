@@ -19,7 +19,6 @@ pub(super) fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Resul
     let db_for_get = db.clone();
     let db_for_download = db.clone();
     let db_for_labels = db.clone();
-    let db_for_send = db.clone();
     let db_for_draft = db.clone();
     let list_threads = ToolDefinition {
         metadata: ToolMetadata {
@@ -402,110 +401,6 @@ pub(super) fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Resul
         preview: None,
     };
 
-    let send_message = ToolDefinition {
-        metadata: ToolMetadata {
-            name: "gmail.send_message".to_string(),
-            description: "Send a Gmail message on behalf of the connected account.".to_string(),
-            args_schema: json!({
-                "type": "object",
-                "properties": {
-                    "connection_id": {
-                        "type": "string",
-                        "description": "Optional. Omit to use the default connected Gmail account."
-                    },
-                    "to": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-                    "cc": { "type": "array", "items": { "type": "string" } },
-                    "bcc": { "type": "array", "items": { "type": "string" } },
-                    "subject": { "type": "string" },
-                    "body": { "type": "string" }
-                },
-                "required": ["to", "subject", "body"]
-            }),
-            result_schema: json!({
-                "type": "object",
-                "properties": {
-                    "id": { "type": "string" },
-                    "threadId": { "type": "string" }
-                }
-            }),
-            requires_approval: false,
-            result_mode: ToolResultMode::Inline,
-        },
-        handler: Arc::new(move |args, _ctx: ToolExecutionContext| {
-            let connection_id = args
-                .get("connection_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let connection = get_connection(&db_for_send, connection_id, "gmail")?;
-            let token = get_google_access_token(&db_for_send, &connection)?;
-
-            let to = args
-                .get("to")
-                .and_then(|v| v.as_array())
-                .ok_or_else(|| ToolError::new("Missing 'to'"))?;
-            let to_list = to
-                .iter()
-                .filter_map(|v| v.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let cc_list = args
-                .get("cc")
-                .and_then(|v| v.as_array())
-                .map(|list| {
-                    list.iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let bcc_list = args
-                .get("bcc")
-                .and_then(|v| v.as_array())
-                .map(|list| {
-                    list.iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let subject = args.get("subject").and_then(|v| v.as_str()).unwrap_or("");
-            let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
-
-            let mut headers = Vec::new();
-            headers.push(format!("To: {to_list}"));
-            if !cc_list.is_empty() {
-                headers.push(format!("Cc: {cc_list}"));
-            }
-            if !bcc_list.is_empty() {
-                headers.push(format!("Bcc: {bcc_list}"));
-            }
-            headers.push(format!("Subject: {subject}"));
-            headers.push("MIME-Version: 1.0".to_string());
-            headers.push("Content-Type: text/plain; charset=\"UTF-8\"".to_string());
-
-            let raw_email = format!("{}\r\n\r\n{}", headers.join("\r\n"), body);
-            let encoded = URL_SAFE_NO_PAD.encode(raw_email.as_bytes());
-
-            let client = Client::new();
-            let response = client
-                .post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
-                .bearer_auth(token)
-                .json(&json!({ "raw": encoded }))
-                .send()
-                .map_err(|err| ToolError::new(format!("Failed to call Gmail API: {err}")))?;
-
-            let status = response.status();
-            if !status.is_success() {
-                return Err(ToolError::new(format!("Gmail API error: HTTP {status}")));
-            }
-
-            response
-                .json::<Value>()
-                .map_err(|err| ToolError::new(format!("Failed to parse Gmail response: {err}")))
-        }),
-        preview: None,
-    };
-
     let draft_email = ToolDefinition {
         metadata: ToolMetadata {
             name: "gmail.draft_email".to_string(),
@@ -641,7 +536,6 @@ pub(super) fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Resul
     registry.register(get_thread)?;
     registry.register(download_attachment)?;
     registry.register(list_labels)?;
-    registry.register(send_message)?;
     registry.register(draft_email)?;
     Ok(())
 }
