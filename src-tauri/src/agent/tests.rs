@@ -241,3 +241,30 @@ fn controller_rejects_invalid_args() {
         "expected preflight args validation error"
     );
 }
+
+#[test]
+fn controller_prompt_includes_no_id_invention_rule() {
+    use super::prompts::CONTROLLER_PROMPT_BASE;
+    assert!(
+        CONTROLLER_PROMPT_BASE.contains("do not invent IDs"),
+        "controller prompt must include no-ID-invention rule"
+    );
+}
+
+#[test]
+fn controller_prompt_includes_dependency_rule() {
+    use super::prompts::CONTROLLER_PROMPT_BASE;
+    assert!(
+        CONTROLLER_PROMPT_BASE.contains("depend on output of another tool"),
+        "controller prompt must include dependency rule"
+    );
+}
+
+#[test]
+fn controller_prompt_discourages_gmail_list_threads_in_batch() {
+    use super::prompts::CONTROLLER_PROMPT_BASE;
+    assert!(
+        CONTROLLER_PROMPT_BASE.contains("gmail.list_threads"),
+        "controller prompt must mention gmail.list_threads batch restriction"
+    );
+}
