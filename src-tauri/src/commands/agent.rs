@@ -13,13 +13,7 @@ use crate::events::{
     EVENT_ASSISTANT_STREAM_STARTED, EVENT_CONVERSATION_UPDATED, EVENT_MESSAGE_SAVED,
     EVENT_MESSAGE_USAGE_SAVED, EVENT_USAGE_UPDATED,
 };
-use crate::llm::{
-    complete_anthropic, complete_anthropic_with_output_format_with_options, complete_claude_cli,
-    complete_openai, complete_openai_compatible, complete_openai_compatible_with_options,
-    complete_openai_with_options, stream_anthropic_with_options,
-    stream_openai_compatible_with_options, stream_openai_with_options, LlmMessage,
-    LlmRequestOptions, Usage,
-};
+use crate::llm::{create_provider, LlmMessage, LlmRequestOptions, ProviderConfig, Usage};
 use crate::tools::{ApprovalStore, ToolRegistry};
 use chrono::Utc;
 use reqwest::blocking::Client;
@@ -148,18 +142,6 @@ fn build_http_client() -> Client {
     build_http_client_with_timeouts(LLM_HTTP_TIMEOUT_SECS, LLM_HTTP_CONNECT_TIMEOUT_SECS)
 }
 
-fn controller_output_format_for_provider(
-    provider: &str,
-    output_format: Option<Value>,
-) -> Option<Value> {
-    // Anthropic structured outputs use streaming internally to avoid timeouts,
-    // but the controller's respond action streams separately via the responder path.
-    if provider == "anthropic" {
-        return None;
-    }
-    output_format
-}
-
 fn calculate_estimated_cost(model: &str, prompt_tokens: i32, completion_tokens: i32) -> f64 {
     let pricing = get_pricing();
     let normalized_model = model.replace("claude-cli-", "claude-");
@@ -233,6 +215,7 @@ fn supports_openai_prompt_cache_retention(model: &str) -> bool {
     normalized.starts_with("gpt-5")
 }
 
+#[allow(dead_code)] // Used by tests; logic now lives in provider build_request_options()
 fn llm_request_options(
     provider: &str,
     conversation_id: &str,
@@ -548,32 +531,41 @@ pub fn agent_send_message(
 
     let provider = provider.to_lowercase();
     let model = model.clone();
-    match provider.as_str() {
-        "openai" | "anthropic" | "deepseek" => {
-            let api_key = ModelOperations::get_api_key(&*state, &provider)
-                .map_err(|e| e.to_string())?
-                .unwrap_or_default();
-            if api_key.is_empty() {
-                return Err(format!("Missing API key for provider: {provider}"));
+
+    // Resolve provider config and validate credentials up front (before spawning thread).
+    // create_provider validates API keys / URLs and returns Err for missing credentials.
+    let provider_config = {
+        let (api_key, base_url) = match provider.as_str() {
+            "openai" | "anthropic" | "deepseek" => {
+                let key = ModelOperations::get_api_key(&*state, &provider)
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or_default();
+                (Some(key), None)
             }
-        }
-        "custom" => {
-            let backend_id = custom_backend_id
-                .clone()
-                .ok_or_else(|| "Custom provider requires custom_backend_id".to_string())?;
-            let backend = CustomBackendOperations::get_custom_backend_by_id(&*state, &backend_id)
-                .map_err(|e| e.to_string())?;
-            if backend.is_none() {
-                return Err("Custom backend not found".to_string());
+            "custom" => {
+                let backend_id = custom_backend_id
+                    .clone()
+                    .ok_or_else(|| "Custom provider requires custom_backend_id".to_string())?;
+                let backend =
+                    CustomBackendOperations::get_custom_backend_by_id(&*state, &backend_id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| "Custom backend not found".to_string())?;
+                (backend.api_key, Some(backend.url))
             }
+            "ollama" | "claude_cli" => (None, None),
+            _ => (None, None),
+        };
+        ProviderConfig {
+            provider_name: provider.clone(),
+            model: model.clone(),
+            api_key,
+            base_url,
         }
-        "ollama" | "claude_cli" => {}
-        _ => {}
-    }
+    };
+    let llm_provider = create_provider(provider_config)?;
 
     let db = state.inner().clone();
     let bus = event_bus.inner().clone();
-    let custom_backend_id = custom_backend_id.clone();
     let system_prompt_for_thread = system_prompt.clone();
     let conversation_id_for_thread = conversation_id.clone();
     let assistant_message_id_for_thread = assistant_message_id.clone();
@@ -676,47 +668,9 @@ pub fn agent_send_message(
             let mut controller_cache_diagnostics = CacheDiagnostics::default();
             let mut responder_cache_diagnostics = CacheDiagnostics::default();
             let mut requested_user_input = false;
-            let openai_api_key = ModelOperations::get_api_key(&db, "openai")
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let anthropic_api_key = ModelOperations::get_api_key(&db, "anthropic")
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let deepseek_api_key = ModelOperations::get_api_key(&db, "deepseek")
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-
-            let custom_backend_config = if provider == "custom" {
-                custom_backend_id
-                    .as_ref()
-                    .and_then(|id| CustomBackendOperations::get_custom_backend_by_id(&db, id).ok())
-                    .flatten()
-                    .map(|backend| (backend.url, backend.api_key))
-            } else if provider == "ollama" {
-                Some((
-                    "http://localhost:11434/v1/chat/completions".to_string(),
-                    None,
-                ))
-            } else {
-                None
-            };
-
             let messages_for_usage = messages.clone();
-            let controller_request_options = llm_request_options(
-                &provider,
-                &conversation_id_for_thread,
-                "controller",
-                &model_for_thread,
-            );
-            let responder_request_options = llm_request_options(
-                &provider,
-                &conversation_id_for_thread,
-                "responder",
-                &model_for_thread,
-            );
+            let controller_request_options =
+                llm_provider.build_request_options(&conversation_id_for_thread, "controller");
 
             let mut tool_execution_inputs: Vec<MessageToolExecutionInput> = Vec::new();
             let mut call_llm = |messages: &[LlmMessage],
@@ -731,94 +685,15 @@ pub fn agent_send_message(
                     messages.len(),
                     output_format.is_some()
                 );
-                let prepared_messages = if provider == "anthropic" || provider == "claude_cli" {
-                    messages.to_vec()
-                } else {
-                    let mut prepared = messages.to_vec();
-                    if let Some(system_prompt) = system_prompt {
-                        if !system_prompt.trim().is_empty() {
-                            prepared.insert(
-                                0,
-                                LlmMessage {
-                                    role: "system".to_string(),
-                                    content: json!(system_prompt),
-                                },
-                            );
-                        }
-                    }
-                    prepared
-                };
 
                 let llm_call_started = Instant::now();
-                let result = match provider.as_str() {
-                    "openai" => {
-                        if openai_api_key.is_empty() {
-                            Err("Missing OpenAI API key".to_string())
-                        } else {
-                            complete_openai_with_options(
-                                &controller_client,
-                                &openai_api_key,
-                                "https://api.openai.com/v1/chat/completions",
-                                &model_for_thread,
-                                &prepared_messages,
-                                Some(&controller_request_options),
-                            )
-                        }
-                    }
-                    "anthropic" => {
-                        if anthropic_api_key.is_empty() {
-                            Err("Missing Anthropic API key".to_string())
-                        } else {
-                            let effective_output_format =
-                                controller_output_format_for_provider(&provider, output_format.clone());
-                            complete_anthropic_with_output_format_with_options(
-                                &controller_client,
-                                &anthropic_api_key,
-                                &model_for_thread,
-                                system_prompt,
-                                &prepared_messages,
-                                effective_output_format,
-                                Some(&controller_request_options),
-                            )
-                        }
-                    }
-                    "deepseek" => {
-                        if deepseek_api_key.is_empty() {
-                            Err("Missing DeepSeek API key".to_string())
-                        } else {
-                            complete_openai_compatible_with_options(
-                                &controller_client,
-                                Some(&deepseek_api_key),
-                                "https://api.deepseek.com/chat/completions",
-                                &model_for_thread,
-                                &prepared_messages,
-                                Some(&controller_request_options),
-                            )
-                        }
-                    }
-                    "claude_cli" => complete_claude_cli(
-                        &model_for_thread,
-                        system_prompt,
-                        &prepared_messages,
-                        output_format,
-                    ),
-                    "custom" | "ollama" => {
-                        let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
-                        if url.is_empty() {
-                            Err("Missing custom backend URL".to_string())
-                        } else {
-                            complete_openai_compatible_with_options(
-                                &controller_client,
-                                api_key.as_deref(),
-                                &url,
-                                &model_for_thread,
-                                &prepared_messages,
-                                Some(&controller_request_options),
-                            )
-                        }
-                    }
-                    _ => Err(format!("Unsupported provider: {provider}")),
-                };
+                let result = llm_provider.controller_call(
+                    &controller_client,
+                    messages,
+                    system_prompt,
+                    output_format,
+                    Some(&controller_request_options),
+                );
 
                 let elapsed_ms = llm_call_started.elapsed().as_millis();
                 match &result {
@@ -864,7 +739,7 @@ pub fn agent_send_message(
                         );
                     } else {
                         usage_accumulator.prompt_tokens +=
-                            estimate_prompt_tokens(&prepared_messages);
+                            estimate_prompt_tokens(messages);
                         usage_accumulator.completion_tokens +=
                             estimate_tokens(&stream_result.content);
                     }
@@ -937,7 +812,7 @@ pub fn agent_send_message(
             let mut stream_started = false;
             let mut cancelled = cancel_token_for_thread.load(Ordering::Relaxed);
 
-            let stream_supported = supports_streaming(&provider);
+            let stream_supported = llm_provider.supports_streaming();
             let use_responder = controller_ok
                 && stream_supported
                 && !tool_execution_inputs.is_empty()
@@ -970,23 +845,6 @@ pub fn agent_send_message(
                 let responder_system_prompt = system_prompt_for_thread
                     .as_deref()
                     .filter(|prompt| !prompt.trim().is_empty());
-
-                let prepared_responder_messages =
-                    if provider == "anthropic" || provider == "claude_cli" {
-                        responder_messages.clone()
-                    } else {
-                        let mut prepared = responder_messages.clone();
-                        if let Some(system_prompt) = responder_system_prompt {
-                            prepared.insert(
-                                0,
-                                LlmMessage {
-                                    role: "system".to_string(),
-                                    content: json!(system_prompt),
-                                },
-                            );
-                        }
-                        prepared
-                    };
 
                 if !cancel_token_for_thread.load(Ordering::Relaxed) {
                     let stream_timestamp = Utc::now().timestamp_millis();
@@ -1022,72 +880,15 @@ pub fn agent_send_message(
                     ));
                 };
 
-                let stream_result = match provider.as_str() {
-                    "openai" => {
-                        if openai_api_key.is_empty() {
-                            Err("Missing OpenAI API key".to_string())
-                        } else {
-                            stream_openai_with_options(
-                                &stream_client,
-                                &openai_api_key,
-                                "https://api.openai.com/v1/chat/completions",
-                                &model_for_thread,
-                                &prepared_responder_messages,
-                                Some(&responder_request_options),
-                                &mut on_chunk,
-                            )
-                        }
-                    }
-                    "anthropic" => {
-                        if anthropic_api_key.is_empty() {
-                            Err("Missing Anthropic API key".to_string())
-                        } else {
-                            stream_anthropic_with_options(
-                                &stream_client,
-                                &anthropic_api_key,
-                                &model_for_thread,
-                                responder_system_prompt,
-                                &responder_messages,
-                                Some(&responder_request_options),
-                                &mut on_chunk,
-                            )
-                        }
-                    }
-                    "deepseek" => {
-                        if deepseek_api_key.is_empty() {
-                            Err("Missing DeepSeek API key".to_string())
-                        } else {
-                            stream_openai_compatible_with_options(
-                                &stream_client,
-                                Some(&deepseek_api_key),
-                                "https://api.deepseek.com/chat/completions",
-                                &model_for_thread,
-                                &prepared_responder_messages,
-                                false,
-                                Some(&responder_request_options),
-                                &mut on_chunk,
-                            )
-                        }
-                    }
-                    "custom" | "ollama" => {
-                        let (url, api_key) = custom_backend_config.clone().unwrap_or_default();
-                        if url.is_empty() {
-                            Err("Missing custom backend URL".to_string())
-                        } else {
-                            stream_openai_compatible_with_options(
-                                &stream_client,
-                                api_key.as_deref(),
-                                &url,
-                                &model_for_thread,
-                                &prepared_responder_messages,
-                                false,
-                                Some(&responder_request_options),
-                                &mut on_chunk,
-                            )
-                        }
-                    }
-                    _ => Err(format!("Unsupported provider: {provider}")),
-                };
+                let responder_request_options = llm_provider
+                    .build_request_options(&conversation_id_for_thread, "responder");
+                let stream_result = llm_provider.stream_response(
+                    &stream_client,
+                    &responder_messages,
+                    responder_system_prompt,
+                    Some(&responder_request_options),
+                    &mut on_chunk,
+                );
 
                 let mut responder_usage: Option<Usage> = None;
                 match stream_result {
@@ -1122,7 +923,7 @@ pub fn agent_send_message(
 
                 if responder_usage.is_none() && !final_response.is_empty() {
                     responder_usage = Some(Usage {
-                        prompt_tokens: estimate_prompt_tokens(&prepared_responder_messages),
+                        prompt_tokens: estimate_prompt_tokens(&responder_messages),
                         completion_tokens: estimate_tokens(&final_response),
                         cached_prompt_tokens: 0,
                         cache_read_input_tokens: 0,
@@ -1419,82 +1220,44 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
         first_user_message
     );
 
-    let messages = vec![
-        LlmMessage {
-            role: "system".to_string(),
-            content: json!(system_prompt),
-        },
-        LlmMessage {
-            role: "user".to_string(),
-            content: json!(user_prompt),
-        },
-    ];
+    let messages = vec![LlmMessage {
+        role: "user".to_string(),
+        content: json!(user_prompt),
+    }];
+
+    // Resolve provider config for title generation
+    let (api_key, base_url) = match provider.as_str() {
+        "openai" | "anthropic" | "deepseek" => {
+            let key = ModelOperations::get_api_key(&db, &provider)
+                .map_err(|e| e.to_string())?;
+            (key, None)
+        }
+        "custom" => {
+            let backend_id = payload
+                .custom_backend_id
+                .clone()
+                .ok_or_else(|| "Custom provider requires custom_backend_id".to_string())?;
+            let backend = CustomBackendOperations::get_custom_backend_by_id(&db, &backend_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "Custom backend not found".to_string())?;
+            (backend.api_key, Some(backend.url))
+        }
+        "ollama" | "claude_cli" => (None, None),
+        _ => return Err(format!("Unsupported provider: {}", provider)),
+    };
+
+    let title_provider = create_provider(ProviderConfig {
+        provider_name: provider.clone(),
+        model: model.clone(),
+        api_key,
+        base_url,
+    })?;
 
     let client = build_http_client();
-    let mut title = match provider.as_str() {
-        "openai" => {
-            let api_key = ModelOperations::get_api_key(&db, "openai")
-                .map_err(|e| e.to_string())?
-                .unwrap_or_default();
-            if api_key.is_empty() {
-                return Err("Missing OpenAI API key".to_string());
-            }
-            complete_openai(
-                &client,
-                &api_key,
-                "https://api.openai.com/v1/chat/completions",
-                &model,
-                &messages,
-            )
-        }
-        "anthropic" => {
-            let api_key = ModelOperations::get_api_key(&db, "anthropic")
-                .map_err(|e| e.to_string())?
-                .unwrap_or_default();
-            if api_key.is_empty() {
-                return Err("Missing Anthropic API key".to_string());
-            }
-            complete_anthropic(&client, &api_key, &model, Some(system_prompt), &messages)
-        }
-        "deepseek" => {
-            let api_key = ModelOperations::get_api_key(&db, "deepseek")
-                .map_err(|e| e.to_string())?
-                .unwrap_or_default();
-            if api_key.is_empty() {
-                return Err("Missing DeepSeek API key".to_string());
-            }
-            complete_openai_compatible(
-                &client,
-                Some(&api_key),
-                "https://api.deepseek.com/chat/completions",
-                &model,
-                &messages,
-            )
-        }
-        "claude_cli" => complete_claude_cli(&model, Some(system_prompt), &messages, None),
-        "custom" | "ollama" => {
-            let (url, api_key) = if provider == "ollama" {
-                (
-                    "http://localhost:11434/v1/chat/completions".to_string(),
-                    None,
-                )
-            } else {
-                let backend_id = payload
-                    .custom_backend_id
-                    .clone()
-                    .ok_or_else(|| "Custom provider requires custom_backend_id".to_string())?;
-                let backend = CustomBackendOperations::get_custom_backend_by_id(&db, &backend_id)
-                    .map_err(|e| e.to_string())?
-                    .ok_or_else(|| "Custom backend not found".to_string())?;
-                (backend.url, backend.api_key)
-            };
-
-            complete_openai_compatible(&client, api_key.as_deref(), &url, &model, &messages)
-        }
-        _ => return Err(format!("Unsupported provider: {}", provider)),
-    }
-    .map_err(|e| e.to_string())?
-    .content;
+    let mut title = title_provider
+        .complete(&client, &messages, Some(system_prompt))
+        .map_err(|e| e.to_string())?
+        .content;
 
     title = title
         .trim()
@@ -1744,13 +1507,6 @@ fn compact_result_metadata(value: &Value) -> Value {
     }
 }
 
-fn supports_streaming(provider: &str) -> bool {
-    matches!(
-        provider,
-        "openai" | "anthropic" | "deepseek" | "custom" | "ollama"
-    )
-}
-
 fn build_responder_prompt(
     user_message: &str,
     messages: &[LlmMessage],
@@ -1884,25 +1640,6 @@ mod tests {
     fn cache_diagnostics_enabled_for_anthropic_responder_with_breakpoints() {
         let options = llm_request_options("anthropic", "conv-1", "responder", "claude-sonnet");
         assert!(cache_diagnostics_enabled("anthropic", &options));
-    }
-
-    #[test]
-    fn controller_output_format_for_provider_skips_anthropic() {
-        let format = json!({
-            "type": "json_schema",
-            "schema": { "type": "object" }
-        });
-        assert!(controller_output_format_for_provider("anthropic", Some(format)).is_none());
-    }
-
-    #[test]
-    fn controller_output_format_for_provider_keeps_non_anthropic_output_format() {
-        let format = json!({
-            "type": "json_schema",
-            "schema": { "type": "object" }
-        });
-        let selected = controller_output_format_for_provider("openai", Some(format.clone()));
-        assert_eq!(selected, Some(format));
     }
 
     #[test]
