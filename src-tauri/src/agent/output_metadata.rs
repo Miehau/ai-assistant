@@ -203,13 +203,11 @@ fn bound_output_metadata_size(mut metadata: Value) -> Value {
         return metadata;
     }
 
+    // Priority: keep id_hints (most useful for the LLM), drop decorative metadata first
     if let Some(object) = metadata.as_object_mut() {
-        object.remove("id_hints");
+        object.remove("top_level_value_types");
+        object.remove("item_type_hints");
         object.insert("metadata_truncated".to_string(), Value::Bool(true));
-        object.insert(
-            "metadata_truncation_reason".to_string(),
-            Value::String("removed_id_hints_for_size_limit".to_string()),
-        );
     }
 
     length = value_char_len(&metadata);
@@ -217,13 +215,19 @@ fn bound_output_metadata_size(mut metadata: Value) -> Value {
         return metadata;
     }
 
+    // Still too large — trim top_level_keys
     if let Some(object) = metadata.as_object_mut() {
-        object.remove("item_type_hints");
-        object.remove("top_level_value_types");
-        object.insert(
-            "metadata_truncation_reason".to_string(),
-            Value::String("removed_secondary_hints_for_size_limit".to_string()),
-        );
+        object.remove("top_level_keys");
+    }
+
+    length = value_char_len(&metadata);
+    if length <= OUTPUT_METADATA_MAX_SERIALIZED_CHARS {
+        return metadata;
+    }
+
+    // Last resort — drop id_hints too
+    if let Some(object) = metadata.as_object_mut() {
+        object.remove("id_hints");
     }
 
     length = value_char_len(&metadata);
@@ -234,8 +238,7 @@ fn bound_output_metadata_size(mut metadata: Value) -> Value {
     json!({
         "root_type": metadata.get("root_type").cloned().unwrap_or_else(|| Value::String("unknown".to_string())),
         "size_chars": metadata.get("size_chars").cloned().unwrap_or_else(|| Value::from(0)),
-        "metadata_truncated": true,
-        "metadata_truncation_reason": "hard_size_limit"
+        "metadata_truncated": true
     })
 }
 

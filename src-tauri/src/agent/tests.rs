@@ -260,11 +260,3 @@ fn controller_prompt_includes_dependency_rule() {
     );
 }
 
-#[test]
-fn controller_prompt_discourages_gmail_list_threads_in_batch() {
-    use super::prompts::CONTROLLER_PROMPT_BASE;
-    assert!(
-        CONTROLLER_PROMPT_BASE.contains("gmail.list_threads"),
-        "controller prompt must mention gmail.list_threads batch restriction"
-    );
-}

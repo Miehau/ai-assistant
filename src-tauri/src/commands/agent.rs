@@ -1410,31 +1410,7 @@ fn format_tool_execution_block(
     let params = truncate_for_prompt(&params, MAX_TOOL_ARGS_CHARS);
 
     let output_ref = extract_output_ref_id(result).unwrap_or("none");
-    let requested_output_mode = result
-        .get("requested_output_mode")
-        .and_then(|value| value.as_str())
-        .unwrap_or("n/a");
-    let resolved_output_mode = result
-        .get("resolved_output_mode")
-        .and_then(|value| value.as_str())
-        .or_else(|| {
-            if output_ref != "none" {
-                Some("persist")
-            } else if success {
-                Some("inline")
-            } else {
-                None
-            }
-        })
-        .unwrap_or("n/a");
-    let forced_persist = result
-        .get("forced_persist")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    let forced_reason = result
-        .get("forced_reason")
-        .and_then(|value| value.as_str())
-        .unwrap_or("none");
+    let is_persisted = output_ref != "none";
 
     let metadata = result
         .get("metadata")
@@ -1453,15 +1429,7 @@ fn format_tool_execution_block(
             truncate_for_prompt(failure, MAX_TOOL_ERROR_CHARS)
         )
     } else if let Some(preview) = result.get("preview").and_then(|value| value.as_str()) {
-        let mut summary = truncate_for_prompt(preview, MAX_TOOL_RESULT_CHARS);
-        if result
-            .get("preview_truncated")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false)
-        {
-            summary.push_str(" ...(truncated)");
-        }
-        summary
+        truncate_for_prompt(preview, MAX_TOOL_RESULT_CHARS)
     } else {
         let rendered = serde_json::to_string(result).unwrap_or_else(|_| result.to_string());
         truncate_for_prompt(&rendered, MAX_TOOL_RESULT_CHARS)
@@ -1475,8 +1443,9 @@ fn format_tool_execution_block(
         prefix.push_str(&format!("\nDurationMs: {duration_ms}"));
     }
 
+    let mode = if is_persisted { "persisted" } else { "inline" };
     format!(
-        "{prefix}\nSuccess: {success}\nRequestedOutputMode: {requested_output_mode}\nResolvedOutputMode: {resolved_output_mode}\nForcedPersist: {forced_persist}\nForcedReason: {forced_reason}\nOutputRef: {output_ref}\nArgs: {params}\nMetadata: {metadata_summary}\nPreview: {preview}"
+        "{prefix}\nSuccess: {success}\nOutputMode: {mode}\nOutputRef: {output_ref}\nArgs: {params}\nMetadata: {metadata_summary}\nPreview: {preview}"
     )
 }
 
@@ -1653,12 +1622,7 @@ mod tests {
                 "persisted": true,
                 "output_ref": { "id": "artifact-123" },
                 "preview": "[{\"id\":\"t1\"}]",
-                "preview_truncated": false,
-                "metadata": { "root_type": "array", "array_length": 10 },
-                "requested_output_mode": "persist",
-                "resolved_output_mode": "persist",
-                "forced_persist": false,
-                "forced_reason": null
+                "metadata": { "root_type": "array", "array_length": 10 }
             }),
             success: true,
             duration_ms: 42,
@@ -1668,8 +1632,7 @@ mod tests {
         };
 
         let rendered = format_tool_executions(&[execution]);
-        assert!(rendered.contains("RequestedOutputMode: persist"));
-        assert!(rendered.contains("ResolvedOutputMode: persist"));
+        assert!(rendered.contains("OutputMode: persisted"));
         assert!(rendered.contains("OutputRef: artifact-123"));
         assert!(rendered.contains("Metadata:"));
         assert!(rendered.contains("Preview:"));
@@ -1692,7 +1655,7 @@ mod tests {
         };
 
         let rendered = format_tool_executions(&[execution]);
-        assert!(rendered.contains("ResolvedOutputMode: inline"));
+        assert!(rendered.contains("OutputMode: inline"));
         assert!(rendered.contains("...(truncated)"));
         assert!(
             rendered.len() < (MAX_TOOL_RESULT_CHARS * 2),

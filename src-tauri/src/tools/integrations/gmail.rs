@@ -45,7 +45,7 @@ pub(super) fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Resul
                 }
             }),
             requires_approval: false,
-            result_mode: ToolResultMode::Auto,
+            result_mode: ToolResultMode::Inline,
         },
         handler: Arc::new(move |args, _ctx: ToolExecutionContext| {
             let connection_id = args
@@ -110,7 +110,7 @@ pub(super) fn register_gmail_tools(registry: &mut ToolRegistry, db: Db) -> Resul
             }),
             result_schema: json!({ "type": "object" }),
             requires_approval: false,
-            result_mode: ToolResultMode::Auto,
+            result_mode: ToolResultMode::Inline,
         },
         handler: Arc::new(move |args, _ctx: ToolExecutionContext| {
             let connection_id = args
