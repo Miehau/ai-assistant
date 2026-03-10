@@ -140,6 +140,18 @@ impl ToolRegistry {
         }
         Ok(())
     }
+
+    /// Coerce string values in args to their expected types based on the tool schema,
+    /// then validate. Returns the coerced args on success.
+    pub fn coerce_and_validate_args(
+        &self,
+        metadata: &ToolMetadata,
+        args: Value,
+    ) -> Result<Value, ToolError> {
+        let coerced = coerce_args_to_schema(&args, &metadata.args_schema);
+        self.validate_args(metadata, &coerced)?;
+        Ok(coerced)
+    }
 }
 
 #[derive(Clone)]
@@ -259,6 +271,71 @@ impl ApprovalStore {
         let pending = self.pending.lock().unwrap();
         pending.get(approval_id).map(|entry| entry.request.clone())
     }
+}
+
+/// Coerce arg values to match expected types in the JSON schema.
+/// Handles common LLM mistakes: string "5" → integer 5, "true" → bool true,
+/// and single-string arrays like ["[\"a\", \"b\"]"] → ["a", "b"].
+fn coerce_args_to_schema(args: &Value, schema: &Value) -> Value {
+    let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) else {
+        return args.clone();
+    };
+    let Some(arg_map) = args.as_object() else {
+        return args.clone();
+    };
+
+    let mut coerced = arg_map.clone();
+    for (key, prop_schema) in properties {
+        let Some(value) = coerced.get(key).cloned() else {
+            continue;
+        };
+        let expected_type = prop_schema.get("type").and_then(|t| t.as_str());
+        let coerced_value = match expected_type {
+            Some("integer") => {
+                value.as_str().and_then(|s| s.trim().parse::<i64>().ok()).map(|n| Value::Number(n.into()))
+            }
+            Some("number") => {
+                value.as_str().and_then(|s| {
+                    s.trim().parse::<f64>().ok().and_then(|n| serde_json::Number::from_f64(n)).map(Value::Number)
+                })
+            }
+            Some("boolean") => {
+                value.as_str().and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
+                    "true" => Some(Value::Bool(true)),
+                    "false" => Some(Value::Bool(false)),
+                    _ => None,
+                })
+            }
+            Some("array") => {
+                // ["[\"$.a\", \"$.b\"]"] → ["$.a", "$.b"]
+                if let Some(arr) = value.as_array() {
+                    if arr.len() == 1 {
+                        arr[0].as_str()
+                            .filter(|s| s.trim().starts_with('['))
+                            .and_then(|s| serde_json::from_str::<Value>(s.trim()).ok())
+                            .filter(|v| v.is_array())
+                    } else {
+                        None
+                    }
+                } else if let Some(s) = value.as_str() {
+                    // String containing array: "[\"a\", \"b\"]" → ["a", "b"]
+                    if s.trim().starts_with('[') {
+                        serde_json::from_str::<Value>(s.trim()).ok().filter(|v| v.is_array())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(new_value) = coerced_value {
+            coerced.insert(key.clone(), new_value);
+        }
+    }
+
+    Value::Object(coerced)
 }
 
 #[cfg(test)]
@@ -746,5 +823,62 @@ mod tests {
             .as_str()
             .unwrap_or("")
             .contains("timed out"));
+    }
+
+    #[test]
+    fn coerce_args_to_schema_coerces_string_to_integer() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "max_results": { "type": "integer" }
+            }
+        });
+        let args = json!({ "max_results": "5" });
+        let result = super::coerce_args_to_schema(&args, &schema);
+        assert_eq!(result["max_results"], 5);
+    }
+
+    #[test]
+    fn coerce_args_to_schema_coerces_string_to_boolean() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "flatten": { "type": "boolean" }
+            }
+        });
+        let args = json!({ "flatten": "true" });
+        let result = super::coerce_args_to_schema(&args, &schema);
+        assert_eq!(result["flatten"], true);
+    }
+
+    #[test]
+    fn coerce_args_to_schema_unpacks_single_string_array() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "paths": { "type": "array", "items": { "type": "string" } }
+            }
+        });
+        let args = json!({ "paths": ["[\"$.a\", \"$.b\"]"] });
+        let result = super::coerce_args_to_schema(&args, &schema);
+        let paths = result["paths"].as_array().expect("array");
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], "$.a");
+        assert_eq!(paths[1], "$.b");
+    }
+
+    #[test]
+    fn coerce_args_to_schema_leaves_valid_args_unchanged() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "max_results": { "type": "integer" },
+                "query": { "type": "string" }
+            }
+        });
+        let args = json!({ "max_results": 10, "query": "from:alice" });
+        let result = super::coerce_args_to_schema(&args, &schema);
+        assert_eq!(result["max_results"], 10);
+        assert_eq!(result["query"], "from:alice");
     }
 }

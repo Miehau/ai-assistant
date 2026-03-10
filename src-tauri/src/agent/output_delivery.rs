@@ -5,7 +5,7 @@ use crate::tools::ToolResultMode;
 
 use super::controller_parsing::{OutputDeliveryResolution, OutputModeHint, ResolvedOutputMode};
 use super::output_metadata::compute_output_metadata_with_size;
-use super::text_utils::{summarize_tool_output_value, value_char_len};
+use super::text_utils::{summarize_tool_output_value, truncate_with_notice, value_char_len};
 
 const AUTO_INLINE_RESULT_MAX_CHARS: usize = 32_768;
 const INLINE_RESULT_HARD_MAX_CHARS: usize = 65_536;
@@ -50,7 +50,7 @@ pub fn build_tool_output_delivery(
         output_chars,
     );
 
-    let (preview, preview_truncated) =
+    let (preview, _preview_truncated) =
         summarize_tool_output_value(&output_value, PERSISTED_RESULT_PREVIEW_MAX_CHARS);
     let metadata = compute_output_metadata_with_size(&output_value, Some(output_chars));
     let should_store_artifact = !tool_name.starts_with(TOOL_OUTPUTS_PREFIX);
@@ -106,19 +106,20 @@ pub fn build_tool_output_delivery(
                     artifact_persist_warning: None,
                 }
             } else if let Some(output_ref) = output_ref {
+                let smart_preview = build_smart_preview(
+                    tool_name,
+                    &output_value,
+                    &preview,
+                    PERSISTED_RESULT_PREVIEW_MAX_CHARS,
+                );
                 ToolOutputDeliveryResult {
                     success: true,
                     output: Some(json!({
                         "persisted": true,
                         "output_ref": output_ref,
                         "size_chars": output_chars as i64,
-                        "preview": preview,
-                        "preview_truncated": preview_truncated,
+                        "preview": smart_preview,
                         "metadata": metadata,
-                        "requested_output_mode": delivery.requested_output_mode.as_str(),
-                        "resolved_output_mode": delivery.resolved_output_mode.as_str(),
-                        "forced_persist": delivery.forced_persist,
-                        "forced_reason": delivery.forced_reason,
                         "available_tools": AVAILABLE_TOOLS_HINT
                     })),
                     error: None,
@@ -219,6 +220,146 @@ fn should_persist_tool_output(
         ToolResultMode::Persist => true,
         ToolResultMode::Auto => output_chars > AUTO_INLINE_RESULT_MAX_CHARS,
     }
+}
+
+/// Build a structure-aware preview for persisted output.
+/// For known tool types (gmail, calendar), extracts meaningful fields.
+/// Falls back to raw JSON truncation for unknown tools.
+fn build_smart_preview(
+    tool_name: &str,
+    output_value: &Value,
+    raw_preview: &str,
+    max_chars: usize,
+) -> String {
+    if let Some(preview) = try_gmail_smart_preview(tool_name, output_value, max_chars) {
+        return preview;
+    }
+    if let Some(preview) = try_structured_preview(output_value, max_chars) {
+        return preview;
+    }
+    raw_preview.to_string()
+}
+
+fn try_gmail_smart_preview(tool_name: &str, value: &Value, max_chars: usize) -> Option<String> {
+    if !tool_name.starts_with("gmail.") {
+        return None;
+    }
+
+    match tool_name {
+        "gmail.list_threads" => {
+            let threads = value.get("threads")?.as_array()?;
+            let mut lines = Vec::new();
+            lines.push(format!("{} threads found", threads.len()));
+            for (i, thread) in threads.iter().take(10).enumerate() {
+                let id = thread.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                let snippet = thread
+                    .get("snippet")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let snippet_short: String = snippet.chars().take(80).collect();
+                lines.push(format!("  [{}] id={} \"{}\"", i + 1, id, snippet_short));
+            }
+            if threads.len() > 10 {
+                lines.push(format!("  ... and {} more", threads.len() - 10));
+            }
+            if let Some(token) = value.get("nextPageToken").and_then(|v| v.as_str()) {
+                lines.push(format!("  nextPageToken: {token}"));
+            }
+            let result = lines.join("\n");
+            Some(truncate_with_notice(&result, max_chars))
+        }
+        "gmail.get_thread" => {
+            let thread_id = value
+                .get("thread_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let mode = value
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let mut lines = Vec::new();
+            lines.push(format!("thread_id={thread_id} mode={mode}"));
+
+            if let Some(msg) = value.get("message") {
+                append_message_preview(&mut lines, msg, max_chars / 2);
+            }
+            if let Some(messages) = value.get("messages").and_then(|v| v.as_array()) {
+                lines.push(format!("{} messages:", messages.len()));
+                for msg in messages.iter().take(5) {
+                    append_message_preview(&mut lines, msg, max_chars / 6);
+                }
+                if messages.len() > 5 {
+                    lines.push(format!("  ... and {} more messages", messages.len() - 5));
+                }
+            }
+
+            let result = lines.join("\n");
+            Some(truncate_with_notice(&result, max_chars))
+        }
+        _ => None,
+    }
+}
+
+fn append_message_preview(lines: &mut Vec<String>, msg: &Value, body_limit: usize) {
+    let title = msg.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let date = msg.get("date_header").and_then(|v| v.as_str()).unwrap_or("");
+    let msg_id = msg
+        .get("message_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    lines.push(format!("  message_id={msg_id}"));
+    if !title.is_empty() {
+        lines.push(format!("  subject: {title}"));
+    }
+    if !date.is_empty() {
+        lines.push(format!("  date: {date}"));
+    }
+    if let Some(body) = msg.get("body_text").and_then(|v| v.as_str()) {
+        let snippet: String = body.chars().take(body_limit).collect();
+        lines.push(format!("  body: {snippet}"));
+    }
+    if let Some(attachments) = msg.get("attachments").and_then(|v| v.as_array()) {
+        if !attachments.is_empty() {
+            let names: Vec<&str> = attachments
+                .iter()
+                .filter_map(|a| a.get("filename").and_then(|v| v.as_str()))
+                .take(5)
+                .collect();
+            lines.push(format!("  attachments: {}", names.join(", ")));
+        }
+    }
+}
+
+/// For non-gmail structured output, extract top-level keys and short values.
+fn try_structured_preview(value: &Value, max_chars: usize) -> Option<String> {
+    let map = value.as_object()?;
+    if map.len() > 20 {
+        return None; // Too complex for structured preview
+    }
+
+    let mut lines = Vec::new();
+    let mut total = 0;
+    for (key, val) in map.iter() {
+        let line = match val {
+            Value::String(s) => {
+                let short: String = s.chars().take(120).collect();
+                let ellipsis = if s.len() > 120 { "..." } else { "" };
+                format!("{key}: \"{short}{ellipsis}\"")
+            }
+            Value::Number(n) => format!("{key}: {n}"),
+            Value::Bool(b) => format!("{key}: {b}"),
+            Value::Null => format!("{key}: null"),
+            Value::Array(arr) => format!("{key}: [{} items]", arr.len()),
+            Value::Object(inner) => format!("{key}: {{}} ({} keys)", inner.len()),
+        };
+        total += line.len() + 1;
+        if total > max_chars {
+            lines.push("...".to_string());
+            break;
+        }
+        lines.push(line);
+    }
+    Some(lines.join("\n"))
 }
 
 #[cfg(test)]

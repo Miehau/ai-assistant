@@ -496,6 +496,7 @@ pub fn tool_use_to_controller_json(tool_name: &str, input: &Value) -> Value {
         "call_tool" => {
             let mut out = json!({
                 "action": "next_step",
+                "type": "tool",
                 "thinking": thinking,
             });
             if let Some(tool) = input.get("tool") {
@@ -515,6 +516,7 @@ pub fn tool_use_to_controller_json(tool_name: &str, input: &Value) -> Value {
         "call_tool_batch" => {
             let mut out = json!({
                 "action": "next_step",
+                "type": "tool_batch",
                 "thinking": thinking,
             });
             if let Some(tools) = input.get("tools") {
@@ -525,6 +527,7 @@ pub fn tool_use_to_controller_json(tool_name: &str, input: &Value) -> Value {
         "respond" => {
             json!({
                 "action": "next_step",
+                "type": "respond",
                 "thinking": thinking,
                 "message": input.get("message").cloned().unwrap_or(json!("")),
             })
@@ -559,10 +562,27 @@ pub fn tool_use_to_controller_json(tool_name: &str, input: &Value) -> Value {
             out
         }
         other => {
-            json!({
-                "action": "guardrail_stop",
-                "reason": format!("Unknown controller tool: {other}"),
-            })
+            // LLM called a domain tool directly instead of wrapping in call_tool.
+            // Auto-wrap it as a call_tool action for resilience.
+            // Strip non-arg fields from the input before passing as tool args.
+            let mut args = input.clone();
+            if let Some(map) = args.as_object_mut() {
+                map.remove("thinking");
+                map.remove("output_mode");
+            }
+            let mut out = json!({
+                "action": "next_step",
+                "type": "tool",
+                "thinking": thinking,
+                "tool": other,
+            });
+            if !args.is_null() && args != json!({}) {
+                out["args"] = args;
+            }
+            if let Some(output_mode) = input.get("output_mode") {
+                out["output_mode"] = output_mode.clone();
+            }
+            out
         }
     }
 }
@@ -1083,11 +1103,13 @@ trailing text"#;
     }
 
     #[test]
-    fn tool_use_to_controller_json_unknown_tool() {
-        let input = json!({});
-        let result = tool_use_to_controller_json("unknown_tool", &input);
-        assert_eq!(result["action"], "guardrail_stop");
-        assert!(result["reason"].as_str().unwrap().contains("Unknown"));
+    fn tool_use_to_controller_json_unknown_tool_auto_wraps_as_call_tool() {
+        let input = json!({ "thread_id": "abc-123" });
+        let result = tool_use_to_controller_json("gmail.list_threads", &input);
+        assert_eq!(result["action"], "next_step");
+        assert_eq!(result["type"], "tool");
+        assert_eq!(result["tool"], "gmail.list_threads");
+        assert_eq!(result["args"]["thread_id"], "abc-123");
     }
 }
 
@@ -1095,7 +1117,7 @@ pub fn controller_output_format() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
-        "required": ["action"],
+        "required": ["action", "type"],
         "properties": {
             "action": {
                 "type": "string",

@@ -8,7 +8,6 @@ Your job:
 - If you need one tool, choose next_step with type="tool" and supply the tool name and args (args must be a JSON string encoding an object, e.g. "{\"thread_id\":\"...\"}").
 - If you need multiple independent tools, choose next_step with type="tool_batch" and provide "tools": [{ "tool": "...", "args": "{...}", "output_mode"?: "auto|inline|persist" }].
 - Use tool_batch only for independent tools. If any tool args depend on output of another tool (IDs, page tokens, handles), run the producer tool first and use its output in a later step.
-- Do not mix gmail.list_threads with any other tool in a tool_batch; run gmail.list_threads alone, then use the returned thread IDs in a later step.
 - If you can answer now without tools, choose complete and return the final message.
 - Use the "thinking" field to reason before any action. Do not output a separate think step.
 - If action is next_step, include a mandatory top-level "thinking" object. Use it to reason from evidence to action.
@@ -39,7 +38,7 @@ Schema:
     "risks"?: ["...", "..."],
     "confidence"?: 0.0
   },
-  "type"?: "tool" | "tool_batch" | "respond" | "ask_user",
+  "type": "tool" | "tool_batch" | "respond" | "ask_user",
   "description"?: "...",
   "tool"?: "tool_name",
   "tools"?: [
@@ -56,7 +55,7 @@ Schema:
 
 Notes:
 - All fields except "action" are top-level. There is no nested "step" object.
-- "type" is optional and can be inferred: presence of "tool" implies type="tool", "message" implies type="respond", "question" implies type="ask_user".
+- "type" is REQUIRED for action="next_step". Always include it explicitly.
 - When action="next_step" and type="tool", provide a short description and tool name.
 - When action="next_step" and type="tool_batch", provide "tools" with at least one item. Each tool item needs a non-empty "tool" name.
 - When action="next_step", "thinking" is required and must be an object.
@@ -72,7 +71,6 @@ Your job:
 - Pick exactly one action by calling the appropriate tool: call_tool, call_tool_batch, respond, ask_user, complete, or guardrail_stop.
 - If you need one tool, call call_tool with the tool name and args (args is a JSON object, not a string).
 - If you need multiple independent tools, call call_tool_batch with a "tools" array. Use this only for independent tools. If any tool args depend on output of another tool (IDs, page tokens, handles), run the producer tool first and use its output in a later step.
-- Do not mix gmail.list_threads with any other tool in a call_tool_batch; run gmail.list_threads alone, then use the returned thread IDs in a later step.
 - If you can answer now without tools, call complete and return the final message.
 - Include a "thinking" object in call_tool, call_tool_batch, and respond calls to reason before acting.
 - If the user needs a reply but no tools are required, call complete (preferred) or respond.

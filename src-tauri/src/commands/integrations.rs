@@ -47,7 +47,7 @@ pub fn start_google_oauth(
     let scopes = match integration_id.as_str() {
         "gmail" => vec![
             "https://www.googleapis.com/auth/gmail.readonly".to_string(),
-            "https://www.googleapis.com/auth/gmail.send".to_string(),
+            "https://www.googleapis.com/auth/gmail.compose".to_string(),
         ],
         "google_calendar" => vec![
             "https://www.googleapis.com/auth/calendar.readonly".to_string(),

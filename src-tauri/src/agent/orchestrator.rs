@@ -669,15 +669,18 @@ impl DynamicController {
                 ));
             }
         };
-        if let Err(err) = self.tool_registry.validate_args(&tool.metadata, &args) {
-            return Ok(self.build_preflight_failed_step_result(
-                step_id,
-                tool_name,
-                args,
-                iteration,
-                err.message,
-            ));
-        }
+        let args = match self.tool_registry.coerce_and_validate_args(&tool.metadata, args) {
+            Ok(coerced) => coerced,
+            Err(err) => {
+                return Ok(self.build_preflight_failed_step_result(
+                    step_id,
+                    tool_name,
+                    json!({}),
+                    iteration,
+                    err.message,
+                ));
+            }
+        };
         if let Err(err) = validate_tool_execution_preflight(tool_name, &args) {
             return Ok(self.build_preflight_failed_step_result(
                 step_id, tool_name, args, iteration, err,
@@ -1050,19 +1053,22 @@ impl DynamicController {
                     continue;
                 }
             };
-            if let Err(err) = self.tool_registry.validate_args(&tool.metadata, &args) {
-                let failed = self.build_preflight_failed_step_result(
-                    step_id, &tool_name, args, iteration, err.message,
-                );
-                if let Some(exec) = failed.tool_executions.last() {
-                    results_summary.push(build_tool_batch_result_summary(exec));
-                    aggregated_tool_executions.push(exec.clone());
+            let args = match self.tool_registry.coerce_and_validate_args(&tool.metadata, args) {
+                Ok(coerced) => coerced,
+                Err(err) => {
+                    let failed = self.build_preflight_failed_step_result(
+                        step_id, &tool_name, json!({}), iteration, err.message,
+                    );
+                    if let Some(exec) = failed.tool_executions.last() {
+                        results_summary.push(build_tool_batch_result_summary(exec));
+                        aggregated_tool_executions.push(exec.clone());
+                    }
+                    if first_error.is_none() {
+                        first_error = failed.error;
+                    }
+                    continue;
                 }
-                if first_error.is_none() {
-                    first_error = failed.error;
-                }
-                continue;
-            }
+            };
             if let Err(err) = validate_tool_execution_preflight(&tool_name, &args) {
                 let failed = self.build_preflight_failed_step_result(
                     step_id, &tool_name, args, iteration, err,
