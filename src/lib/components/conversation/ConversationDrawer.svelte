@@ -57,11 +57,16 @@
     try {
       // Set the selected conversation as current
       await conversationService.setCurrentConversation(conversation.id);
-      
+
       // Load the conversation messages
       const loadedMessages = await conversationService.getDisplayHistory(conversation.id);
       $messages = loadedMessages;
-      
+
+      // Past conversations with messages should not trigger title generation
+      if (loadedMessages.length > 0) {
+        $isFirstMessage = false;
+      }
+
       // Close the drawer after selection
       isOpen = false;
       
