@@ -18,6 +18,7 @@ pub(crate) const VAULT_PATH_NOTE: &str =
     "Paths are relative to the selected root (default vault; use root=\"work\" for work directory; use \".\" for root; no absolute paths).";
 pub(crate) const DEFAULT_READ_MAX_LINES: usize = 200;
 pub(crate) const DEFAULT_READ_MAX_CHARS: usize = 20_000;
+pub(crate) const MAX_READ_FILE_SIZE: u64 = 64 * 1024;
 
 pub fn register_file_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     list::register_list_tool(registry, db.clone())?;

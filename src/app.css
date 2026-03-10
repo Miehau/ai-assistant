@@ -519,6 +519,18 @@
     background: rgba(255, 255, 255, 0.085);
   }
 
+  .message-error {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(6px) saturate(120%);
+    transition: all 0.2s ease;
+  }
+
+  .message-error:hover {
+    background: rgba(239, 68, 68, 0.12);
+  }
+
   /* Code block glass effects */
   .code-block-glass {
     background: rgba(8, 8, 10, 0.75) !important;

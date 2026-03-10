@@ -18,6 +18,7 @@
   export let messageId: string | undefined = undefined;
   export let conversationId: string | undefined = undefined;
   export let isStreaming: boolean = false;
+  export let isError: boolean | undefined = undefined;
 
   const isDev = import.meta.env.DEV;
 
@@ -294,15 +295,27 @@
   data-conversation-id={conversationId}
 >
   <div
-    class="rounded-2xl px-4 py-1.5 w-full max-w-5xl {type === 'received'
-      ? 'message-glass-ai'
-      : 'text-primary-foreground message-glass-user'}"
+    class="rounded-2xl px-4 py-1.5 w-full max-w-5xl {isError
+      ? 'message-error'
+      : type === 'received'
+        ? 'message-glass-ai'
+        : 'text-primary-foreground message-glass-user'}"
   >
     <!-- Message header with model -->
     {#if type === 'sent' && model}
       <div class="text-[10px] text-primary-foreground/50 text-right mb-1">{model}</div>
     {/if}
     <div class="prose prose-sm dark:prose-invert max-w-none">
+      {#if isError}
+        <div class="flex items-center gap-2 text-red-400 text-xs font-medium pt-1 pb-0.5">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+          <span>Error</span>
+        </div>
+      {/if}
       <div
         class="markdown-content"
         onclick={handleInteraction}

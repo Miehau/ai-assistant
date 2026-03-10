@@ -30,7 +30,7 @@ pub(super) fn register_approve_tool(registry: &mut ToolRegistry, db: Db) -> Resu
             "required": ["host", "allow_private", "saved"],
             "additionalProperties": false
         }),
-        requires_approval: false,
+        requires_approval: true,
         result_mode: ToolResultMode::Inline,
     };
 

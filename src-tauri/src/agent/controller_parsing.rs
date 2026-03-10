@@ -1,5 +1,4 @@
 use crate::db::ResumeTarget;
-use crate::llm::json_schema_output_format;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -378,6 +377,196 @@ pub fn normalize_tool_args(args: Value) -> Value {
     }
 }
 
+pub fn controller_tool_definitions() -> Vec<serde_json::Value> {
+    let thinking_schema = json!({
+        "type": "object",
+        "description": "Reasoning before acting",
+        "properties": {
+            "task": { "type": "string" },
+            "plan": { "type": "string" },
+            "confidence": { "type": "string" }
+        }
+    });
+
+    vec![
+        json!({
+            "name": "call_tool",
+            "description": "Execute a single tool. Use when the next action requires exactly one tool call.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "thinking": thinking_schema.clone(),
+                    "description": { "type": "string", "description": "Brief description of this step" },
+                    "tool": { "type": "string", "description": "Tool name to call" },
+                    "args": { "type": "object", "description": "Tool arguments as an object" },
+                    "output_mode": {
+                        "type": "string",
+                        "enum": ["auto", "inline", "persist"],
+                        "description": "Output delivery mode"
+                    }
+                },
+                "required": ["tool"]
+            }
+        }),
+        json!({
+            "name": "call_tool_batch",
+            "description": "Execute multiple independent tools in parallel. Use only when tools are truly independent (no data dependency between them).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "thinking": thinking_schema.clone(),
+                    "tools": {
+                        "type": "array",
+                        "description": "List of tools to call in parallel",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool": { "type": "string" },
+                                "args": { "type": "object" },
+                                "output_mode": {
+                                    "type": "string",
+                                    "enum": ["auto", "inline", "persist"]
+                                }
+                            },
+                            "required": ["tool"]
+                        }
+                    }
+                },
+                "required": ["tools"]
+            }
+        }),
+        json!({
+            "name": "respond",
+            "description": "Send a message to the user without calling any tools. Use when no further tool calls are needed but there is something to communicate.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "thinking": thinking_schema.clone(),
+                    "message": { "type": "string", "description": "Message to send to the user" }
+                },
+                "required": ["message"]
+            }
+        }),
+        json!({
+            "name": "ask_user",
+            "description": "Ask the user a clarifying question before proceeding. Use when missing required information that cannot be inferred.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "The question to ask" },
+                    "context": { "type": "string", "description": "Additional context for the question" },
+                    "resume_to": {
+                        "type": "string",
+                        "enum": ["reflecting", "controller"],
+                        "description": "Where to resume after user responds"
+                    }
+                },
+                "required": ["question"]
+            }
+        }),
+        json!({
+            "name": "complete",
+            "description": "Mark the task as complete and deliver the final response to the user.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string", "description": "Final response message to the user" }
+                },
+                "required": ["message"]
+            }
+        }),
+        json!({
+            "name": "guardrail_stop",
+            "description": "Halt execution because continuing would violate safety, ethics, or capability boundaries.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "reason": { "type": "string", "description": "Internal reason for stopping" },
+                    "message": { "type": "string", "description": "Optional user-facing message" }
+                },
+                "required": ["reason"]
+            }
+        }),
+    ]
+}
+
+pub fn tool_use_to_controller_json(tool_name: &str, input: &Value) -> Value {
+    let thinking = input.get("thinking").cloned().unwrap_or(json!({}));
+    match tool_name {
+        "call_tool" => {
+            let mut out = json!({
+                "action": "next_step",
+                "thinking": thinking,
+            });
+            if let Some(tool) = input.get("tool") {
+                out["tool"] = tool.clone();
+            }
+            if let Some(args) = input.get("args") {
+                out["args"] = args.clone();
+            }
+            if let Some(output_mode) = input.get("output_mode") {
+                out["output_mode"] = output_mode.clone();
+            }
+            if let Some(description) = input.get("description") {
+                out["description"] = description.clone();
+            }
+            out
+        }
+        "call_tool_batch" => {
+            let mut out = json!({
+                "action": "next_step",
+                "thinking": thinking,
+            });
+            if let Some(tools) = input.get("tools") {
+                out["tools"] = tools.clone();
+            }
+            out
+        }
+        "respond" => {
+            json!({
+                "action": "next_step",
+                "thinking": thinking,
+                "message": input.get("message").cloned().unwrap_or(json!("")),
+            })
+        }
+        "ask_user" => {
+            let mut out = json!({
+                "action": "ask_user",
+                "question": input.get("question").cloned().unwrap_or(json!("")),
+            });
+            if let Some(context) = input.get("context") {
+                out["context"] = context.clone();
+            }
+            if let Some(resume_to) = input.get("resume_to") {
+                out["resume_to"] = resume_to.clone();
+            }
+            out
+        }
+        "complete" => {
+            json!({
+                "action": "complete",
+                "message": input.get("message").cloned().unwrap_or(json!("")),
+            })
+        }
+        "guardrail_stop" => {
+            let mut out = json!({
+                "action": "guardrail_stop",
+                "reason": input.get("reason").cloned().unwrap_or(json!("")),
+            });
+            if let Some(message) = input.get("message") {
+                out["message"] = message.clone();
+            }
+            out
+        }
+        other => {
+            json!({
+                "action": "guardrail_stop",
+                "reason": format!("Unknown controller tool: {other}"),
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,10 +892,7 @@ trailing text"#;
     #[test]
     fn controller_output_schema_has_flat_type_field() {
         let schema = controller_output_format();
-        let props = schema
-            .get("schema")
-            .and_then(|s| s.get("properties"))
-            .expect("properties");
+        let props = schema.get("properties").expect("properties");
         assert!(props.get("type").is_some(), "schema must have flat 'type' field");
     }
 
@@ -714,8 +900,7 @@ trailing text"#;
     fn controller_output_schema_includes_output_mode_enum() {
         let schema = controller_output_format();
         let output_mode = schema
-            .get("schema")
-            .and_then(|s| s.get("properties"))
+            .get("properties")
             .and_then(|p| p.get("output_mode"))
             .expect("output_mode property");
         let enum_values = output_mode.get("enum").expect("output_mode enum");
@@ -734,8 +919,7 @@ trailing text"#;
     fn controller_output_schema_includes_tool_batch_shape() {
         let schema = controller_output_format();
         let tools = schema
-            .get("schema")
-            .and_then(|s| s.get("properties"))
+            .get("properties")
             .and_then(|p| p.get("tools"))
             .expect("tools property");
         assert_eq!(
@@ -778,9 +962,8 @@ trailing text"#;
     #[test]
     fn controller_schema_root_has_additional_properties_false() {
         let schema = controller_output_format();
-        let root = schema.get("schema").expect("schema");
         assert_eq!(
-            root.get("additionalProperties"),
+            schema.get("additionalProperties"),
             Some(&json!(false)),
             "root must have additionalProperties: false"
         );
@@ -790,8 +973,7 @@ trailing text"#;
     fn controller_schema_args_field_is_string_type() {
         let schema = controller_output_format();
         let args = schema
-            .get("schema")
-            .and_then(|s| s.get("properties"))
+            .get("properties")
             .and_then(|p| p.get("args"))
             .expect("args property");
         assert_eq!(
@@ -805,8 +987,7 @@ trailing text"#;
     fn controller_schema_confidence_has_no_numeric_bounds() {
         let schema = controller_output_format();
         let confidence = schema
-            .get("schema")
-            .and_then(|s| s.get("properties"))
+            .get("properties")
             .and_then(|p| p.get("thinking"))
             .and_then(|t| t.get("properties"))
             .and_then(|p| p.get("confidence"))
@@ -817,27 +998,101 @@ trailing text"#;
 
     #[test]
     fn controller_schema_survives_anthropic_sanitizer_with_known_diff() {
-        let format = controller_output_format();
-        let mut sanitized = format.clone();
-        if let Some(schema) = sanitized.get_mut("schema") {
-            crate::llm::strip_anthropic_unsupported_schema_keywords(schema);
-        }
-        crate::llm::validate_anthropic_output_format(Some(&sanitized)).expect("should pass anthropic validation");
+        let raw = controller_output_format();
+        let wrapped = crate::llm::build_anthropic_output_schema(Some(raw)).expect("wrapped");
+        crate::llm::validate_anthropic_output_format(Some(&wrapped)).expect("should pass anthropic validation");
     }
 
     #[test]
     fn controller_schema_passes_anthropic_validation() {
-        let format = controller_output_format();
-        let mut sanitized = format.clone();
-        if let Some(schema) = sanitized.get_mut("schema") {
-            crate::llm::strip_anthropic_unsupported_schema_keywords(schema);
-        }
-        crate::llm::validate_anthropic_output_format(Some(&sanitized)).expect("should pass preflight");
+        let raw = controller_output_format();
+        let wrapped = crate::llm::build_anthropic_output_schema(Some(raw)).expect("wrapped");
+        crate::llm::validate_anthropic_output_format(Some(&wrapped)).expect("should pass preflight");
+    }
+
+    #[test]
+    fn tool_use_to_controller_json_call_tool() {
+        let input = json!({
+            "thinking": { "task": "fetch weather" },
+            "tool": "weather",
+            "args": { "city": "NYC" },
+            "output_mode": "inline"
+        });
+        let result = tool_use_to_controller_json("call_tool", &input);
+        assert_eq!(result["action"], "next_step");
+        assert_eq!(result["tool"], "weather");
+        assert_eq!(result["args"]["city"], "NYC");
+        assert_eq!(result["output_mode"], "inline");
+    }
+
+    #[test]
+    fn tool_use_to_controller_json_call_tool_batch() {
+        let input = json!({
+            "tools": [
+                { "tool": "weather", "args": { "city": "NYC" } },
+                { "tool": "news", "args": {} }
+            ]
+        });
+        let result = tool_use_to_controller_json("call_tool_batch", &input);
+        assert_eq!(result["action"], "next_step");
+        let tools = result["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["tool"], "weather");
+    }
+
+    #[test]
+    fn tool_use_to_controller_json_respond() {
+        let input = json!({ "message": "Here is the answer" });
+        let result = tool_use_to_controller_json("respond", &input);
+        assert_eq!(result["action"], "next_step");
+        assert_eq!(result["message"], "Here is the answer");
+    }
+
+    #[test]
+    fn tool_use_to_controller_json_ask_user() {
+        let input = json!({
+            "question": "Which city?",
+            "context": "Need city for weather",
+            "resume_to": "controller"
+        });
+        let result = tool_use_to_controller_json("ask_user", &input);
+        assert_eq!(result["action"], "ask_user");
+        assert_eq!(result["question"], "Which city?");
+        assert_eq!(result["context"], "Need city for weather");
+        assert_eq!(result["resume_to"], "controller");
+    }
+
+    #[test]
+    fn tool_use_to_controller_json_complete() {
+        let input = json!({ "message": "Task done" });
+        let result = tool_use_to_controller_json("complete", &input);
+        assert_eq!(result["action"], "complete");
+        assert_eq!(result["message"], "Task done");
+    }
+
+    #[test]
+    fn tool_use_to_controller_json_guardrail_stop() {
+        let input = json!({
+            "reason": "Unsafe request",
+            "message": "Cannot do that"
+        });
+        let result = tool_use_to_controller_json("guardrail_stop", &input);
+        assert_eq!(result["action"], "guardrail_stop");
+        assert_eq!(result["reason"], "Unsafe request");
+        assert_eq!(result["message"], "Cannot do that");
+    }
+
+    #[test]
+    fn tool_use_to_controller_json_unknown_tool() {
+        let input = json!({});
+        let result = tool_use_to_controller_json("unknown_tool", &input);
+        assert_eq!(result["action"], "guardrail_stop");
+        assert!(result["reason"].as_str().unwrap().contains("Unknown"));
     }
 }
 
 pub fn controller_output_format() -> Value {
-    json_schema_output_format(json!({
+    json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "required": ["action"],
@@ -897,5 +1152,5 @@ pub fn controller_output_format() -> Value {
             }
         },
         "additionalProperties": false
-    }))
+    })
 }

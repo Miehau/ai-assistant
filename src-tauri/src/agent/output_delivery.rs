@@ -7,8 +7,8 @@ use super::controller_parsing::{OutputDeliveryResolution, OutputModeHint, Resolv
 use super::output_metadata::compute_output_metadata_with_size;
 use super::text_utils::{summarize_tool_output_value, value_char_len};
 
-const AUTO_INLINE_RESULT_MAX_CHARS: usize = 4_096;
-const INLINE_RESULT_HARD_MAX_CHARS: usize = 16_384;
+const AUTO_INLINE_RESULT_MAX_CHARS: usize = 32_768;
+const INLINE_RESULT_HARD_MAX_CHARS: usize = 65_536;
 pub const PERSISTED_RESULT_PREVIEW_MAX_CHARS: usize = 1_200;
 
 const TOOL_OUTPUTS_PREFIX: &str = "tool_outputs.";
@@ -268,7 +268,7 @@ mod tests {
             "some.tool",
             OutputModeHint::Inline,
             &ToolResultMode::Auto,
-            16_384 + 1,
+            65_536 + 1,
         );
         assert_eq!(delivery.resolved_output_mode, ResolvedOutputMode::Persist);
         assert!(delivery.forced_persist);

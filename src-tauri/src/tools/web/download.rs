@@ -4,7 +4,7 @@ use super::{
     DEFAULT_USER_AGENT,
 };
 use crate::db::Db;
-use crate::tools::vault::{resolve_vault_path, VaultPath};
+use crate::tools::vault::{resolve_root_path, VaultPath};
 use crate::tools::{ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry, ToolResultMode};
 use reqwest::header::CONTENT_TYPE;
 use serde_json::{json, Value};
@@ -23,6 +23,7 @@ pub(super) fn register_download_tool(registry: &mut ToolRegistry, db: Db) -> Res
             "properties": {
                 "urls": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                 "base_url": { "type": "string" },
+                "root": { "type": "string", "enum": ["vault", "work"] },
                 "vault_path": { "type": "string" },
                 "max_bytes_per_file": { "type": "integer", "minimum": 1 },
                 "timeout_ms": { "type": "integer", "minimum": 1 },
@@ -69,6 +70,13 @@ pub(super) fn register_download_tool(registry: &mut ToolRegistry, db: Db) -> Res
             .and_then(|v| v.as_array())
             .ok_or_else(|| ToolError::new("Missing or invalid 'urls'"))?;
         let base_url = args.get("base_url").and_then(|v| v.as_str());
+        let root = args
+            .get("root")
+            .and_then(|v| v.as_str())
+            .unwrap_or("vault");
+        if root != "vault" && root != "work" {
+            return Err(ToolError::new("Invalid root; expected 'vault' or 'work'"));
+        }
         let vault_path = args
             .get("vault_path")
             .and_then(|v| v.as_str())
@@ -131,7 +139,7 @@ pub(super) fn register_download_tool(registry: &mut ToolRegistry, db: Db) -> Res
             ensure_host_allowed(&allowlist, &base_host)?;
         }
 
-        let base_dir = resolve_vault_path(&db, vault_path)?;
+        let base_dir = resolve_root_path(&db, root, vault_path)?;
         if base_dir.full_path.exists() && !base_dir.full_path.is_dir() {
             return Err(ToolError::new("vault_path must be a directory"));
         }
@@ -268,6 +276,7 @@ pub(super) fn register_download_tool(registry: &mut ToolRegistry, db: Db) -> Res
 
             let (relative_path, display_path) = match build_download_path(
                 &db,
+                root,
                 &base_dir,
                 &resolved,
                 &content_type,
@@ -342,6 +351,7 @@ fn resolve_download_url(input: &str, base_url: Option<&Url>) -> Result<Url, Tool
 
 fn build_download_path(
     db: &Db,
+    root: &str,
     base_dir: &VaultPath,
     url: &Url,
     content_type: &str,
@@ -385,7 +395,7 @@ fn build_download_path(
         format!("{}/{}/{}", base_dir.display_path, subdir, filename)
     };
 
-    let mut resolved = resolve_vault_path(db, &relative)?;
+    let mut resolved = resolve_root_path(db, root, &relative)?;
     if rename_strategy == "safe" {
         resolved = ensure_unique_path(resolved)?;
     }
