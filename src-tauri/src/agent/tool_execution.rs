@@ -10,7 +10,6 @@ use super::output_metadata::{compute_output_metadata, strip_metadata_id_hints};
 use super::text_utils::{summarize_tool_args, summarize_tool_output_value, truncate_with_notice};
 use super::tool_arg_hydration::extract_tool_output_ref_id_from_value;
 
-const CONTROLLER_TOOL_SUMMARY_MAX_CHARS: usize = 2_000;
 const CONTROLLER_TOOL_SUMMARY_MAX_ARGS_CHARS: usize = 400;
 const CONTROLLER_TOOL_SUMMARY_MAX_RESULT_CHARS: usize = 800;
 const CONTROLLER_TOOL_SUMMARY_MAX_METADATA_CHARS: usize = 320;
@@ -275,13 +274,33 @@ pub fn format_tool_execution_batch_summary_line(exec: &ToolExecutionRecord) -> S
         )
     };
 
-    format!(
+    let is_persist = exec
+        .resolved_output_mode
+        .as_deref()
+        .map(|m| m == "persist")
+        .unwrap_or_else(|| output_ref != "none");
+
+    let mut line = format!(
         "Tool: {} | ExecutionId: {} | Success: {} | OutputRef: {} | Error: {}",
         exec.tool_name, exec.execution_id, exec.success, output_ref, error
-    )
+    );
+
+    if exec.success && !is_persist {
+        if let Some(ref result) = exec.result {
+            let output_json =
+                serde_json::to_string(result).unwrap_or_else(|_| result.to_string());
+            line.push_str(" | Output: ");
+            line.push_str(&output_json);
+        }
+    } else if exec.success && is_persist {
+        line.push_str(
+            " | Note: Output persisted; use tool_outputs.extract to read.",
+        );
+    }
+
+    line
 }
 
-pub const TOOL_SUMMARY_MAX_CHARS: usize = CONTROLLER_TOOL_SUMMARY_MAX_CHARS;
 
 #[cfg(test)]
 mod tests {
@@ -363,5 +382,22 @@ mod tests {
         assert!(line.contains("gmail.get_thread"), "should contain tool name");
         assert!(line.contains("exec-003"), "should contain execution id");
         assert!(line.contains("OutputRef: exec-003"), "should contain output ref");
+        assert!(line.contains("Output persisted"), "persisted result should have persist note");
+    }
+
+    #[test]
+    fn format_tool_execution_batch_summary_line_includes_inline_output() {
+        let mut exec = make_execution_record(
+            "files.read",
+            "exec-004",
+            Some(json!({ "content": "hello world" })),
+            true,
+        );
+        exec.requested_output_mode = Some("inline".to_string());
+        exec.resolved_output_mode = Some("inline".to_string());
+        exec.forced_persist = Some(false);
+        let line = format_tool_execution_batch_summary_line(&exec);
+        assert!(line.contains("Output:"), "inline batch result should have Output field");
+        assert!(line.contains("hello world"), "should contain inline output value");
     }
 }

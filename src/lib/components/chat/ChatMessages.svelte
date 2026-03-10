@@ -309,6 +309,7 @@
             messageId={msg.id}
             conversationId={conversationId}
             agentActivity={msg.agentActivity}
+            isError={msg.isError}
           />
         </div>
       {:else}
@@ -320,6 +321,7 @@
             messageId={msg.id}
             conversationId={conversationId}
             agentActivity={msg.agentActivity}
+            isError={msg.isError}
           />
         </div>
       {/if}

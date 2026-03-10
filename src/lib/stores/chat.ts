@@ -276,6 +276,11 @@ function upsertToolActivityFromExecution(execution: {
   });
 }
 
+function isAgentErrorContent(content: string): boolean {
+  const trimmed = content.trimStart();
+  return trimmed.startsWith('Agent error:') || trimmed.startsWith('Agent setup error:');
+}
+
 function flushStreamingChunks() {
   if (!streamingChunkBuffer) {
     streamingFlushPending = false;
@@ -403,6 +408,7 @@ export async function startAgentEvents() {
           attachments: attachments.length ? attachments : undefined,
           timestamp: payload.timestamp_ms,
           tool_calls: isAssistant ? toolCalls : undefined,
+          isError: isAssistant ? isAgentErrorContent(content) : undefined,
         };
 
         if (existingIndex === -1) {
@@ -547,6 +553,7 @@ export async function startAgentEvents() {
             content,
             timestamp: payload.timestamp_ms,
             tool_calls: toolCalls,
+            isError: isAgentErrorContent(content),
           };
 
           if (existingIndex === -1) {
@@ -1066,8 +1073,8 @@ export async function sendMessage() {
     }
   } catch (error) {
     console.error('Error sending message:', error);
-    pendingAssistantMessageId = null;
-    isLoading.set(false);
+    finalizeRunningToolCalls('Request failed', Date.now());
+    resetStreamingState();
   } finally {
     // Loading state cleared on stream completion.
   }

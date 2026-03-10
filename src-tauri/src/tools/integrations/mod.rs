@@ -325,7 +325,7 @@ mod tests {
             "gmail.get_thread",
             "gmail.download_attachment",
             "gmail.list_labels",
-            "gmail.send_message",
+            "gmail.draft_email",
             "gcal.list_calendars",
             "gcal.list_events",
             "gcal.create_event",
@@ -363,7 +363,7 @@ mod tests {
                 json!({ "message_id": "message-123", "attachment_id": "att-1" }),
             ),
             (
-                "gmail.send_message",
+                "gmail.draft_email",
                 json!({
                     "to": ["user@example.com"],
                     "subject": "Subject",

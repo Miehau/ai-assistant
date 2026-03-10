@@ -6,7 +6,7 @@ use crate::agent::controller_parsing::{
 use crate::agent::output_delivery::build_tool_output_delivery;
 use crate::agent::prompts::CONTROLLER_PROMPT_BASE;
 use crate::agent::text_utils::{
-    compact_history_messages_with_limits, summarize_goal, summarize_tool_args, truncate_with_notice,
+    compact_history_messages_with_limits, summarize_goal, summarize_tool_args,
 };
 use crate::agent::tool_arg_hydration::{
     hydrate_download_path_for_execution, hydrate_tool_args_for_execution,
@@ -15,7 +15,6 @@ use crate::agent::tool_arg_hydration::{
 use crate::agent::tool_execution::{
     build_batch_step_result, build_tool_batch_result_summary, build_tool_execution_record,
     format_tool_execution_batch_summary_line, format_tool_execution_summary_block,
-    TOOL_SUMMARY_MAX_CHARS,
 };
 use crate::db::{
     AgentConfig, AgentSession, AgentSessionOperations, MessageToolExecutionInput, PhaseKind, Plan,
@@ -44,13 +43,22 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-const CONTROLLER_HISTORY_MAX_CHARS: usize = 48_000;
+const CONTROLLER_HISTORY_MAX_CHARS: usize = 128_000;
 const CONTROLLER_HISTORY_STABLE_PREFIX_MESSAGES: usize = 8;
-const CONTROLLER_HISTORY_RECENT_TAIL_MESSAGES: usize = 20;
+const CONTROLLER_HISTORY_RECENT_TAIL_MESSAGES: usize = 40;
 const PARALLEL_BATCH_FALLBACK_TIMEOUT_MS: u64 = 120_000;
 const TOOL_DEPENDENCY_NOTE: &str = "NOTE: If you need IDs or fields from this tool's output for other tool calls, run this tool first (single tool step) and use its output in a later step. Do not combine dependent calls in the same tool_batch.";
 const AGENT_SPAWN_TOOL: &str = "agent.spawn";
 const GMAIL_LIST_THREADS_TOOL: &str = "gmail.list_threads";
+const MAX_LLM_RETRIES: u32 = 3;
+
+fn is_transient_llm_error(error: &str) -> bool {
+    error.contains("429")
+        || error.contains("503")
+        || error.contains("529")
+        || error.contains("rate_limit")
+        || error.contains("overloaded")
+}
 
 pub struct DynamicController {
     db: crate::db::Db,
@@ -166,7 +174,31 @@ impl DynamicController {
             turns += 1;
             self.tool_calls_in_current_step = 0;
 
-            let decision = self.call_controller(call_llm)?;
+            let decision = {
+                let mut llm_retries = 0u32;
+                loop {
+                    match self.call_controller(call_llm) {
+                        Ok(action) => break action,
+                        Err(error)
+                            if is_transient_llm_error(&error)
+                                && llm_retries < MAX_LLM_RETRIES =>
+                        {
+                            llm_retries += 1;
+                            let backoff_secs = 2u64.pow(llm_retries);
+                            log::warn!(
+                                "[agent] transient LLM error (attempt {}/{}), retrying in {}s: {}",
+                                llm_retries,
+                                MAX_LLM_RETRIES,
+                                backoff_secs,
+                                error
+                            );
+                            std::thread::sleep(Duration::from_secs(backoff_secs));
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+            };
             match decision {
                 ControllerAction::NextStep {
                     thinking: _thinking,
@@ -1078,27 +1110,61 @@ impl DynamicController {
             "[tool_batch] running {} tools in parallel with timeout_ms={}",
             runnable_calls.len(), timeout_ms
         );
-        let mut handles = Vec::new();
+        let (tx, rx) = mpsc::channel::<Result<ParallelToolRunResult, ()>>();
+        let total_threads = runnable_calls.len();
         for call in runnable_calls {
             let cancel_flag = self.cancel_flag.clone();
             let call_for_panic = PanicFallbackInput::from(&call);
             let ctx = self.build_tool_execution_context();
-            handles.push(std::thread::spawn(move || {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     execute_parallel_tool_call(call, timeout_ms, cancel_flag, ctx)
                 }))
-                .unwrap_or_else(|_| ParallelToolRunResult::from_panic(call_for_panic))
-            }));
+                .unwrap_or_else(|_| ParallelToolRunResult::from_panic(call_for_panic));
+                let _ = tx.send(Ok(result));
+            });
         }
+        drop(tx); // Drop sender so rx terminates when all threads finish
 
         let mut run_results = Vec::new();
-        for handle in handles {
-            match handle.join() {
-                Ok(result) => run_results.push(result),
-                Err(_) => {
+        let mut received = 0usize;
+        loop {
+            if self.is_cancelled() {
+                log::info!(
+                    "[tool_batch] cancellation detected during parallel join, stopping wait ({}/{} received)",
+                    received, total_threads
+                );
+                break;
+            }
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(Ok(result)) => {
+                    run_results.push(result);
+                    received += 1;
+                    if received >= total_threads {
+                        break;
+                    }
+                }
+                Ok(Err(_)) => {
                     first_error.get_or_insert_with(|| {
                         "Parallel tool execution worker panicked".to_string()
                     });
+                    received += 1;
+                    if received >= total_threads {
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Continue polling — check cancel flag on next iteration
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // All senders dropped — remaining threads panicked without sending
+                    if received < total_threads {
+                        first_error.get_or_insert_with(|| {
+                            "Parallel tool execution worker panicked".to_string()
+                        });
+                    }
+                    break;
                 }
             }
         }
@@ -1155,6 +1221,10 @@ impl DynamicController {
         let mut successful_calls = 0usize;
 
         for call in calls {
+            if self.is_cancelled() {
+                log::info!("[tool_batch] cancellation detected between sequential tool executions");
+                break;
+            }
             let requested_output_mode = parse_output_mode_hint(call.output_mode.as_deref())?;
             let tool_name = call.tool.trim().to_string();
             let normalized_args = normalize_tool_args(call.args);
@@ -1388,7 +1458,7 @@ impl DynamicController {
             return;
         }
 
-        let summary = truncate_with_notice(&blocks.join("\n"), TOOL_SUMMARY_MAX_CHARS);
+        let summary = blocks.join("\n");
         self.messages.push(LlmMessage {
             role: "user".to_string(),
             content: json!(format!("[Tool executions]\n{summary}")),

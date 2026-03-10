@@ -43,6 +43,8 @@ export interface DisplayMessage extends BaseMessage {
   model?: string;
   /** Optional tool calls attached to this assistant response */
   tool_calls?: ToolCallRecord[];
+  /** Whether this message represents an error (e.g., agent error) */
+  isError?: boolean;
 }
 
 /**
