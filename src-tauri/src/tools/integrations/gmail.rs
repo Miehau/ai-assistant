@@ -587,7 +587,7 @@ fn minify_gmail_thread(raw: Value, mode: &str, max_messages: Option<usize>) -> V
     })
 }
 
-fn parse_gmail_message(thread_id: &str, message: Value) -> Option<GmailMessageSummary> {
+fn parse_gmail_message(_thread_id: &str, message: Value) -> Option<GmailMessageSummary> {
     let message_id = message.get("id").and_then(|v| v.as_str())?.to_string();
     let internal_date_ms = message
         .get("internalDate")
@@ -599,18 +599,26 @@ fn parse_gmail_message(thread_id: &str, message: Value) -> Option<GmailMessageSu
     let headers = extract_headers(&payload);
     let subject = headers.get("subject").cloned().unwrap_or_default();
     let date_header = headers.get("date").cloned();
+    let from = headers.get("from").cloned();
+    let to = headers.get("to").cloned();
+    let cc = headers.get("cc").cloned();
 
     let mut body_text: Option<String> = None;
     let mut body_html: Option<String> = None;
     let mut attachments: Vec<GmailAttachmentSummary> = Vec::new();
     collect_parts(&payload, &mut body_text, &mut body_html, &mut attachments);
 
+    // Prefer plain text; only keep HTML when no plain text is available
+    let body_html = if body_text.is_some() { None } else { body_html };
+
     Some(GmailMessageSummary {
-        thread_id: thread_id.to_string(),
         message_id,
-        title: subject,
+        subject,
         date_header,
         internal_date_ms,
+        from,
+        to,
+        cc,
         body_text,
         body_html,
         attachments,
@@ -686,12 +694,17 @@ fn decode_gmail_body(data: &str) -> Option<String> {
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct GmailMessageSummary {
-    thread_id: String,
     message_id: String,
-    title: String,
+    subject: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     date_header: Option<String>,
     internal_date_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     body_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
