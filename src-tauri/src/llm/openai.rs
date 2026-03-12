@@ -11,6 +11,10 @@ pub(super) fn build_openai_compatible_body(
     include_usage: bool,
     request_options: Option<&LlmRequestOptions>,
 ) -> Value {
+    // TODO(image-support): Map provider-neutral image blocks to OpenAI format
+    // before serialising messages. Neutral block: {"type":"image","media_type":"...","data":"..."}
+    // OpenAI expects: {"type":"image_url","image_url":{"url":"data:<media_type>;base64,<data>","detail":"auto"}}
+    // See docs/image-support-plan.md Phase 2.
     let mut body = serde_json::json!({
         "model": model,
         "messages": messages,

@@ -1292,7 +1292,6 @@ fn build_user_content(content: &str, attachments: &[IncomingAttachment]) -> serd
 
     let mut text = content.to_string();
     let mut image_entries = Vec::new();
-    let mut image_names = Vec::new();
 
     for attachment in attachments {
         let attachment_type = attachment.attachment_type.as_str();
@@ -1310,15 +1309,24 @@ fn build_user_content(content: &str, attachments: &[IncomingAttachment]) -> serd
                 ));
             }
         } else if attachment_type.starts_with("image") {
-            image_names.push(attachment.name.clone());
-            if !data.is_empty() {
-                image_entries.push(json!({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": attachment.data,
-                        "detail": "auto"
-                    }
-                }));
+            // Always annotate with a structured tag so the model can reference the
+            // image by name across turns, even when the binary data is absent.
+            text.push_str(&format!(
+                "\n<attached_image filename=\"{}\" type=\"{}\" />",
+                attachment.name, attachment_type
+            ));
+            // Only include the binary block when `data` is a data URI (current turn via IPC).
+            // History messages store a filename on disk; those are intentionally skipped —
+            // we only send image bytes in the originating turn, not on replay.
+            if data.starts_with("data:") {
+                let base64_data = data.splitn(2, ',').nth(1).unwrap_or("").trim();
+                if !base64_data.is_empty() {
+                    image_entries.push(json!({
+                        "type": "image",
+                        "media_type": attachment_type,
+                        "data": base64_data
+                    }));
+                }
             }
         } else if data.is_empty() {
             text.push_str(&format!(
@@ -1326,13 +1334,6 @@ fn build_user_content(content: &str, attachments: &[IncomingAttachment]) -> serd
                 attachment.name
             ));
         }
-    }
-
-    if !image_names.is_empty() {
-        text.push_str(&format!(
-            "\n\n[Attached images: {}]",
-            image_names.join(", ")
-        ));
     }
 
     let mut content_array = vec![json!({ "type": "text", "text": text })];

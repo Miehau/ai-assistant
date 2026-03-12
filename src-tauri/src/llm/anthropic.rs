@@ -2,7 +2,7 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 use std::io::{BufRead, BufReader};
 
-use super::{compact_error_body, value_to_string, LlmMessage, LlmRequestOptions, StreamResult, Usage};
+use super::{compact_error_body, parse_content_blocks, value_to_string, ContentBlock, LlmMessage, LlmRequestOptions, StreamResult, Usage};
 
 const ANTHROPIC_CACHE_BLOCK_MAX_CHARS: usize = 2_500;
 const ANTHROPIC_CACHE_CONTROL_MAX_BLOCKS: usize = 4;
@@ -281,26 +281,47 @@ fn format_anthropic_messages(
     cache_control_count: &mut usize,
     cache_enabled: bool,
 ) -> Vec<Value> {
-    // Phase 1: Format all messages into blocks without cache_control
+    // Phase 1: Format all messages into Anthropic content blocks.
+    // Provider-neutral image blocks are mapped to Anthropic source.base64 format.
+    // cache_control may only land on text blocks, so we track the last text block
+    // index per message separately from the last block overall.
     let non_system: Vec<&LlmMessage> = messages.iter().filter(|m| m.role != "system").collect();
     let mut formatted: Vec<Value> = Vec::new();
-    // Track (formatted_index, last_block_index) for each message so we can add
-    // cache_control to the last block of selected messages in phase 2.
-    let mut message_last_block_indices: Vec<(usize, usize)> = Vec::new();
+    // (formatted_index, last_text_block_index) — only pushed when the message has
+    // at least one text block (image-only messages are skipped for cache marking).
+    let mut message_last_text_block_indices: Vec<(usize, usize)> = Vec::new();
 
     for message in &non_system {
-        let text = value_to_string(&message.content);
-        let chunks = split_anthropic_text_for_cache(&text);
-        let mut content_blocks = Vec::new();
+        let neutral_blocks = parse_content_blocks(&message.content);
+        let mut content_blocks: Vec<Value> = Vec::new();
+        let mut last_text_block_idx: Option<usize> = None;
 
-        for (chunk, _section_boundary) in chunks {
-            if chunk.is_empty() {
-                continue;
+        for block in neutral_blocks {
+            match block {
+                ContentBlock::Text(text) => {
+                    let chunks = split_anthropic_text_for_cache(&text);
+                    for (chunk, _section_boundary) in chunks {
+                        if chunk.is_empty() {
+                            continue;
+                        }
+                        last_text_block_idx = Some(content_blocks.len());
+                        content_blocks.push(serde_json::json!({
+                            "type": "text",
+                            "text": chunk
+                        }));
+                    }
+                }
+                ContentBlock::Image { media_type, data } => {
+                    content_blocks.push(serde_json::json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data
+                        }
+                    }));
+                }
             }
-            content_blocks.push(serde_json::json!({
-                "type": "text",
-                "text": chunk
-            }));
         }
 
         if content_blocks.is_empty() {
@@ -310,9 +331,10 @@ fn format_anthropic_messages(
             }));
         }
 
-        let last_block_idx = content_blocks.len().saturating_sub(1);
         let formatted_idx = formatted.len();
-        message_last_block_indices.push((formatted_idx, last_block_idx));
+        if let Some(text_idx) = last_text_block_idx {
+            message_last_text_block_indices.push((formatted_idx, text_idx));
+        }
 
         formatted.push(serde_json::json!({
             "role": message.role,
@@ -323,17 +345,17 @@ fn format_anthropic_messages(
     // Phase 2: Add cache_control to messages from the END (maximizes cached prefix).
     // Skip the very last message (it's the newest, will change next turn).
     // Work backwards through the remaining messages.
-    if cache_enabled && !message_last_block_indices.is_empty() {
-        let candidates: Vec<(usize, usize)> = if message_last_block_indices.len() > 1 {
+    if cache_enabled && !message_last_text_block_indices.is_empty() {
+        let candidates: Vec<(usize, usize)> = if message_last_text_block_indices.len() > 1 {
             // Skip last message, iterate remaining from end
-            message_last_block_indices[..message_last_block_indices.len() - 1]
+            message_last_text_block_indices[..message_last_text_block_indices.len() - 1]
                 .iter()
                 .rev()
                 .copied()
                 .collect()
         } else {
             // Only one message — mark it (better than nothing)
-            message_last_block_indices.clone()
+            message_last_text_block_indices.clone()
         };
 
         for (fmt_idx, block_idx) in candidates {
@@ -1535,5 +1557,93 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&result.content).expect("json");
         assert_eq!(value["action"], "complete");
         assert_eq!(value["message"], "All done");
+    }
+
+    #[test]
+    fn anthropic_image_block_mapped_to_source_base64() {
+        let messages = vec![LlmMessage {
+            role: "user".to_string(),
+            content: json!([
+                { "type": "image", "media_type": "image/png", "data": "abc123" },
+                { "type": "text", "text": "what is this?" }
+            ]),
+        }];
+        let mut count = 0usize;
+        let formatted = format_anthropic_messages(&messages, &mut count, false);
+
+        let blocks = formatted[0]["content"].as_array().expect("content array");
+        // First block should be the image in Anthropic source.base64 format
+        assert_eq!(blocks[0]["type"], "image");
+        assert_eq!(blocks[0]["source"]["type"], "base64");
+        assert_eq!(blocks[0]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[0]["source"]["data"], "abc123");
+        // Second block should be the text
+        assert_eq!(blocks[1]["type"], "text");
+        assert_eq!(blocks[1]["text"], "what is this?");
+    }
+
+    #[test]
+    fn anthropic_cache_control_lands_on_text_block_not_image() {
+        // Message ends with an image — cache_control must go on the last text block
+        let messages = vec![
+            LlmMessage {
+                role: "user".to_string(),
+                content: json!([
+                    { "type": "text", "text": "look at this" },
+                    { "type": "image", "media_type": "image/jpeg", "data": "imgdata" }
+                ]),
+            },
+            LlmMessage {
+                role: "assistant".to_string(),
+                content: json!("I see an image."),
+            },
+        ];
+        let mut count = 0usize;
+        let formatted = format_anthropic_messages(&messages, &mut count, true);
+
+        // First message (index 0) should have cache_control on its text block,
+        // NOT on the trailing image block.
+        let blocks = formatted[0]["content"].as_array().expect("content array");
+        let text_block = &blocks[0];
+        let image_block = &blocks[1];
+        assert_eq!(
+            text_block
+                .get("cache_control")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str()),
+            Some("ephemeral"),
+            "cache_control should be on the text block"
+        );
+        assert!(
+            image_block.get("cache_control").is_none(),
+            "image block must NOT have cache_control"
+        );
+    }
+
+    #[test]
+    fn anthropic_image_only_message_skipped_for_cache() {
+        // A message with only image blocks should not receive cache_control at all
+        let messages = vec![
+            LlmMessage {
+                role: "user".to_string(),
+                content: json!([
+                    { "type": "image", "media_type": "image/png", "data": "x" }
+                ]),
+            },
+            LlmMessage {
+                role: "assistant".to_string(),
+                content: json!("response"),
+            },
+        ];
+        let mut count = 0usize;
+        let formatted = format_anthropic_messages(&messages, &mut count, true);
+
+        let image_msg_blocks = formatted[0]["content"].as_array().expect("content array");
+        assert!(
+            image_msg_blocks
+                .iter()
+                .all(|b| b.get("cache_control").is_none()),
+            "image-only message should not have cache_control"
+        );
     }
 }
