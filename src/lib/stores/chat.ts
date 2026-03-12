@@ -956,6 +956,21 @@ export async function loadSystemPrompts(options: { force?: boolean } = {}) {
 export async function loadConversationHistory(conversationId: string) {
   try {
     const loadedMessages = await conversationService.getDisplayHistory(conversationId);
+
+    // Sync toolCallsByMessageId with the loaded history so that any future
+    // upsertToolCall calls do not overwrite the correct completed/failed state
+    // with undefined (which happens when the map has no entry for a message ID).
+    toolCallsByMessageId.clear();
+    for (const msg of loadedMessages) {
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        const entries = new Map<string, ToolCallRecord>();
+        for (const tc of msg.tool_calls) {
+          entries.set(tc.execution_id, tc);
+        }
+        toolCallsByMessageId.set(msg.id, entries);
+      }
+    }
+
     messages.set(loadedMessages);
 
     // If there are messages, this is not a first message scenario
