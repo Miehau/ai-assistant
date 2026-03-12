@@ -3,7 +3,7 @@
   import { conversationService } from "$lib/services/conversation";
   import type { Conversation } from "$lib/types";
   import { formatDistanceToNow } from "date-fns";
-  import { messages, isFirstMessage } from "$lib/stores/chat";
+  import { messages, isFirstMessage, loadConversationHistory } from "$lib/stores/chat";
   import { fly, fade } from "svelte/transition";
   import { X, Trash2 } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
@@ -58,14 +58,8 @@
       // Set the selected conversation as current
       await conversationService.setCurrentConversation(conversation.id);
 
-      // Load the conversation messages
-      const loadedMessages = await conversationService.getDisplayHistory(conversation.id);
-      $messages = loadedMessages;
-
-      // Past conversations with messages should not trigger title generation
-      if (loadedMessages.length > 0) {
-        $isFirstMessage = false;
-      }
+      // Load the conversation messages (also syncs toolCallsByMessageId)
+      await loadConversationHistory(conversation.id);
 
       // Close the drawer after selection
       isOpen = false;
