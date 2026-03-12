@@ -84,3 +84,53 @@ fn value_to_string(value: &Value) -> String {
 
     value.to_string()
 }
+
+/// A provider-neutral content block, parsed from `LlmMessage.content`.
+/// Content may be a plain string or a JSON array of `{type, ...}` blocks.
+enum ContentBlock {
+    Text(String),
+    Image { media_type: String, data: String },
+}
+
+/// Parse `LlmMessage.content` into typed blocks.
+/// Plain strings become a single `Text` block.
+/// Unknown block types are silently skipped.
+fn parse_content_blocks(content: &Value) -> Vec<ContentBlock> {
+    if let Some(text) = content.as_str() {
+        return vec![ContentBlock::Text(text.to_string())];
+    }
+
+    if let Some(blocks) = content.as_array() {
+        let mut result = Vec::new();
+        for block in blocks {
+            match block.get("type").and_then(|t| t.as_str()) {
+                Some("text") => {
+                    let text = block
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    result.push(ContentBlock::Text(text));
+                }
+                Some("image") => {
+                    let media_type = block
+                        .get("media_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image/jpeg")
+                        .to_string();
+                    let data = block
+                        .get("data")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    result.push(ContentBlock::Image { media_type, data });
+                }
+                _ => {}
+            }
+        }
+        return result;
+    }
+
+    // Fallback for unexpected Value shapes (e.g. numbers, objects)
+    vec![ContentBlock::Text(value_to_string(content))]
+}

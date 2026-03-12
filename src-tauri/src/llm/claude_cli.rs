@@ -46,6 +46,10 @@ fn format_claude_cli_prompt(
         };
         prompt.push_str(role_label);
         prompt.push_str(":\n");
+        // TODO(image-support): Claude CLI is text-only. When content is a
+        // provider-neutral block array, extract text blocks and log a warning
+        // for any image blocks that are silently dropped.
+        // See docs/image-support-plan.md Phase 2.
         prompt.push_str(value_to_string(&message.content).trim());
         prompt.push_str("\n\n");
     }
