@@ -19,6 +19,7 @@ pub(crate) const VAULT_PATH_NOTE: &str =
 pub(crate) const DEFAULT_READ_MAX_LINES: usize = 200;
 pub(crate) const DEFAULT_READ_MAX_CHARS: usize = 20_000;
 pub(crate) const MAX_READ_FILE_SIZE: u64 = 64 * 1024;
+pub(crate) const MAX_READ_IMAGE_SIZE: u64 = 5 * 1024 * 1024; // 5MB
 
 pub fn register_file_tools(registry: &mut ToolRegistry, db: Db) -> Result<(), String> {
     list::register_list_tool(registry, db.clone())?;
@@ -81,6 +82,20 @@ pub(crate) fn parse_root_arg(args: &Value) -> Result<&str, ToolError> {
     match root {
         "vault" | "work" => Ok(root),
         _ => Err(ToolError::new("Invalid root; expected 'vault' or 'work'")),
+    }
+}
+
+pub(crate) fn detect_media_type(path: &Path) -> Option<String> {
+    let extension = path.extension()?.to_str()?.to_lowercase();
+    match extension.as_str() {
+        "jpg" | "jpeg" => Some("image/jpeg".to_string()),
+        "png" => Some("image/png".to_string()),
+        "gif" => Some("image/gif".to_string()),
+        "webp" => Some("image/webp".to_string()),
+        "bmp" => Some("image/bmp".to_string()),
+        "svg" => Some("image/svg+xml".to_string()),
+        "ico" => Some("image/x-icon".to_string()),
+        _ => None,
     }
 }
 
