@@ -143,7 +143,7 @@ fn chunk_text_by_chars(input: &str, max_chars: usize) -> Vec<String> {
         .collect()
 }
 
-fn split_anthropic_text_for_cache(input: &str) -> Vec<(String, bool)> {
+fn split_anthropic_text_for_cache(input: &str) -> Vec<String> {
     let mut marker_positions = [
         "\nSTATE SUMMARY:\n",
         "\nLAST TOOL OUTPUT:\n",
@@ -159,10 +159,7 @@ fn split_anthropic_text_for_cache(input: &str) -> Vec<(String, bool)> {
     .collect::<Vec<_>>();
 
     if marker_positions.is_empty() {
-        return chunk_text_by_chars(input, ANTHROPIC_CACHE_BLOCK_MAX_CHARS)
-            .into_iter()
-            .map(|chunk| (chunk, false))
-            .collect();
+        return chunk_text_by_chars(input, ANTHROPIC_CACHE_BLOCK_MAX_CHARS);
     }
 
     marker_positions.sort_unstable();
@@ -182,11 +179,7 @@ fn split_anthropic_text_for_cache(input: &str) -> Vec<(String, bool)> {
 
     let mut blocks = Vec::new();
     for segment in segments {
-        let chunks = chunk_text_by_chars(segment, ANTHROPIC_CACHE_BLOCK_MAX_CHARS);
-        let chunk_count = chunks.len();
-        for (chunk_idx, chunk) in chunks.into_iter().enumerate() {
-            blocks.push((chunk, chunk_count > 0 && chunk_idx + 1 == chunk_count));
-        }
+        blocks.extend(chunk_text_by_chars(segment, ANTHROPIC_CACHE_BLOCK_MAX_CHARS));
     }
     blocks
 }
@@ -300,7 +293,7 @@ fn format_anthropic_messages(
             match block {
                 ContentBlock::Text(text) => {
                     let chunks = split_anthropic_text_for_cache(&text);
-                    for (chunk, _section_boundary) in chunks {
+                    for chunk in chunks {
                         if chunk.is_empty() {
                             continue;
                         }
@@ -691,6 +684,22 @@ where
                     }
                 }
             }
+
+            if event_type == "error" {
+                let error_msg = value
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error");
+                let error_type = value
+                    .get("error")
+                    .and_then(|e| e.get("type"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("unknown");
+                return Err(format!(
+                    "Anthropic stream error ({error_type}): {error_msg}"
+                ));
+            }
         }
 
         line.clear();
@@ -707,6 +716,10 @@ fn parse_tool_use_sse<R: std::io::BufRead>(mut reader: R) -> Result<StreamResult
     let mut current_tool_name: Option<String> = None;
     let mut tool_input_buf = String::new();
     let mut result_content = String::new();
+    // Capture any top-level text block the model emits alongside a tool call.
+    // Vision models sometimes put their response in a text block rather than
+    // the tool input's message field; we use this as a fallback below.
+    let mut text_buf = String::new();
 
     while reader.read_line(&mut line).map_err(|e| e.to_string())? > 0 {
         let trimmed = line.trim();
@@ -746,14 +759,17 @@ fn parse_tool_use_sse<R: std::io::BufRead>(mut reader: R) -> Result<StreamResult
                 }
             }
             "content_block_delta" => {
-                if current_tool_name.is_some() {
-                    if let Some(delta) = value.get("delta") {
-                        if delta.get("type").and_then(|v| v.as_str()) == Some("input_json_delta") {
-                            if let Some(partial) =
-                                delta.get("partial_json").and_then(|v| v.as_str())
-                            {
-                                tool_input_buf.push_str(partial);
-                            }
+                if let Some(delta) = value.get("delta") {
+                    let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if current_tool_name.is_some() && delta_type == "input_json_delta" {
+                        if let Some(partial) =
+                            delta.get("partial_json").and_then(|v| v.as_str())
+                        {
+                            tool_input_buf.push_str(partial);
+                        }
+                    } else if current_tool_name.is_none() && delta_type == "text_delta" {
+                        if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                            text_buf.push_str(text);
                         }
                     }
                 }
@@ -765,7 +781,19 @@ fn parse_tool_use_sse<R: std::io::BufRead>(mut reader: R) -> Result<StreamResult
                     } else {
                         serde_json::from_str(&tool_input_buf).unwrap_or(serde_json::json!({}))
                     };
-                    let controller_json = tool_use_to_controller_json(&name, &input);
+                    let mut controller_json = tool_use_to_controller_json(&name, &input);
+                    // If the tool's message field is empty but the model emitted a
+                    // text block, use that text as the message (vision models often
+                    // put their response in a text block alongside the tool call).
+                    let message_empty = controller_json
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.trim().is_empty())
+                        .unwrap_or(false);
+                    if message_empty && !text_buf.trim().is_empty() {
+                        controller_json["message"] =
+                            serde_json::json!(text_buf.trim().to_string());
+                    }
                     result_content =
                         serde_json::to_string(&controller_json).unwrap_or_default();
                     tool_input_buf.clear();
@@ -826,10 +854,42 @@ fn parse_tool_use_sse<R: std::io::BufRead>(mut reader: R) -> Result<StreamResult
                     }
                 }
             }
+            "error" => {
+                let error_msg = value
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error");
+                let error_type = value
+                    .get("error")
+                    .and_then(|e| e.get("type"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("unknown");
+                return Err(format!(
+                    "Anthropic stream error ({error_type}): {error_msg}"
+                ));
+            }
             _ => {}
         }
 
         line.clear();
+    }
+
+    // If the model emitted no tool_use block (e.g. vision models sometimes ignore
+    // tool_choice:"any" and respond with plain text), fall back to the text block
+    // content wrapped as a "respond" action so the controller can process it.
+    if result_content.is_empty() && !text_buf.trim().is_empty() {
+        let fallback = serde_json::json!({
+            "action": "next_step",
+            "type": "respond",
+            "thinking": {},
+            "message": text_buf.trim()
+        });
+        result_content = serde_json::to_string(&fallback).unwrap_or_default();
+    }
+
+    if result_content.is_empty() {
+        return Err("Anthropic returned empty response (no tool call or text content)".to_string());
     }
 
     Ok(StreamResult {
@@ -865,7 +925,7 @@ pub fn complete_anthropic_with_tools(
         "model": model,
         "messages": formatted_messages,
         "stream": true,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0,
         "tools": tools,
         "tool_choice": { "type": "any" },
@@ -1557,6 +1617,78 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&result.content).expect("json");
         assert_eq!(value["action"], "complete");
         assert_eq!(value["message"], "All done");
+    }
+
+    #[test]
+    fn tool_use_sse_falls_back_to_text_block_when_message_empty() {
+        use std::io::Cursor;
+        // Model emits a text block with the response, then calls respond with no message.
+        // This happens with vision models that describe the image in a text block.
+        let mut sse = String::new();
+        sse.push_str("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n");
+        let text_delta = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "text_delta", "text": "Here is what I see in the image." }
+        });
+        sse.push_str(&format!("data: {}\n\n", serde_json::to_string(&text_delta).unwrap()));
+        sse.push_str("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
+        sse.push_str("data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"respond\",\"input\":{}}}\n\n");
+        // Tool input has no message field
+        let input_delta = json!({
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": { "type": "input_json_delta", "partial_json": "{\"thinking\":{}}" }
+        });
+        sse.push_str(&format!("data: {}\n\n", serde_json::to_string(&input_delta).unwrap()));
+        sse.push_str("data: {\"type\":\"content_block_stop\",\"index\":1}\n\n");
+
+        let cursor = Cursor::new(sse);
+        let result = parse_tool_use_sse(cursor).expect("parse");
+        let value: serde_json::Value = serde_json::from_str(&result.content).expect("json");
+        assert_eq!(value["action"], "next_step");
+        assert_eq!(value["type"], "respond");
+        assert_eq!(
+            value["message"],
+            "Here is what I see in the image.",
+            "should fall back to text block content"
+        );
+    }
+
+    #[test]
+    fn tool_use_sse_text_only_response_synthesizes_respond_action() {
+        use std::io::Cursor;
+        // Model ignores tool_choice:"any" and responds with only a text block (no tool_use).
+        // This can happen with vision input. The parser should synthesize a respond action.
+        let mut sse = String::new();
+        sse.push_str("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n");
+        let text_delta = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "text_delta", "text": "The image shows a cat." }
+        });
+        sse.push_str(&format!("data: {}\n\n", serde_json::to_string(&text_delta).unwrap()));
+        sse.push_str("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
+        // No tool_use block at all — just message_delta with usage
+        sse.push_str("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":10}}\n\n");
+
+        let cursor = Cursor::new(sse);
+        let result = parse_tool_use_sse(cursor).expect("parse");
+        let value: serde_json::Value = serde_json::from_str(&result.content).expect("json");
+        assert_eq!(value["action"], "next_step");
+        assert_eq!(value["type"], "respond");
+        assert_eq!(value["message"], "The image shows a cat.");
+    }
+
+    #[test]
+    fn tool_use_sse_empty_response_returns_error() {
+        use std::io::Cursor;
+        // Model returns nothing — no text, no tool_use. Should be an error, not empty JSON.
+        let sse = "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":0}}\n\n";
+        let cursor = Cursor::new(sse);
+        let result = parse_tool_use_sse(cursor);
+        assert!(result.is_err(), "empty response should be an error");
+        assert!(result.unwrap_err().contains("empty response"));
     }
 
     #[test]

@@ -1446,15 +1446,68 @@ impl DynamicController {
             return;
         }
 
-        let blocks: Vec<String> = if last_result.tool_executions.len() > 1 {
+        // Collect content blocks declared by tools (e.g. image blocks from files.read).
+        // Tools that produce rich content place a `content_blocks` array in their result.
+        // The orchestrator lifts these into the LLM message without inspecting their format.
+        let rich_content_blocks: Vec<Value> = last_result
+            .tool_executions
+            .iter()
+            .filter(|exec| exec.success)
+            .filter_map(|exec| {
+                exec.result
+                    .as_ref()?
+                    .get("content_blocks")?
+                    .as_array()
+                    .cloned()
+            })
+            .flatten()
+            .collect();
+
+        // Strip content_blocks (and raw base64 data) from the text summary so it
+        // doesn't pollute the context with duplicated binary data.
+        let formatted_execs: Vec<_> = if rich_content_blocks.is_empty() {
+            last_result.tool_executions.iter().cloned().collect()
+        } else {
             last_result
                 .tool_executions
+                .iter()
+                .map(|exec| {
+                    let has_blocks = exec
+                        .result
+                        .as_ref()
+                        .and_then(|r| r.get("content_blocks"))
+                        .is_some();
+                    if has_blocks {
+                        let mut cloned = exec.clone();
+                        if let Some(obj) = cloned.result.as_mut().and_then(|r| r.as_object_mut()) {
+                            obj.remove("content_blocks");
+                            // Redact raw base64 content if present (e.g. files.read)
+                            if obj.get("media_type")
+                                .and_then(|v| v.as_str())
+                                .map(|t| t.starts_with("image/"))
+                                .unwrap_or(false)
+                            {
+                                obj.insert(
+                                    "content".to_string(),
+                                    json!("[binary data attached as content block]"),
+                                );
+                            }
+                        }
+                        cloned
+                    } else {
+                        exec.clone()
+                    }
+                })
+                .collect()
+        };
+
+        let blocks: Vec<String> = if formatted_execs.len() > 1 {
+            formatted_execs
                 .iter()
                 .map(format_tool_execution_batch_summary_line)
                 .collect()
         } else {
-            last_result
-                .tool_executions
+            formatted_execs
                 .iter()
                 .map(format_tool_execution_summary_block)
                 .collect()
@@ -1464,11 +1517,23 @@ impl DynamicController {
             return;
         }
 
-        let summary = blocks.join("\n");
-        self.messages.push(LlmMessage {
-            role: "user".to_string(),
-            content: json!(format!("[Tool executions]\n{summary}")),
-        });
+        let summary_text = format!("[Tool executions]\n{}", blocks.join("\n"));
+        if rich_content_blocks.is_empty() {
+            self.messages.push(LlmMessage {
+                role: "user".to_string(),
+                content: json!(summary_text),
+            });
+        } else {
+            // Build a mixed content message: text summary + tool-declared content blocks.
+            // parse_content_blocks in llm/mod.rs will lift these into typed ContentBlocks,
+            // and provider formatters (e.g. Anthropic) will map them to native format.
+            let mut content = vec![json!({"type": "text", "text": summary_text})];
+            content.extend(rich_content_blocks);
+            self.messages.push(LlmMessage {
+                role: "user".to_string(),
+                content: json!(content),
+            });
+        }
     }
 
     fn is_cancelled(&self) -> bool {

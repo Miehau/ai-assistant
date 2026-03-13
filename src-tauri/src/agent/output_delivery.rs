@@ -112,16 +112,23 @@ pub fn build_tool_output_delivery(
                     &preview,
                     PERSISTED_RESULT_PREVIEW_MAX_CHARS,
                 );
+                let mut envelope = json!({
+                    "persisted": true,
+                    "output_ref": output_ref,
+                    "size_chars": output_chars as i64,
+                    "preview": smart_preview,
+                    "metadata": metadata,
+                    "available_tools": AVAILABLE_TOOLS_HINT
+                });
+                // Carry over content_blocks (e.g. image blocks from files.read) so
+                // the orchestrator can lift them into the LLM message even when the
+                // bulk text/base64 data is persisted to disk.
+                if let Some(blocks) = output_value.get("content_blocks").cloned() {
+                    envelope["content_blocks"] = blocks;
+                }
                 ToolOutputDeliveryResult {
                     success: true,
-                    output: Some(json!({
-                        "persisted": true,
-                        "output_ref": output_ref,
-                        "size_chars": output_chars as i64,
-                        "preview": smart_preview,
-                        "metadata": metadata,
-                        "available_tools": AVAILABLE_TOOLS_HINT
-                    })),
+                    output: Some(envelope),
                     error: None,
                     delivery,
                     artifact_persist_warning: None,
