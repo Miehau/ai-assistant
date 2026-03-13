@@ -90,6 +90,7 @@ pub fn complete_claude_cli(
     Ok(StreamResult {
         content,
         usage: None,
+        companion_text: None,
     })
 }
 

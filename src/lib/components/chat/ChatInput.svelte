@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Label } from "$lib/components/ui/label";
-  import { Textarea } from "$lib/components/ui/textarea";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Paperclip, Send, Square } from "lucide-svelte";
@@ -47,6 +46,15 @@
   let dragActive = $state(false);
 
   let fileInput: HTMLInputElement;
+  let textareaEl: HTMLTextAreaElement;
+
+  $effect(() => {
+    if (!textareaEl) return;
+    // Access currentMessage to make this effect reactive to it
+    void currentMessage;
+    textareaEl.style.height = "auto";
+    textareaEl.style.height = Math.min(textareaEl.scrollHeight, 160) + "px";
+  });
 
   function handleSendMessage() {
     if (!currentMessage.trim() && attachments.length === 0) return;
@@ -470,13 +478,15 @@
     </div>
   {/if}
   <Label for="message" class="sr-only">Message</Label>
-  <Textarea
+  <textarea
     id="message"
+    bind:this={textareaEl}
     bind:value={currentMessage}
     onkeydown={handleKeydown}
     placeholder="Type your message here..."
-    class="h-11 max-h-11 overflow-y-auto resize-none border-0 px-3 py-2 text-sm leading-6 shadow-none focus-visible:ring-0 bg-transparent text-foreground/90 placeholder:text-foreground/50 [box-shadow:inset_0_1px_0_rgba(255,255,255,0.06)]"
-  />
+    rows={1}
+    class="min-h-[44px] max-h-[160px] w-full overflow-y-auto resize-none border-0 px-3 py-2 text-sm leading-6 shadow-none outline-none bg-transparent text-foreground/90 placeholder:text-muted-foreground"
+  ></textarea>
   <div class="flex items-center justify-between px-3 pt-1 pb-0">
     <div class="flex items-center gap-1.5">
       <Tooltip.Root>

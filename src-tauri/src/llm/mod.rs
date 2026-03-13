@@ -40,6 +40,9 @@ pub struct Usage {
 pub struct StreamResult {
     pub content: String,
     pub usage: Option<Usage>,
+    /// Text blocks emitted alongside tool_use blocks (Anthropic only).
+    /// Surfaced to the user and appended to conversation context.
+    pub companion_text: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
