@@ -90,30 +90,34 @@
                 </p>
               {/if}
             </div>
-            <div class="flex flex-wrap items-center justify-end gap-2">
+            <div class="flex items-center gap-1.5">
               <Button
                 size="sm"
+                class="text-xs px-2.5 py-1 h-7"
                 onclick={() => approve(approval.approval_id, "once")}
               >
-                Approve once (recommended)
+                Approve
               </Button>
               <Button
                 variant="outline"
                 size="sm"
+                class="text-xs px-2 py-1 h-7"
                 onclick={() => approve(approval.approval_id, "conversation")}
               >
-                Approve for this conversation
+                This chat
               </Button>
               <Button
                 variant="outline"
                 size="sm"
+                class="text-xs px-2 py-1 h-7"
                 onclick={() => approve(approval.approval_id, "always")}
               >
-                Always approve this tool
+                Always
               </Button>
               <Button
                 variant="outline"
                 size="sm"
+                class="text-xs px-2 py-1 h-7"
                 onclick={() => deny(approval.approval_id)}
               >
                 Deny

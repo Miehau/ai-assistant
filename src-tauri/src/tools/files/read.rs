@@ -83,11 +83,17 @@ pub(super) fn register_read_tool(
                 let content = general_purpose::STANDARD.encode(&bytes);
                 let media_type = detect_media_type(Path::new(&resolved.full_path))
                     .unwrap_or_else(|| "application/octet-stream".to_string());
-                Ok(json!({
+                let mut result = json!({
                     "path": resolved.display_path,
                     "content": content,
-                    "media_type": media_type
-                }))
+                    "media_type": &media_type
+                });
+                if media_type.starts_with("image/") {
+                    result["content_blocks"] = json!([
+                        { "type": "image", "media_type": &media_type, "data": result["content"] }
+                    ]);
+                }
+                Ok(result)
             }
             _ => Err(ToolError::new("Invalid as_type; expected 'text' or 'base64'")),
         }

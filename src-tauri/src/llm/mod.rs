@@ -36,6 +36,7 @@ pub struct Usage {
     pub cache_creation_input_tokens: i32,
 }
 
+#[derive(Debug)]
 pub struct StreamResult {
     pub content: String,
     pub usage: Option<Usage>,

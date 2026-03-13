@@ -45,8 +45,16 @@ pub(super) fn register_read_tool(registry: &mut ToolRegistry) -> Result<(), Stri
             }
         }
 
-        serde_json::to_value(record)
-            .map_err(|err| ToolError::new(format!("Failed to serialize tool output record: {err}")))
+        let mut result = serde_json::to_value(&record)
+            .map_err(|err| ToolError::new(format!("Failed to serialize tool output record: {err}")))?;
+
+        // Lift content_blocks from the stored output to the top level so the
+        // orchestrator can attach them to the LLM message generically.
+        if let Some(blocks) = record.output.get("content_blocks").cloned() {
+            result["content_blocks"] = blocks;
+        }
+
+        Ok(result)
     });
 
     registry.register(ToolDefinition {
