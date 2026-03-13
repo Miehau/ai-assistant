@@ -26,7 +26,12 @@ pub(super) fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result
                 "same_host_only": { "type": "boolean" },
                 "extract_links": { "type": "boolean" },
                 "include_html": { "type": "boolean" },
-                "max_links": { "type": "integer", "minimum": 1 }
+                "max_links": { "type": "integer", "minimum": 1 },
+                "include_headers": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "List of response header names to include in the result (case-insensitive). Defaults to none."
+                }
             },
             "required": ["url"],
             "additionalProperties": false
@@ -42,7 +47,11 @@ pub(super) fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result
                 "html": { "type": "string" },
                 "links": { "type": "array", "items": { "type": "string" } },
                 "truncated": { "type": "boolean" },
-                "bytes": { "type": "integer" }
+                "bytes": { "type": "integer" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                }
             },
             "required": ["url", "status", "content_type", "text", "links", "truncated", "bytes"],
             "additionalProperties": false
@@ -81,6 +90,16 @@ pub(super) fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result
             .get("max_links")
             .and_then(|v| v.as_u64())
             .unwrap_or(200) as usize;
+        let include_headers: Vec<String> = args
+            .get("include_headers")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let parsed = parse_url(&url)?;
         let original_host = normalize_host(
@@ -131,6 +150,18 @@ pub(super) fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
+        let selected_headers: serde_json::Map<String, Value> = if !include_headers.is_empty() {
+            response
+                .headers()
+                .iter()
+                .filter(|(name, _)| include_headers.contains(&name.as_str().to_ascii_lowercase()))
+                .filter_map(|(name, value)| {
+                    value.to_str().ok().map(|v| (name.to_string(), json!(v)))
+                })
+                .collect()
+        } else {
+            serde_json::Map::new()
+        };
 
         let (body, truncated) = read_limited_body(response, max_bytes)?;
         let body_text = String::from_utf8_lossy(&body).to_string();
@@ -166,6 +197,12 @@ pub(super) fn register_fetch_tool(registry: &mut ToolRegistry, db: Db) -> Result
         if include_html {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("html".to_string(), json!(body_text));
+            }
+        }
+
+        if !selected_headers.is_empty() {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("headers".to_string(), Value::Object(selected_headers));
             }
         }
 

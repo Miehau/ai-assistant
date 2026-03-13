@@ -83,7 +83,8 @@
 
 /* Markdown Styles */
 .prose {
-  @apply text-sm leading-normal;
+  font-size: 0.8125rem; /* 13px — slightly smaller than text-sm (14px) */
+  line-height: 1.5;
 }
 
 .prose p {

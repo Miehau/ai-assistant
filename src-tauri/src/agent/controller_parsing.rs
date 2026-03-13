@@ -587,6 +587,150 @@ pub fn tool_use_to_controller_json(tool_name: &str, input: &Value) -> Value {
     }
 }
 
+/// Aggregate multiple tool_use blocks from a single Anthropic response into one
+/// controller action JSON. Also returns any companion text (text blocks emitted
+/// alongside tool calls) that should be surfaced to the user.
+///
+/// Rules:
+/// - Single `call_tool` → use as-is
+/// - Multiple `call_tool` → merge into `call_tool_batch`
+/// - `call_tool_batch` present → merge any loose `call_tool` specs into its array
+/// - Non-tool actions (`respond`, `complete`, etc.) alongside tool calls:
+///   tool calls take priority; respond text is folded into companion_text
+/// - Non-tool action alone → use as-is, no companion_text
+pub fn aggregate_tool_uses(
+    tool_uses: &[(String, Value)],
+    text_buf: &str,
+) -> (Value, Option<String>) {
+    assert!(!tool_uses.is_empty(), "aggregate_tool_uses called with empty vec");
+
+    // Partition into tool calls vs non-tool actions
+    let mut tool_specs: Vec<Value> = Vec::new(); // individual {tool, args, output_mode}
+    let mut batch_specs: Vec<Value> = Vec::new(); // from call_tool_batch tools arrays
+    let mut non_tool_actions: Vec<Value> = Vec::new();
+    let mut respond_texts: Vec<String> = Vec::new();
+    let mut merged_thinking = json!({});
+
+    for (name, input) in tool_uses {
+        // Capture the first non-empty thinking block
+        if let Some(thinking) = input.get("thinking") {
+            if thinking.is_object()
+                && thinking.as_object().map(|m| !m.is_empty()).unwrap_or(false)
+                && merged_thinking.as_object().map(|m| m.is_empty()).unwrap_or(true)
+            {
+                merged_thinking = thinking.clone();
+            }
+        }
+
+        match name.as_str() {
+            "call_tool" => {
+                let mut spec = json!({});
+                if let Some(tool) = input.get("tool") {
+                    spec["tool"] = tool.clone();
+                }
+                if let Some(args) = input.get("args") {
+                    spec["args"] = args.clone();
+                }
+                if let Some(output_mode) = input.get("output_mode") {
+                    spec["output_mode"] = output_mode.clone();
+                }
+                tool_specs.push(spec);
+            }
+            "call_tool_batch" => {
+                if let Some(tools) = input.get("tools").and_then(|v| v.as_array()) {
+                    batch_specs.extend(tools.iter().cloned());
+                }
+            }
+            "respond" => {
+                if let Some(msg) = input.get("message").and_then(|v| v.as_str()) {
+                    if !msg.trim().is_empty() {
+                        respond_texts.push(msg.trim().to_string());
+                    }
+                }
+                // Also keep as a non-tool action in case there are no tool calls
+                non_tool_actions.push(tool_use_to_controller_json(name, input));
+            }
+            _ => {
+                non_tool_actions.push(tool_use_to_controller_json(name, input));
+            }
+        }
+    }
+
+    let has_tool_calls = !tool_specs.is_empty() || !batch_specs.is_empty();
+
+    // Build companion text from text_buf + any respond messages (when tool calls present)
+    let companion = if has_tool_calls {
+        let mut parts: Vec<String> = Vec::new();
+        let trimmed = text_buf.trim();
+        if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+        }
+        parts.extend(respond_texts);
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("\n\n"))
+        }
+    } else {
+        // No tool calls — text_buf is NOT companion (handled below as vision fallback)
+        None
+    };
+
+    // Determine the controller JSON
+    let controller_json = if has_tool_calls {
+        // Merge all specs into one collection
+        let mut all_specs = batch_specs;
+        all_specs.extend(tool_specs);
+
+        if all_specs.len() == 1 {
+            // Single tool call — emit as call_tool
+            let spec = &all_specs[0];
+            let mut out = json!({
+                "action": "next_step",
+                "type": "tool",
+                "thinking": merged_thinking,
+            });
+            if let Some(tool) = spec.get("tool") {
+                out["tool"] = tool.clone();
+            }
+            if let Some(args) = spec.get("args") {
+                out["args"] = args.clone();
+            }
+            if let Some(output_mode) = spec.get("output_mode") {
+                out["output_mode"] = output_mode.clone();
+            }
+            out
+        } else {
+            // Multiple tool calls — emit as call_tool_batch
+            json!({
+                "action": "next_step",
+                "type": "tool_batch",
+                "thinking": merged_thinking,
+                "tools": all_specs,
+            })
+        }
+    } else {
+        // No tool calls — use the first non-tool action.
+        // Vision fallback: if the action is a respond with an empty message but
+        // text_buf has content, use text_buf as the message.
+        let mut action = non_tool_actions
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| json!({"action": "next_step", "type": "respond", "message": ""}));
+        let message_empty = action
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        if message_empty && !text_buf.trim().is_empty() {
+            action["message"] = json!(text_buf.trim());
+        }
+        action
+    };
+
+    (controller_json, companion)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1110,6 +1254,151 @@ trailing text"#;
         assert_eq!(result["type"], "tool");
         assert_eq!(result["tool"], "gmail.list_threads");
         assert_eq!(result["args"]["thread_id"], "abc-123");
+    }
+
+    // --- aggregate_tool_uses tests ---
+
+    #[test]
+    fn aggregate_single_call_tool() {
+        let uses = vec![(
+            "call_tool".to_string(),
+            json!({"tool": "weather", "args": {"city": "NYC"}, "thinking": {"task": "check"}}),
+        )];
+        let (result, companion) = aggregate_tool_uses(&uses, "");
+        assert_eq!(result["action"], "next_step");
+        assert_eq!(result["type"], "tool");
+        assert_eq!(result["tool"], "weather");
+        assert_eq!(result["args"]["city"], "NYC");
+        assert!(companion.is_none());
+    }
+
+    #[test]
+    fn aggregate_single_call_tool_with_text() {
+        let uses = vec![(
+            "call_tool".to_string(),
+            json!({"tool": "weather", "args": {}}),
+        )];
+        let (result, companion) = aggregate_tool_uses(&uses, "Let me check the weather.");
+        assert_eq!(result["type"], "tool");
+        assert_eq!(companion.as_deref(), Some("Let me check the weather."));
+    }
+
+    #[test]
+    fn aggregate_multiple_call_tool_into_batch() {
+        let uses = vec![
+            (
+                "call_tool".to_string(),
+                json!({"tool": "weather", "args": {"city": "NYC"}}),
+            ),
+            (
+                "call_tool".to_string(),
+                json!({"tool": "weather", "args": {"city": "LA"}}),
+            ),
+        ];
+        let (result, companion) = aggregate_tool_uses(&uses, "Checking both cities.");
+        assert_eq!(result["action"], "next_step");
+        assert_eq!(result["type"], "tool_batch");
+        let tools = result["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["tool"], "weather");
+        assert_eq!(tools[0]["args"]["city"], "NYC");
+        assert_eq!(tools[1]["args"]["city"], "LA");
+        assert_eq!(companion.as_deref(), Some("Checking both cities."));
+    }
+
+    #[test]
+    fn aggregate_call_tool_batch_passthrough() {
+        let uses = vec![(
+            "call_tool_batch".to_string(),
+            json!({"tools": [
+                {"tool": "a", "args": {}},
+                {"tool": "b", "args": {}}
+            ]}),
+        )];
+        let (result, _) = aggregate_tool_uses(&uses, "");
+        assert_eq!(result["type"], "tool_batch");
+        let tools = result["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), 2);
+    }
+
+    #[test]
+    fn aggregate_batch_plus_loose_call_tool() {
+        let uses = vec![
+            (
+                "call_tool_batch".to_string(),
+                json!({"tools": [{"tool": "a", "args": {}}]}),
+            ),
+            (
+                "call_tool".to_string(),
+                json!({"tool": "b", "args": {}}),
+            ),
+        ];
+        let (result, _) = aggregate_tool_uses(&uses, "");
+        assert_eq!(result["type"], "tool_batch");
+        let tools = result["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), 2);
+    }
+
+    #[test]
+    fn aggregate_call_tool_plus_respond_uses_tool_respond_becomes_companion() {
+        let uses = vec![
+            (
+                "call_tool".to_string(),
+                json!({"tool": "weather", "args": {}}),
+            ),
+            (
+                "respond".to_string(),
+                json!({"message": "Here's the weather info."}),
+            ),
+        ];
+        let (result, companion) = aggregate_tool_uses(&uses, "Thinking out loud...");
+        assert_eq!(result["type"], "tool");
+        assert_eq!(result["tool"], "weather");
+        // companion should contain both text_buf and respond message
+        let companion = companion.expect("companion text");
+        assert!(companion.contains("Thinking out loud..."));
+        assert!(companion.contains("Here's the weather info."));
+    }
+
+    #[test]
+    fn aggregate_respond_only_no_companion() {
+        let uses = vec![(
+            "respond".to_string(),
+            json!({"message": "Hello!", "thinking": {}}),
+        )];
+        let (result, companion) = aggregate_tool_uses(&uses, "");
+        assert_eq!(result["action"], "next_step");
+        assert_eq!(result["type"], "respond");
+        assert_eq!(result["message"], "Hello!");
+        assert!(companion.is_none());
+    }
+
+    #[test]
+    fn aggregate_complete_action() {
+        let uses = vec![(
+            "complete".to_string(),
+            json!({"message": "All done"}),
+        )];
+        let (result, companion) = aggregate_tool_uses(&uses, "");
+        assert_eq!(result["action"], "complete");
+        assert_eq!(result["message"], "All done");
+        assert!(companion.is_none());
+    }
+
+    #[test]
+    fn aggregate_preserves_thinking_from_first_nonempty() {
+        let uses = vec![
+            (
+                "call_tool".to_string(),
+                json!({"tool": "a", "args": {}, "thinking": {}}),
+            ),
+            (
+                "call_tool".to_string(),
+                json!({"tool": "b", "args": {}, "thinking": {"task": "important"}}),
+            ),
+        ];
+        let (result, _) = aggregate_tool_uses(&uses, "");
+        assert_eq!(result["thinking"]["task"], "important");
     }
 }
 

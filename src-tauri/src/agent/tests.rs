@@ -133,7 +133,7 @@ fn controller_executes_tool_then_complete() {
 
     let mut call_llm = |_: &[LlmMessage], _: Option<&str>, _: Option<Value>| {
         let content = responses.pop_front().expect("missing response");
-        Ok(StreamResult { content, usage: None })
+        Ok(StreamResult { content, usage: None, companion_text: None })
     };
 
     let result = controller
@@ -174,7 +174,7 @@ fn controller_drops_oversized_tool_batch() {
 
     let mut call_llm = |_: &[LlmMessage], _: Option<&str>, _: Option<Value>| {
         let content = responses.pop_front().expect("missing response");
-        Ok(StreamResult { content, usage: None })
+        Ok(StreamResult { content, usage: None, companion_text: None })
     };
 
     let _ = controller
@@ -220,7 +220,7 @@ fn controller_rejects_invalid_args() {
 
     let mut call_llm = |_: &[LlmMessage], _: Option<&str>, _: Option<Value>| {
         let content = responses.pop_front().expect("missing response");
-        Ok(StreamResult { content, usage: None })
+        Ok(StreamResult { content, usage: None, companion_text: None })
     };
 
     let _ = controller

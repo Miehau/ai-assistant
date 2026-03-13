@@ -84,7 +84,7 @@ pub(super) fn parse_openai_compatible_response(value: &Value) -> StreamResult {
 
     let usage = value.get("usage").and_then(parse_openai_usage);
 
-    StreamResult { content, usage }
+    StreamResult { content, usage, companion_text: None }
 }
 
 fn build_openai_request_body(
@@ -327,7 +327,7 @@ where
         line.clear();
     }
 
-    Ok(StreamResult { content, usage })
+    Ok(StreamResult { content, usage, companion_text: None })
 }
 
 // ---------------------------------------------------------------------------

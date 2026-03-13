@@ -22,6 +22,7 @@ pub const EVENT_AGENT_STEP_PROPOSED: &str = "agent.step.proposed";
 pub const EVENT_AGENT_STEP_STARTED: &str = "agent.step.started";
 pub const EVENT_AGENT_STEP_COMPLETED: &str = "agent.step.completed";
 pub const EVENT_AGENT_COMPLETED: &str = "agent.completed";
+pub const EVENT_AGENT_COMPANION_TEXT: &str = "agent.companion_text";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentEvent {

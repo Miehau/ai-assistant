@@ -23,11 +23,11 @@ use crate::db::{
 #[cfg(debug_assertions)]
 use crate::db::{MessageAgentThinkingInput, MessageOperations};
 use crate::events::{
-    AgentEvent, EventBus, EVENT_AGENT_COMPLETED, EVENT_AGENT_PHASE_CHANGED,
-    EVENT_AGENT_PLAN_ADJUSTED, EVENT_AGENT_PLAN_CREATED, EVENT_AGENT_STEP_COMPLETED,
-    EVENT_AGENT_STEP_PROPOSED, EVENT_AGENT_STEP_STARTED, EVENT_TOOL_EXECUTION_APPROVED,
-    EVENT_TOOL_EXECUTION_COMPLETED, EVENT_TOOL_EXECUTION_DENIED, EVENT_TOOL_EXECUTION_PROPOSED,
-    EVENT_TOOL_EXECUTION_STARTED,
+    AgentEvent, EventBus, EVENT_AGENT_COMPANION_TEXT, EVENT_AGENT_COMPLETED,
+    EVENT_AGENT_PHASE_CHANGED, EVENT_AGENT_PLAN_ADJUSTED, EVENT_AGENT_PLAN_CREATED,
+    EVENT_AGENT_STEP_COMPLETED, EVENT_AGENT_STEP_PROPOSED, EVENT_AGENT_STEP_STARTED,
+    EVENT_TOOL_EXECUTION_APPROVED, EVENT_TOOL_EXECUTION_COMPLETED, EVENT_TOOL_EXECUTION_DENIED,
+    EVENT_TOOL_EXECUTION_PROPOSED, EVENT_TOOL_EXECUTION_STARTED,
 };
 use crate::llm::{LlmMessage, StreamResult};
 use crate::tools::{
@@ -1412,7 +1412,8 @@ impl DynamicController {
                 "available_tools_count": tools_count
             })),
         );
-        let response = self.call_llm_json(call_llm, &messages, Some(controller_output_format()))?;
+        let (response, companion_text) =
+            self.call_llm_json(call_llm, &messages, Some(controller_output_format()))?;
         let response_payload = serde_json::to_string_pretty(&response)
             .unwrap_or_else(|_| response.to_string());
         self.record_trace(
@@ -1421,6 +1422,24 @@ impl DynamicController {
             trace_iteration,
             None,
         );
+
+        // Surface companion text (text blocks emitted alongside tool calls) to the
+        // frontend and append to conversation context so future turns have it.
+        if let Some(text) = &companion_text {
+            self.event_bus.publish(AgentEvent::new_with_timestamp(
+                EVENT_AGENT_COMPANION_TEXT,
+                json!({
+                    "session_id": self.session.id,
+                    "text": text,
+                }),
+                Utc::now().timestamp_millis(),
+            ));
+            self.messages.push(LlmMessage {
+                role: "assistant".to_string(),
+                content: json!(text),
+            });
+        }
+
         parse_controller_action(&response)
     }
 
@@ -1429,13 +1448,16 @@ impl DynamicController {
         call_llm: &mut F,
         messages: &[LlmMessage],
         output_format: Option<Value>,
-    ) -> Result<Value, String>
+    ) -> Result<(Value, Option<String>), String>
     where
         F: FnMut(&[LlmMessage], Option<&str>, Option<Value>) -> Result<StreamResult, String>,
     {
         let response = (call_llm)(messages, None, output_format)?;
+        let companion_text = response.companion_text;
         let json_text = extract_json(&response.content);
-        serde_json::from_str(&json_text).map_err(|err| format!("Invalid JSON: {err}"))
+        let value = serde_json::from_str(&json_text)
+            .map_err(|err| format!("Invalid JSON: {err}"))?;
+        Ok((value, companion_text))
     }
 
     fn append_tool_result_message(&mut self) {

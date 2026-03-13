@@ -705,20 +705,19 @@ where
         line.clear();
     }
 
-    Ok(StreamResult { content, usage })
+    Ok(StreamResult { content, usage, companion_text: None })
 }
 
 fn parse_tool_use_sse<R: std::io::BufRead>(mut reader: R) -> Result<StreamResult, String> {
-    use crate::agent::controller_parsing::tool_use_to_controller_json;
+    use crate::agent::controller_parsing::aggregate_tool_uses;
 
     let mut line = String::new();
     let mut usage: Option<Usage> = None;
     let mut current_tool_name: Option<String> = None;
     let mut tool_input_buf = String::new();
-    let mut result_content = String::new();
-    // Capture any top-level text block the model emits alongside a tool call.
-    // Vision models sometimes put their response in a text block rather than
-    // the tool input's message field; we use this as a fallback below.
+    // Collect ALL tool_use blocks instead of keeping only the last one.
+    let mut collected_tool_uses: Vec<(String, Value)> = Vec::new();
+    // Capture text blocks emitted alongside tool calls.
     let mut text_buf = String::new();
 
     while reader.read_line(&mut line).map_err(|e| e.to_string())? > 0 {
@@ -781,21 +780,7 @@ fn parse_tool_use_sse<R: std::io::BufRead>(mut reader: R) -> Result<StreamResult
                     } else {
                         serde_json::from_str(&tool_input_buf).unwrap_or(serde_json::json!({}))
                     };
-                    let mut controller_json = tool_use_to_controller_json(&name, &input);
-                    // If the tool's message field is empty but the model emitted a
-                    // text block, use that text as the message (vision models often
-                    // put their response in a text block alongside the tool call).
-                    let message_empty = controller_json
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.trim().is_empty())
-                        .unwrap_or(false);
-                    if message_empty && !text_buf.trim().is_empty() {
-                        controller_json["message"] =
-                            serde_json::json!(text_buf.trim().to_string());
-                    }
-                    result_content =
-                        serde_json::to_string(&controller_json).unwrap_or_default();
+                    collected_tool_uses.push((name, input));
                     tool_input_buf.clear();
                 }
             }
@@ -875,27 +860,36 @@ fn parse_tool_use_sse<R: std::io::BufRead>(mut reader: R) -> Result<StreamResult
         line.clear();
     }
 
-    // If the model emitted no tool_use block (e.g. vision models sometimes ignore
-    // tool_choice:"any" and respond with plain text), fall back to the text block
-    // content wrapped as a "respond" action so the controller can process it.
-    if result_content.is_empty() && !text_buf.trim().is_empty() {
+    // Aggregate collected tool_use blocks (+ text) into a single controller action.
+    if !collected_tool_uses.is_empty() {
+        let (controller_json, companion_text) =
+            aggregate_tool_uses(&collected_tool_uses, &text_buf);
+        let result_content = serde_json::to_string(&controller_json).unwrap_or_default();
+        return Ok(StreamResult {
+            content: result_content,
+            usage,
+            companion_text,
+        });
+    }
+
+    // Vision fallback: model emitted no tool_use block but responded with plain text.
+    // Wrap as a "respond" action so the controller can process it.
+    if !text_buf.trim().is_empty() {
         let fallback = serde_json::json!({
             "action": "next_step",
             "type": "respond",
             "thinking": {},
             "message": text_buf.trim()
         });
-        result_content = serde_json::to_string(&fallback).unwrap_or_default();
+        let result_content = serde_json::to_string(&fallback).unwrap_or_default();
+        return Ok(StreamResult {
+            content: result_content,
+            usage,
+            companion_text: None,
+        });
     }
 
-    if result_content.is_empty() {
-        return Err("Anthropic returned empty response (no tool call or text content)".to_string());
-    }
-
-    Ok(StreamResult {
-        content: result_content,
-        usage,
-    })
+    Err("Anthropic returned empty response (no tool call or text content)".to_string())
 }
 
 pub fn complete_anthropic_with_tools(
@@ -1776,6 +1770,83 @@ mod tests {
                 .iter()
                 .all(|b| b.get("cache_control").is_none()),
             "image-only message should not have cache_control"
+        );
+    }
+
+    // --- Multi-block SSE tests ---
+
+    #[test]
+    fn tool_use_sse_multiple_call_tool_merged_into_batch() {
+        use std::io::Cursor;
+        // Model emits two call_tool blocks — should be merged into a tool_batch.
+        let mut sse = String::new();
+        sse.push_str("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":50,\"output_tokens\":0}}}\n\n");
+
+        // First call_tool
+        sse.push_str("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"call_tool\",\"input\":{}}}\n\n");
+        let delta1 = json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": { "type": "input_json_delta", "partial_json": "{\"tool\":\"weather\",\"args\":{\"city\":\"NYC\"}}" }
+        });
+        sse.push_str(&format!("data: {}\n\n", serde_json::to_string(&delta1).unwrap()));
+        sse.push_str("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
+
+        // Second call_tool
+        sse.push_str("data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_2\",\"name\":\"call_tool\",\"input\":{}}}\n\n");
+        let delta2 = json!({
+            "type": "content_block_delta", "index": 1,
+            "delta": { "type": "input_json_delta", "partial_json": "{\"tool\":\"weather\",\"args\":{\"city\":\"LA\"}}" }
+        });
+        sse.push_str(&format!("data: {}\n\n", serde_json::to_string(&delta2).unwrap()));
+        sse.push_str("data: {\"type\":\"content_block_stop\",\"index\":1}\n\n");
+
+        let cursor = Cursor::new(sse);
+        let result = parse_tool_use_sse(cursor).expect("parse");
+        let value: serde_json::Value = serde_json::from_str(&result.content).expect("json");
+        assert_eq!(value["action"], "next_step");
+        assert_eq!(value["type"], "tool_batch");
+        let tools = value["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["tool"], "weather");
+        assert_eq!(tools[0]["args"]["city"], "NYC");
+        assert_eq!(tools[1]["args"]["city"], "LA");
+        assert!(result.companion_text.is_none());
+    }
+
+    #[test]
+    fn tool_use_sse_text_plus_call_tool_produces_companion_text() {
+        use std::io::Cursor;
+        // Model emits a text block followed by a call_tool block.
+        let mut sse = String::new();
+
+        // Text block
+        sse.push_str("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n");
+        let text_delta = json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": { "type": "text_delta", "text": "Let me check the weather for you." }
+        });
+        sse.push_str(&format!("data: {}\n\n", serde_json::to_string(&text_delta).unwrap()));
+        sse.push_str("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
+
+        // Tool call
+        sse.push_str("data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"call_tool\",\"input\":{}}}\n\n");
+        let tool_delta = json!({
+            "type": "content_block_delta", "index": 1,
+            "delta": { "type": "input_json_delta", "partial_json": "{\"tool\":\"weather\",\"args\":{\"city\":\"NYC\"}}" }
+        });
+        sse.push_str(&format!("data: {}\n\n", serde_json::to_string(&tool_delta).unwrap()));
+        sse.push_str("data: {\"type\":\"content_block_stop\",\"index\":1}\n\n");
+
+        let cursor = Cursor::new(sse);
+        let result = parse_tool_use_sse(cursor).expect("parse");
+        let value: serde_json::Value = serde_json::from_str(&result.content).expect("json");
+        assert_eq!(value["action"], "next_step");
+        assert_eq!(value["type"], "tool");
+        assert_eq!(value["tool"], "weather");
+        assert_eq!(
+            result.companion_text.as_deref(),
+            Some("Let me check the weather for you."),
+            "text block should become companion_text"
         );
     }
 }
