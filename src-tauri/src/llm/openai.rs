@@ -491,12 +491,11 @@ fn parse_openai_tool_calls_sse<R: std::io::BufRead>(mut reader: R) -> Result<Str
         });
     }
 
-    // Vision fallback: model emitted no tool call but responded with plain text
+    // No tool calls: model responded with plain text, indicating task completion.
+    // Wrap as a "complete" action so the controller can finish with this response.
     if !text_buf.trim().is_empty() {
         let fallback = serde_json::json!({
-            "action": "next_step",
-            "type": "respond",
-            "thinking": {},
+            "action": "complete",
             "message": text_buf.trim()
         });
         let result_content = serde_json::to_string(&fallback).unwrap_or_default();
@@ -522,7 +521,7 @@ pub fn complete_openai_with_tools(
     let openai_tools = controller_tools_to_openai_format(tools);
     let mut body = build_openai_compatible_body(model, messages, true, false, request_options);
     body["tools"] = serde_json::json!(openai_tools);
-    body["tool_choice"] = serde_json::json!("required");
+    body["tool_choice"] = serde_json::json!("auto");
 
     let response = client
         .post(url)
@@ -553,7 +552,7 @@ pub fn complete_openai_compatible_with_tools(
     let openai_tools = controller_tools_to_openai_format(tools);
     let mut body = build_openai_compatible_body(model, messages, true, false, request_options);
     body["tools"] = serde_json::json!(openai_tools);
-    body["tool_choice"] = serde_json::json!("required");
+    body["tool_choice"] = serde_json::json!("auto");
 
     let mut request = client
         .post(url)

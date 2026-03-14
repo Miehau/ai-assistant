@@ -436,18 +436,6 @@ pub fn controller_tool_definitions() -> Vec<serde_json::Value> {
             }
         }),
         json!({
-            "name": "respond",
-            "description": "Send a message to the user without calling any tools. Use when no further tool calls are needed but there is something to communicate.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "thinking": thinking_schema.clone(),
-                    "message": { "type": "string", "description": "Message to send to the user" }
-                },
-                "required": ["message"]
-            }
-        }),
-        json!({
             "name": "ask_user",
             "description": "Ask the user a clarifying question before proceeding. Use when missing required information that cannot be inferred.",
             "input_schema": {
@@ -462,17 +450,6 @@ pub fn controller_tool_definitions() -> Vec<serde_json::Value> {
                     }
                 },
                 "required": ["question"]
-            }
-        }),
-        json!({
-            "name": "complete",
-            "description": "Mark the task as complete and deliver the final response to the user.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "message": { "type": "string", "description": "Final response message to the user" }
-                },
-                "required": ["message"]
             }
         }),
         json!({
@@ -524,14 +501,6 @@ pub fn tool_use_to_controller_json(tool_name: &str, input: &Value) -> Value {
             }
             out
         }
-        "respond" => {
-            json!({
-                "action": "next_step",
-                "type": "respond",
-                "thinking": thinking,
-                "message": input.get("message").cloned().unwrap_or(json!("")),
-            })
-        }
         "ask_user" => {
             let mut out = json!({
                 "action": "ask_user",
@@ -544,12 +513,6 @@ pub fn tool_use_to_controller_json(tool_name: &str, input: &Value) -> Value {
                 out["resume_to"] = resume_to.clone();
             }
             out
-        }
-        "complete" => {
-            json!({
-                "action": "complete",
-                "message": input.get("message").cloned().unwrap_or(json!("")),
-            })
         }
         "guardrail_stop" => {
             let mut out = json!({
@@ -1205,14 +1168,6 @@ trailing text"#;
     }
 
     #[test]
-    fn tool_use_to_controller_json_respond() {
-        let input = json!({ "message": "Here is the answer" });
-        let result = tool_use_to_controller_json("respond", &input);
-        assert_eq!(result["action"], "next_step");
-        assert_eq!(result["message"], "Here is the answer");
-    }
-
-    #[test]
     fn tool_use_to_controller_json_ask_user() {
         let input = json!({
             "question": "Which city?",
@@ -1224,14 +1179,6 @@ trailing text"#;
         assert_eq!(result["question"], "Which city?");
         assert_eq!(result["context"], "Need city for weather");
         assert_eq!(result["resume_to"], "controller");
-    }
-
-    #[test]
-    fn tool_use_to_controller_json_complete() {
-        let input = json!({ "message": "Task done" });
-        let result = tool_use_to_controller_json("complete", &input);
-        assert_eq!(result["action"], "complete");
-        assert_eq!(result["message"], "Task done");
     }
 
     #[test]
@@ -1337,52 +1284,6 @@ trailing text"#;
         assert_eq!(result["type"], "tool_batch");
         let tools = result["tools"].as_array().expect("tools array");
         assert_eq!(tools.len(), 2);
-    }
-
-    #[test]
-    fn aggregate_call_tool_plus_respond_uses_tool_respond_becomes_companion() {
-        let uses = vec![
-            (
-                "call_tool".to_string(),
-                json!({"tool": "weather", "args": {}}),
-            ),
-            (
-                "respond".to_string(),
-                json!({"message": "Here's the weather info."}),
-            ),
-        ];
-        let (result, companion) = aggregate_tool_uses(&uses, "Thinking out loud...");
-        assert_eq!(result["type"], "tool");
-        assert_eq!(result["tool"], "weather");
-        // companion should contain both text_buf and respond message
-        let companion = companion.expect("companion text");
-        assert!(companion.contains("Thinking out loud..."));
-        assert!(companion.contains("Here's the weather info."));
-    }
-
-    #[test]
-    fn aggregate_respond_only_no_companion() {
-        let uses = vec![(
-            "respond".to_string(),
-            json!({"message": "Hello!", "thinking": {}}),
-        )];
-        let (result, companion) = aggregate_tool_uses(&uses, "");
-        assert_eq!(result["action"], "next_step");
-        assert_eq!(result["type"], "respond");
-        assert_eq!(result["message"], "Hello!");
-        assert!(companion.is_none());
-    }
-
-    #[test]
-    fn aggregate_complete_action() {
-        let uses = vec![(
-            "complete".to_string(),
-            json!({"message": "All done"}),
-        )];
-        let (result, companion) = aggregate_tool_uses(&uses, "");
-        assert_eq!(result["action"], "complete");
-        assert_eq!(result["message"], "All done");
-        assert!(companion.is_none());
     }
 
     #[test]

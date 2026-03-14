@@ -872,13 +872,11 @@ fn parse_tool_use_sse<R: std::io::BufRead>(mut reader: R) -> Result<StreamResult
         });
     }
 
-    // Vision fallback: model emitted no tool_use block but responded with plain text.
-    // Wrap as a "respond" action so the controller can process it.
+    // No tool calls: model responded with plain text, indicating task completion.
+    // Wrap as a "complete" action so the controller can finish with this response.
     if !text_buf.trim().is_empty() {
         let fallback = serde_json::json!({
-            "action": "next_step",
-            "type": "respond",
-            "thinking": {},
+            "action": "complete",
             "message": text_buf.trim()
         });
         let result_content = serde_json::to_string(&fallback).unwrap_or_default();
@@ -922,7 +920,7 @@ pub fn complete_anthropic_with_tools(
         "max_tokens": 8192,
         "temperature": 0,
         "tools": tools,
-        "tool_choice": { "type": "any" },
+        "tool_choice": { "type": "auto" },
     });
 
     if let Some(system_blocks) = formatted_system {
