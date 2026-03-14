@@ -8,10 +8,12 @@
   import { pageVisible } from "$lib/stores/visibility";
   import ToolApprovalQueue from "./ToolApprovalQueue.svelte";
   import ToolCallBubble from "./ToolCallBubble.svelte";
+  import SubagentExecutionGroup from "./SubagentExecutionGroup.svelte";
   import type { ToolExecutionProposedPayload } from "$lib/types/events";
   import { getPhaseLabel } from "$lib/types/agent";
   import type { AgentPlan, AgentPlanStep, PhaseKind } from "$lib/types/agent";
   import type { ToolActivityEntry } from "$lib/stores/chat";
+  import { groupToolCallsBySession } from "$lib/utils/toolCallGrouping";
 
   export let messages: Message[] = [];
   export let chatContainer: HTMLElement | null = null;
@@ -217,7 +219,50 @@
   }
 
   $: {
-    const total = messages.length;
+    // Collect all subagent tool calls
+    const allSubagentCalls: typeof messages[0]['tool_calls'] = [];
+    const subagentMessageIds = new Set<string>();
+
+    for (const msg of messages) {
+      if (msg.tool_calls) {
+        const allAreSubagent = msg.tool_calls.every(call => call.is_sub_agent);
+        if (allAreSubagent && msg.tool_calls.length > 0) {
+          // This is a subagent-only message
+          subagentMessageIds.add(msg.id);
+          allSubagentCalls.push(...msg.tool_calls);
+        }
+      }
+    }
+
+    // Find parent messages (messages with agent.spawn) and merge subagent calls
+    const mergedMessages = messages
+      .filter(msg => !subagentMessageIds.has(msg.id))
+      .map(msg => {
+        if (!msg.tool_calls) return msg;
+
+        // Check if this message has an agent.spawn call
+        const hasAgentSpawn = msg.tool_calls.some(call => call.tool_name === 'agent.spawn');
+        if (!hasAgentSpawn) return msg;
+
+        // Get session_id from the message's tool calls
+        const sessionId = msg.tool_calls.find(call => call.session_id)?.session_id;
+        if (!sessionId) return msg;
+
+        // Filter subagent calls that belong to this parent session
+        const relevantSubagentCalls = allSubagentCalls.filter(
+          call => call.parent_session_id === sessionId
+        );
+
+        if (relevantSubagentCalls.length === 0) return msg;
+
+        return {
+          ...msg,
+          tool_calls: [...msg.tool_calls, ...relevantSubagentCalls]
+        };
+      })
+      .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+    const total = mergedMessages.length;
     if (total < lastTotalCount) {
       visibleCount = INITIAL_VISIBLE_MESSAGES;
     } else if (total > lastTotalCount) {
@@ -226,7 +271,7 @@
     lastTotalCount = total;
 
     const startIndex = Math.max(0, total - visibleCount);
-    visibleMessages = messages.slice(startIndex);
+    visibleMessages = mergedMessages.slice(startIndex);
     hasMoreMessages = startIndex > 0;
   }
 
@@ -280,17 +325,26 @@
 
   {#each visibleMessages as msg, i (msg.id || `${msg.type}-${i}`)}
     {#if msg.type === "received" && msg.tool_calls && msg.tool_calls.length > 0}
-      {#each msg.tool_calls as call (call.execution_id)}
+      {@const toolGroups = groupToolCallsBySession(msg.tool_calls)}
+      {#each toolGroups as group (group.isSubAgent ? group.sessionId : group.calls[0]?.execution_id)}
         {#if i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
           <div
             in:fly={{ y: 10, duration: 150, easing: backOut }}
             class="w-full message-container flex justify-start"
           >
-            <ToolCallBubble {call} />
+            {#if group.isSubAgent}
+              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
+            {:else}
+              <ToolCallBubble call={group.calls[0]} />
+            {/if}
           </div>
         {:else}
           <div class="w-full message-container flex justify-start">
-            <ToolCallBubble {call} />
+            {#if group.isSubAgent}
+              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
+            {:else}
+              <ToolCallBubble call={group.calls[0]} />
+            {/if}
           </div>
         {/if}
       {/each}

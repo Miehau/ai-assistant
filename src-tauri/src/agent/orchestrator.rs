@@ -1608,6 +1608,9 @@ impl DynamicController {
                 "iteration": iteration,
                 "conversation_id": self.session.conversation_id,
                 "message_id": self.assistant_message_id,
+                "session_id": self.session.id,
+                "parent_session_id": self.session.parent_session_id,
+                "is_sub_agent": self.is_sub_agent,
                 "timestamp_ms": timestamp_ms,
             }),
             timestamp_ms,
@@ -1636,6 +1639,9 @@ impl DynamicController {
                 "iteration": iteration,
                 "conversation_id": self.session.conversation_id,
                 "message_id": self.assistant_message_id,
+                "session_id": self.session.id,
+                "parent_session_id": self.session.parent_session_id,
+                "is_sub_agent": self.is_sub_agent,
                 "timestamp_ms": timestamp_ms,
             })
         } else {
@@ -1648,6 +1654,9 @@ impl DynamicController {
                 "iteration": iteration,
                 "conversation_id": self.session.conversation_id,
                 "message_id": self.assistant_message_id,
+                "session_id": self.session.id,
+                "parent_session_id": self.session.parent_session_id,
+                "is_sub_agent": self.is_sub_agent,
                 "timestamp_ms": timestamp_ms,
             })
         };
@@ -1685,6 +1694,9 @@ impl DynamicController {
                 timestamp_ms,
                 error,
                 iteration_number,
+                session_id: Some(self.session.id.clone()),
+                parent_session_id: self.session.parent_session_id.clone(),
+                is_sub_agent: self.is_sub_agent,
             });
     }
 

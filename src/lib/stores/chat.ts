@@ -140,6 +140,9 @@ function upsertToolCall(
     duration_ms: payload.duration_ms ?? existing?.duration_ms,
     started_at: payload.started_at ?? existing?.started_at,
     completed_at: payload.completed_at ?? existing?.completed_at,
+    session_id: payload.session_id ?? existing?.session_id,
+    parent_session_id: payload.parent_session_id ?? existing?.parent_session_id,
+    is_sub_agent: payload.is_sub_agent ?? existing?.is_sub_agent,
   };
 
   entries.set(executionId, next);
@@ -592,6 +595,9 @@ export async function startAgentEvents() {
           tool_name: payload.tool_name,
           args: payload.args ?? {},
           started_at: payload.timestamp_ms,
+          session_id: payload.session_id,
+          parent_session_id: payload.parent_session_id,
+          is_sub_agent: payload.is_sub_agent,
         });
       }
 
@@ -641,6 +647,9 @@ export async function startAgentEvents() {
         error: payload.error,
         duration_ms: payload.duration_ms,
         completed_at: payload.timestamp_ms,
+        session_id: payload.session_id,
+        parent_session_id: payload.parent_session_id,
+        is_sub_agent: payload.is_sub_agent,
         ...(normalizedSuccess !== undefined ? { success: normalizedSuccess } : {}),
       };
 

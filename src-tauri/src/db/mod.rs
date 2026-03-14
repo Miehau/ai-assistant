@@ -368,6 +368,10 @@ impl Db {
             M::up("CREATE INDEX IF NOT EXISTS idx_integration_connections_integration ON integration_connections(integration_id);"),
             // Sub-agent traceability: link child sessions to parent
             M::up("ALTER TABLE agent_sessions ADD COLUMN parent_session_id TEXT;"),
+            // Add session metadata to tool executions for subagent hierarchical display
+            M::up("ALTER TABLE message_tool_executions ADD COLUMN session_id TEXT;"),
+            M::up("ALTER TABLE message_tool_executions ADD COLUMN parent_session_id TEXT;"),
+            M::up("ALTER TABLE message_tool_executions ADD COLUMN is_sub_agent INTEGER DEFAULT 0;"),
         ]);
 
         let mut conn = self.conn.lock().unwrap();

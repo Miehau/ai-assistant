@@ -102,6 +102,9 @@ export interface ToolCallRecord {
   duration_ms?: number;
   started_at?: number;
   completed_at?: number;
+  session_id?: string;
+  parent_session_id?: string | null;
+  is_sub_agent?: boolean;
 }
 
 export interface ToolExecutionDbRecord {

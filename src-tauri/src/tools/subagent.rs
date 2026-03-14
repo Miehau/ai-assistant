@@ -1,11 +1,7 @@
 use crate::agent::DynamicController;
 use crate::db::{CustomBackendOperations, Db, ModelOperations};
 use crate::events::EventBus;
-use crate::llm::{
-    complete_anthropic_with_output_format_with_options, complete_claude_cli,
-    complete_openai_compatible_with_options, complete_openai_with_options, LlmMessage,
-    LlmRequestOptions, StreamResult,
-};
+use crate::llm::{create_provider, LlmMessage, ProviderConfig, StreamResult};
 use crate::tools::{
     ApprovalStore, ToolDefinition, ToolError, ToolExecutionContext, ToolMetadata, ToolRegistry,
     ToolResultMode,
@@ -125,6 +121,9 @@ pub fn register_subagent_tools(
             .ok_or_else(|| ToolError::new("No cancel flag in execution context"))?
             .clone();
 
+        // Clone conversation_id before it gets moved into controller
+        let conversation_id_for_options = conversation_id.clone();
+
         // Build the user message for the sub-agent
         let user_message = if let Some(ref ctx_text) = context {
             format!("{}\n\nCONTEXT:\n{}", prompt, ctx_text)
@@ -165,17 +164,26 @@ pub fn register_subagent_tools(
 
         // Build the call_llm closure for the sub-agent
         let api_key = resolve_api_key(&db, &provider)?;
-        let client = build_sub_agent_http_client();
-        let custom_backend_config = resolve_custom_backend(&db, &provider);
-        let request_options = LlmRequestOptions {
-            prompt_cache_key: None,
-            prompt_cache_retention: None,
-            anthropic_cache_breakpoints: if provider == "anthropic" {
-                vec![0]
-            } else {
-                Vec::new()
-            },
+        let base_url = if provider == "custom" {
+            resolve_custom_backend(&db, &provider).map(|(url, _)| url)
+        } else {
+            None
         };
+
+        let llm_provider = create_provider(ProviderConfig {
+            provider_name: provider.clone(),
+            model: model.clone(),
+            api_key: if api_key.is_empty() {
+                None
+            } else {
+                Some(api_key)
+            },
+            base_url,
+        })
+        .map_err(|e| ToolError::new(format!("Failed to create provider: {e}")))?;
+
+        let client = build_sub_agent_http_client();
+        let request_options = llm_provider.build_request_options(&conversation_id_for_options, "controller");
 
         let mut call_llm = |messages: &[LlmMessage],
                              system_prompt: Option<&str>,
@@ -185,80 +193,13 @@ pub fn register_subagent_tools(
                 return Err("Cancelled".to_string());
             }
 
-            let prepared_messages = if provider == "anthropic" || provider == "claude_cli" {
-                messages.to_vec()
-            } else {
-                let mut prepared = messages.to_vec();
-                if let Some(sp) = system_prompt {
-                    if !sp.trim().is_empty() {
-                        prepared.insert(
-                            0,
-                            LlmMessage {
-                                role: "system".to_string(),
-                                content: json!(sp),
-                            },
-                        );
-                    }
-                }
-                prepared
-            };
-
-            match provider.as_str() {
-                "anthropic" => {
-                    // Anthropic structured outputs cause timeouts; rely on
-                    // JSON-in-text parsing (same as commands/agent.rs).
-                    complete_anthropic_with_output_format_with_options(
-                        &client,
-                        &api_key,
-                        &model,
-                        system_prompt,
-                        &prepared_messages,
-                        None,
-                        Some(&request_options),
-                    )
-                }
-                "openai" => complete_openai_with_options(
-                    &client,
-                    &api_key,
-                    "https://api.openai.com/v1/chat/completions",
-                    &model,
-                    &prepared_messages,
-                    Some(&request_options),
-                ),
-                "deepseek" => complete_openai_compatible_with_options(
-                    &client,
-                    Some(&api_key),
-                    "https://api.deepseek.com/chat/completions",
-                    &model,
-                    &prepared_messages,
-                    Some(&request_options),
-                ),
-                "claude_cli" => {
-                    complete_claude_cli(&model, system_prompt, &prepared_messages, output_format)
-                }
-                "ollama" => complete_openai_compatible_with_options(
-                    &client,
-                    None,
-                    "http://localhost:11434/v1/chat/completions",
-                    &model,
-                    &prepared_messages,
-                    None,
-                ),
-                "custom" => {
-                    let (url, backend_key) = custom_backend_config
-                        .clone()
-                        .ok_or_else(|| "Custom backend not configured".to_string())?;
-                    complete_openai_compatible_with_options(
-                        &client,
-                        backend_key.as_deref(),
-                        &url,
-                        &model,
-                        &prepared_messages,
-                        Some(&request_options),
-                    )
-                }
-                other => Err(format!("Unsupported provider for sub-agent: {other}")),
-            }
+            llm_provider.controller_call(
+                &client,
+                messages,
+                system_prompt,
+                output_format,
+                Some(&request_options),
+            )
         };
 
         // Run the sub-agent

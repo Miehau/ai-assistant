@@ -137,6 +137,9 @@ export interface ToolExecutionStartedPayload {
   iteration: number;
   conversation_id?: string;
   message_id?: string;
+  session_id?: string;
+  parent_session_id?: string | null;
+  is_sub_agent?: boolean;
   timestamp_ms: number;
 }
 
@@ -175,6 +178,9 @@ export interface ToolExecutionCompletedPayload {
   iteration: number;
   conversation_id?: string;
   message_id?: string;
+  session_id?: string;
+  parent_session_id?: string | null;
+  is_sub_agent?: boolean;
   timestamp_ms: number;
 }
 

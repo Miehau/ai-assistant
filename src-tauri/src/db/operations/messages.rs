@@ -228,9 +228,10 @@ pub trait MessageOperations: DbOperations {
 
         conn.execute(
             "INSERT INTO message_tool_executions (
-                id, message_id, tool_name, parameters, result, success, duration, timestamp, error, iteration_number
+                id, message_id, tool_name, parameters, result, success, duration, timestamp, error, iteration_number,
+                session_id, parent_session_id, is_sub_agent
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 input.id,
                 input.message_id,
@@ -242,6 +243,9 @@ pub trait MessageOperations: DbOperations {
                 input.timestamp_ms,
                 input.error,
                 input.iteration_number,
+                input.session_id,
+                input.parent_session_id,
+                input.is_sub_agent,
             ],
         )?;
 
@@ -256,6 +260,9 @@ pub trait MessageOperations: DbOperations {
             timestamp_ms: input.timestamp_ms,
             error: input.error,
             iteration_number: input.iteration_number,
+            session_id: input.session_id,
+            parent_session_id: input.parent_session_id,
+            is_sub_agent: input.is_sub_agent,
         })
     }
 
@@ -430,7 +437,8 @@ pub trait MessageOperations: DbOperations {
 
         let tool_executions_start = Instant::now();
         let mut tool_exec_stmt = conn.prepare(
-            "SELECT message_id, id, tool_name, parameters, result, success, duration, timestamp, error, iteration_number
+            "SELECT message_id, id, tool_name, parameters, result, success, duration, timestamp, error, iteration_number,
+                    session_id, parent_session_id, is_sub_agent
              FROM message_tool_executions
              WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)"
         )?;
@@ -459,6 +467,9 @@ pub trait MessageOperations: DbOperations {
                     timestamp_ms,
                     error: row.get(8)?,
                     iteration_number: row.get(9)?,
+                    session_id: row.get(10)?,
+                    parent_session_id: row.get(11)?,
+                    is_sub_agent: row.get::<_, Option<i64>>(12)?.unwrap_or(0) != 0,
                 },
             ))
         })?;
@@ -706,7 +717,8 @@ pub trait MessageOperations: DbOperations {
             let tool_executions_start = Instant::now();
             let placeholders = build_in_clause(message_ids.len());
             let tool_sql = format!(
-                "SELECT message_id, id, tool_name, parameters, result, success, duration, timestamp, error, iteration_number
+                "SELECT message_id, id, tool_name, parameters, result, success, duration, timestamp, error, iteration_number,
+                        session_id, parent_session_id, is_sub_agent
                  FROM message_tool_executions
                  WHERE message_id IN ({})",
                 placeholders
@@ -737,6 +749,9 @@ pub trait MessageOperations: DbOperations {
                             timestamp_ms,
                             error: row.get(8)?,
                             iteration_number: row.get(9)?,
+                            session_id: row.get(10)?,
+                            parent_session_id: row.get(11)?,
+                            is_sub_agent: row.get::<_, Option<i64>>(12)?.unwrap_or(0) != 0,
                         },
                     ))
                 })?;

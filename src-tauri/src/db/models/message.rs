@@ -56,6 +56,12 @@ pub struct MessageToolExecution {
     pub timestamp_ms: i64,
     pub error: Option<String>,
     pub iteration_number: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    #[serde(default)]
+    pub is_sub_agent: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Type)]
@@ -70,6 +76,9 @@ pub struct MessageToolExecutionInput {
     pub timestamp_ms: i64,
     pub error: Option<String>,
     pub iteration_number: i64,
+    pub session_id: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub is_sub_agent: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Type)]
