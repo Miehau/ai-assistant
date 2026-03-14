@@ -41,7 +41,8 @@ pub fn complete_ollama_with_output_format_with_options(
 // ---------------------------------------------------------------------------
 
 use super::openai::{
-    complete_openai_compatible, stream_openai_compatible_with_options,
+    complete_openai_compatible, complete_openai_compatible_with_tools,
+    stream_openai_compatible_with_options,
 };
 use super::provider_utils::prepend_system_prompt;
 use super::traits::LlmProvider;
@@ -78,16 +79,41 @@ impl LlmProvider for OllamaProvider {
         output_format: Option<Value>,
         request_options: Option<&LlmRequestOptions>,
     ) -> Result<StreamResult, String> {
-        let prepared = prepend_system_prompt(messages, system_prompt);
-        // Ollama uses raw schema in `format` field — NO json_schema envelope.
-        complete_ollama_with_output_format_with_options(
-            client,
-            &self.url,
-            &self.model,
-            &prepared,
-            output_format,
-            request_options,
-        )
+        use crate::agent::controller_parsing::controller_tool_definitions;
+        use crate::agent::prompts::{CONTROLLER_PROMPT_BASE, CONTROLLER_PROMPT_OPENAI};
+
+        if output_format.is_some() {
+            // Controller call: use native function calling instead of structured output.
+            // Swap CONTROLLER_PROMPT_BASE for CONTROLLER_PROMPT_OPENAI in messages.
+            let controller_messages: Vec<LlmMessage> = messages
+                .iter()
+                .map(|m| {
+                    if m.role == "system"
+                        && m.content.as_str() == Some(CONTROLLER_PROMPT_BASE)
+                    {
+                        LlmMessage {
+                            role: "system".to_string(),
+                            content: serde_json::json!(CONTROLLER_PROMPT_OPENAI),
+                        }
+                    } else {
+                        m.clone()
+                    }
+                })
+                .collect();
+            let prepared = prepend_system_prompt(&controller_messages, system_prompt);
+            complete_openai_compatible_with_tools(
+                client,
+                None, // Ollama doesn't require API key
+                &self.url,
+                &self.model,
+                &prepared,
+                controller_tool_definitions(),
+                request_options,
+            )
+        } else {
+            let prepared = prepend_system_prompt(messages, system_prompt);
+            complete_openai_compatible(client, None, &self.url, &self.model, &prepared)
+        }
     }
 
     fn stream_response(

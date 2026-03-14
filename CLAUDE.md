@@ -37,7 +37,8 @@ Full list: [`src-tauri/docs/agent/commands.md`](src-tauri/docs/agent/commands.md
 6. **`AGENTS.md` must remain index-only** — test-enforced, no inline content.
 7. **Provider changes** must follow `provider-contracts.md` PR checklist (provider-specific tests, preflight payload check, regression tests for 4xx errors).
 8. **Trust `cargo check`** over rust-analyzer diagnostics (can be stale).
-9. **Use provider-specific schema builders** (`build_openai_output_schema`, `build_anthropic_output_schema`) — never send shared schemas directly.
+9. **Controller uses native function calling** for Anthropic, OpenAI, DeepSeek, and Ollama (no JSON markers). Claude CLI and legacy providers still use `=====JSON_START=====` markers with structured output.
+10. **Provider-specific prompts** — Anthropic/OpenAI/Ollama use `CONTROLLER_PROMPT_ANTHROPIC`/`CONTROLLER_PROMPT_OPENAI` (function calling), others use `CONTROLLER_PROMPT_BASE` (JSON markers).
 
 Full rules: [`src-tauri/docs/agent/invariants.md`](src-tauri/docs/agent/invariants.md)
 
@@ -60,11 +61,13 @@ Full rules: [`src-tauri/docs/agent/invariants.md`](src-tauri/docs/agent/invarian
 ### Backend core
 - `src-tauri/src/main.rs` — Tauri setup, command registration
 - `src-tauri/src/agent/orchestrator.rs` — controller loop, parsing, execution
-- `src-tauri/src/agent/prompts.rs` — `CONTROLLER_PROMPT_BASE` system prompt
+- `src-tauri/src/agent/prompts.rs` — controller prompts (`CONTROLLER_PROMPT_BASE`, `CONTROLLER_PROMPT_ANTHROPIC`, `CONTROLLER_PROMPT_OPENAI`)
 - `src-tauri/src/tools/` — tool implementations (`register_*` pattern)
 - `src-tauri/src/tools/tool_outputs.rs` — output traversal tools (read, list, stats, extract, count, sample)
 - `src-tauri/src/tool_outputs.rs` — storage layer (read/write JSON files)
 - `src-tauri/src/llm/mod.rs` — provider-specific schema handling
+- `src-tauri/src/llm/openai.rs` — OpenAI function calling support (`complete_openai_with_tools`)
+- `src-tauri/src/llm/anthropic.rs` — Anthropic function calling support (`complete_anthropic_with_tools`)
 
 ### Frontend core
 - `src/routes/` — SvelteKit pages (SSG, adapter-static)

@@ -83,3 +83,5 @@ Your job:
 - If output is persisted, do not invent IDs or values; call tool_outputs.extract to obtain exact values.
 - For `tool_outputs.*` tools, `id` must be a prior tool `ExecutionId`/`OutputRef.id` (never an external resource id like `thread_id`). If the latest persisted output is intended, omit `id` and let the backend hydrate it.
 - For calendar event requests, do not ask the user to pick a calendar unless they explicitly request a specific calendar; omit calendar args to use defaults (integration-selected calendars). Calendar selection is managed in integration settings, not via tool discovery. Use calendar_id="primary" only when the user explicitly asks for primary only."#;
+
+pub const CONTROLLER_PROMPT_OPENAI: &str = CONTROLLER_PROMPT_ANTHROPIC;

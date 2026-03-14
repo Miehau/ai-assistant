@@ -343,8 +343,237 @@ fn supports_openai_prompt_cache_retention(model: &str) -> bool {
     normalized.starts_with("gpt-5")
 }
 
-use super::provider_utils::{prepend_system_prompt, wrap_json_schema_envelope};
+use super::provider_utils::prepend_system_prompt;
 use super::traits::LlmProvider;
+
+// ---------------------------------------------------------------------------
+// OpenAI function calling support
+// ---------------------------------------------------------------------------
+
+/// Convert controller tool definitions to OpenAI format.
+/// Anthropic format: [{ "name": "call_tool", "input_schema": {...} }]
+/// OpenAI format: [{ "type": "function", "function": { "name": "call_tool", "parameters": {...} } }]
+fn controller_tools_to_openai_format(tools: Vec<Value>) -> Vec<Value> {
+    tools
+        .into_iter()
+        .map(|tool| {
+            let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let description = tool
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let parameters = tool
+                .get("input_schema")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({"type": "object"}));
+
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters
+                }
+            })
+        })
+        .collect()
+}
+
+/// Parse OpenAI tool calls from a streaming SSE response.
+/// Accumulates tool_call deltas into complete tool calls, then converts to controller JSON.
+fn parse_openai_tool_calls_sse<R: std::io::BufRead>(mut reader: R) -> Result<StreamResult, String> {
+    use crate::agent::controller_parsing::aggregate_tool_uses;
+    use std::collections::HashMap;
+
+    let mut line = String::new();
+    let mut usage: Option<Usage> = None;
+    let mut tool_calls_map: HashMap<usize, (String, String, String)> = HashMap::new(); // index -> (id, name, arguments)
+    let mut text_buf = String::new();
+
+    while reader.read_line(&mut line).map_err(|e| e.to_string())? > 0 {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            line.clear();
+            continue;
+        }
+
+        if !trimmed.starts_with("data:") {
+            line.clear();
+            continue;
+        }
+
+        let data = trimmed.trim_start_matches("data:").trim();
+        if data == "[DONE]" {
+            break;
+        }
+
+        let value: Value = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(_) => {
+                line.clear();
+                continue;
+            }
+        };
+
+        // Extract usage if present
+        if let Some(usage_value) = value.get("usage") {
+            usage = parse_openai_usage(usage_value);
+        }
+
+        // Extract delta tool_calls
+        if let Some(delta) = value
+            .get("choices")
+            .and_then(|choices| choices.get(0))
+            .and_then(|choice| choice.get("delta"))
+        {
+            // Handle text content (for vision fallback)
+            if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
+                text_buf.push_str(content);
+            }
+
+            // Handle tool calls
+            if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                for tool_call in tool_calls {
+                    let index = tool_call
+                        .get("index")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize;
+
+                    let entry = tool_calls_map.entry(index).or_insert_with(|| {
+                        (String::new(), String::new(), String::new())
+                    });
+
+                    // First chunk: set id, name, type
+                    if let Some(id) = tool_call.get("id").and_then(|v| v.as_str()) {
+                        entry.0 = id.to_string();
+                    }
+                    if let Some(function) = tool_call.get("function") {
+                        if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
+                            entry.1 = name.to_string();
+                        }
+                        if let Some(args) =
+                            function.get("arguments").and_then(|v| v.as_str())
+                        {
+                            entry.2.push_str(args);
+                        }
+                    }
+                }
+            }
+        }
+
+        line.clear();
+    }
+
+    // Convert accumulated tool calls to Anthropic-style format for aggregate_tool_uses
+    if !tool_calls_map.is_empty() {
+        let mut collected_tool_uses: Vec<(String, Value)> = Vec::new();
+
+        // Sort by index to maintain order
+        let mut sorted_calls: Vec<_> = tool_calls_map.into_iter().collect();
+        sorted_calls.sort_by_key(|(index, _)| *index);
+
+        for (_, (_, name, arguments)) in sorted_calls {
+            let input: Value = if arguments.is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str(&arguments).unwrap_or_else(|_| serde_json::json!({}))
+            };
+            collected_tool_uses.push((name, input));
+        }
+
+        let (controller_json, companion_text) =
+            aggregate_tool_uses(&collected_tool_uses, &text_buf);
+        let result_content = serde_json::to_string(&controller_json).unwrap_or_default();
+        return Ok(StreamResult {
+            content: result_content,
+            usage,
+            companion_text,
+        });
+    }
+
+    // Vision fallback: model emitted no tool call but responded with plain text
+    if !text_buf.trim().is_empty() {
+        let fallback = serde_json::json!({
+            "action": "next_step",
+            "type": "respond",
+            "thinking": {},
+            "message": text_buf.trim()
+        });
+        let result_content = serde_json::to_string(&fallback).unwrap_or_default();
+        return Ok(StreamResult {
+            content: result_content,
+            usage,
+            companion_text: None,
+        });
+    }
+
+    Err("OpenAI returned empty response (no tool call or text content)".to_string())
+}
+
+pub fn complete_openai_with_tools(
+    client: &Client,
+    api_key: &str,
+    url: &str,
+    model: &str,
+    messages: &[LlmMessage],
+    tools: Vec<Value>,
+    request_options: Option<&LlmRequestOptions>,
+) -> Result<StreamResult, String> {
+    let openai_tools = controller_tools_to_openai_format(tools);
+    let mut body = build_openai_compatible_body(model, messages, true, false, request_options);
+    body["tools"] = serde_json::json!(openai_tools);
+    body["tool_choice"] = serde_json::json!("required");
+
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_body = compact_error_body(response.text().unwrap_or_default());
+        return Err(format!("OpenAI error: {status} - {error_body}"));
+    }
+
+    parse_openai_tool_calls_sse(BufReader::new(response))
+}
+
+pub fn complete_openai_compatible_with_tools(
+    client: &Client,
+    api_key: Option<&str>,
+    url: &str,
+    model: &str,
+    messages: &[LlmMessage],
+    tools: Vec<Value>,
+    request_options: Option<&LlmRequestOptions>,
+) -> Result<StreamResult, String> {
+    let openai_tools = controller_tools_to_openai_format(tools);
+    let mut body = build_openai_compatible_body(model, messages, true, false, request_options);
+    body["tools"] = serde_json::json!(openai_tools);
+    body["tool_choice"] = serde_json::json!("required");
+
+    let mut request = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .json(&body);
+
+    if let Some(key) = api_key {
+        request = request.bearer_auth(key);
+    }
+
+    let response = request.send().map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_body = compact_error_body(response.text().unwrap_or_default());
+        return Err(format!("OpenAI-compatible error: {status} - {error_body}"));
+    }
+
+    parse_openai_tool_calls_sse(BufReader::new(response))
+}
 
 /// OpenAI provider (native OpenAI API).
 pub struct OpenAiProvider {
@@ -375,17 +604,41 @@ impl LlmProvider for OpenAiProvider {
         output_format: Option<Value>,
         request_options: Option<&LlmRequestOptions>,
     ) -> Result<StreamResult, String> {
-        let prepared = prepend_system_prompt(messages, system_prompt);
-        let response_format = output_format.map(wrap_json_schema_envelope);
-        complete_openai_compatible_with_output_format_with_options(
-            client,
-            Some(&self.api_key),
-            OPENAI_URL,
-            &self.model,
-            &prepared,
-            response_format,
-            request_options,
-        )
+        use crate::agent::controller_parsing::controller_tool_definitions;
+        use crate::agent::prompts::{CONTROLLER_PROMPT_BASE, CONTROLLER_PROMPT_OPENAI};
+
+        if output_format.is_some() {
+            // Controller call: use native function calling instead of structured output.
+            // Swap CONTROLLER_PROMPT_BASE for CONTROLLER_PROMPT_OPENAI in messages.
+            let controller_messages: Vec<LlmMessage> = messages
+                .iter()
+                .map(|m| {
+                    if m.role == "system"
+                        && m.content.as_str() == Some(CONTROLLER_PROMPT_BASE)
+                    {
+                        LlmMessage {
+                            role: "system".to_string(),
+                            content: serde_json::json!(CONTROLLER_PROMPT_OPENAI),
+                        }
+                    } else {
+                        m.clone()
+                    }
+                })
+                .collect();
+            let prepared = prepend_system_prompt(&controller_messages, system_prompt);
+            complete_openai_with_tools(
+                client,
+                &self.api_key,
+                OPENAI_URL,
+                &self.model,
+                &prepared,
+                controller_tool_definitions(),
+                request_options,
+            )
+        } else {
+            let prepared = prepend_system_prompt(messages, system_prompt);
+            complete_openai(client, &self.api_key, OPENAI_URL, &self.model, &prepared)
+        }
     }
 
     fn stream_response(
@@ -462,17 +715,46 @@ impl LlmProvider for DeepSeekProvider {
         output_format: Option<Value>,
         request_options: Option<&LlmRequestOptions>,
     ) -> Result<StreamResult, String> {
-        let prepared = prepend_system_prompt(messages, system_prompt);
-        let response_format = output_format.map(wrap_json_schema_envelope);
-        complete_openai_compatible_with_output_format_with_options(
-            client,
-            Some(&self.api_key),
-            DEEPSEEK_URL,
-            &self.model,
-            &prepared,
-            response_format,
-            request_options,
-        )
+        use crate::agent::controller_parsing::controller_tool_definitions;
+        use crate::agent::prompts::{CONTROLLER_PROMPT_BASE, CONTROLLER_PROMPT_OPENAI};
+
+        if output_format.is_some() {
+            // Controller call: use native function calling instead of structured output.
+            let controller_messages: Vec<LlmMessage> = messages
+                .iter()
+                .map(|m| {
+                    if m.role == "system"
+                        && m.content.as_str() == Some(CONTROLLER_PROMPT_BASE)
+                    {
+                        LlmMessage {
+                            role: "system".to_string(),
+                            content: serde_json::json!(CONTROLLER_PROMPT_OPENAI),
+                        }
+                    } else {
+                        m.clone()
+                    }
+                })
+                .collect();
+            let prepared = prepend_system_prompt(&controller_messages, system_prompt);
+            complete_openai_compatible_with_tools(
+                client,
+                Some(&self.api_key),
+                DEEPSEEK_URL,
+                &self.model,
+                &prepared,
+                controller_tool_definitions(),
+                request_options,
+            )
+        } else {
+            let prepared = prepend_system_prompt(messages, system_prompt);
+            complete_openai_compatible(
+                client,
+                Some(&self.api_key),
+                DEEPSEEK_URL,
+                &self.model,
+                &prepared,
+            )
+        }
     }
 
     fn stream_response(
@@ -551,17 +833,46 @@ impl LlmProvider for CustomProvider {
         output_format: Option<Value>,
         request_options: Option<&LlmRequestOptions>,
     ) -> Result<StreamResult, String> {
-        let prepared = prepend_system_prompt(messages, system_prompt);
-        let response_format = output_format.map(wrap_json_schema_envelope);
-        complete_openai_compatible_with_output_format_with_options(
-            client,
-            self.api_key.as_deref(),
-            &self.url,
-            &self.model,
-            &prepared,
-            response_format,
-            request_options,
-        )
+        use crate::agent::controller_parsing::controller_tool_definitions;
+        use crate::agent::prompts::{CONTROLLER_PROMPT_BASE, CONTROLLER_PROMPT_OPENAI};
+
+        if output_format.is_some() {
+            // Controller call: use native function calling instead of structured output.
+            let controller_messages: Vec<LlmMessage> = messages
+                .iter()
+                .map(|m| {
+                    if m.role == "system"
+                        && m.content.as_str() == Some(CONTROLLER_PROMPT_BASE)
+                    {
+                        LlmMessage {
+                            role: "system".to_string(),
+                            content: serde_json::json!(CONTROLLER_PROMPT_OPENAI),
+                        }
+                    } else {
+                        m.clone()
+                    }
+                })
+                .collect();
+            let prepared = prepend_system_prompt(&controller_messages, system_prompt);
+            complete_openai_compatible_with_tools(
+                client,
+                self.api_key.as_deref(),
+                &self.url,
+                &self.model,
+                &prepared,
+                controller_tool_definitions(),
+                request_options,
+            )
+        } else {
+            let prepared = prepend_system_prompt(messages, system_prompt);
+            complete_openai_compatible(
+                client,
+                self.api_key.as_deref(),
+                &self.url,
+                &self.model,
+                &prepared,
+            )
+        }
     }
 
     fn stream_response(
