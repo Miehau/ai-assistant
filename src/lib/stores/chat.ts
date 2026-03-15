@@ -3,7 +3,6 @@ import type { Message } from '$lib/types';
 import type { Model } from '$lib/types/models';
 import type { SystemPrompt } from '$lib/types';
 import { invoke } from '@tauri-apps/api/tauri';
-import { chatService } from '$lib/services/chat';
 import { conversationService } from '$lib/services/conversation';
 import { titleGeneratorService } from '$lib/services/titleGenerator';
 import { modelService, apiKeyService } from '$lib/models';
@@ -13,8 +12,12 @@ import { backend } from '$lib/backend/client';
 import { v4 as uuidv4 } from 'uuid';
 import { branchStore } from '$lib/stores/branches';
 import { startAgentEventBridge } from '$lib/services/eventBridge';
+import { streamMessageViaHono } from '$lib/services/honoEventBridge';
+import { honoBackend } from '$lib/stores/honoBackend.svelte';
 import { AGENT_EVENT_TYPES } from '$lib/types/events';
 import type { AgentEvent, Attachment, ToolCallRecord } from '$lib/types';
+import { CustomProviderService } from '$lib/services/customProvider';
+import type { CustomBackend } from '$lib/types/customBackend';
 import type {
   AssistantStreamChunkPayload,
   AssistantStreamCompletedPayload,
@@ -77,6 +80,7 @@ let modelsLoadingPromise: Promise<void> | null = null;
 let systemPromptsLoaded = false;
 let systemPromptsLoadingPromise: Promise<void> | null = null;
 let stopAgentEventBridge: (() => void) | null = null;
+let honoStreamController: AbortController | null = null;
 let streamingAssistantMessageId: string | null = null;
 let streamingChunkBuffer = '';
 let streamingFlushPending = false;
@@ -329,26 +333,8 @@ function resetStreamingState() {
   isLoading.set(false);
 }
 
-export async function startAgentEvents() {
-  if (stopAgentEventBridge) return;
-
-  try {
-    const currentConversation = conversationService.getCurrentConversation();
-    const pendingApprovals = await backend.listPendingToolApprovals();
-    pendingToolApprovals.set(
-      pendingApprovals.filter((approval) => {
-        if (!approval.conversation_id) {
-          return true;
-        }
-        return currentConversation?.id === approval.conversation_id;
-      })
-    );
-  } catch (error) {
-    console.error('Failed to load pending tool approvals:', error);
-  }
-
-  stopAgentEventBridge = await startAgentEventBridge((event: AgentEvent) => {
-    if (event.event_type === AGENT_EVENT_TYPES.MESSAGE_SAVED) {
+function handleAgentEvent(event: AgentEvent) {
+  if (event.event_type === AGENT_EVENT_TYPES.MESSAGE_SAVED) {
       const payload = event.payload as MessageSavedPayload;
       if (payload.role !== 'user' && cancelledAssistantMessageIds.has(payload.message_id)) {
         return;
@@ -762,7 +748,27 @@ export async function startAgentEvents() {
       const payload = event.payload as AgentStepCompletedPayload;
       updatePlanStep(payload.step_id, { status: payload.success ? 'Completed' : 'Failed' });
     }
-  });
+}
+
+export async function startAgentEvents() {
+  if (stopAgentEventBridge) return;
+
+  try {
+    const currentConversation = conversationService.getCurrentConversation();
+    const pendingApprovals = await backend.listPendingToolApprovals();
+    pendingToolApprovals.set(
+      pendingApprovals.filter((approval) => {
+        if (!approval.conversation_id) {
+          return true;
+        }
+        return currentConversation?.id === approval.conversation_id;
+      })
+    );
+  } catch (error) {
+    console.error('Failed to load pending tool approvals:', error);
+  }
+
+  stopAgentEventBridge = await startAgentEventBridge(handleAgentEvent);
 }
 
 // Actions
@@ -992,16 +998,192 @@ export async function loadConversationHistory(conversationId: string) {
 }
 
 export function toggleStreaming() {
-  streamingEnabled.update(value => {
-    const newValue = !value;
-    chatService.setStreamResponse(newValue);
-    return newValue;
-  });
+  streamingEnabled.update(value => !value);
 }
 
 // Helper to generate unique message IDs using UUID v4
 function generateMessageId(): string {
   return uuidv4();
+}
+
+function handleTsServerEvent(
+  event: { type: string; [key: string]: unknown },
+  assistantMessageId: string,
+) {
+  const now = Date.now();
+
+  switch (event.type) {
+    case 'tool:started': {
+      const callId = String(event.callId ?? '');
+      const toolName = String(event.name ?? 'unknown');
+      const parentId = event.parentId as string | null;
+
+      ensureAssistantMessageForToolExecution(assistantMessageId, now);
+      upsertToolCall(assistantMessageId, callId, {
+        tool_name: toolName,
+        args: (event.args as Record<string, unknown>) ?? {},
+        started_at: now,
+        session_id: String(event.agentId ?? ''),
+        parent_session_id: parentId,
+        is_sub_agent: parentId != null,
+      });
+
+      toolActivity.update(entries => {
+        const nextEntry: ToolActivityEntry = {
+          execution_id: callId,
+          tool_name: toolName,
+          status: 'running',
+          started_at: now,
+        };
+        return [nextEntry, ...entries].slice(0, TOOL_ACTIVITY_LIMIT);
+      });
+      break;
+    }
+
+    case 'tool:completed': {
+      const callId = String(event.callId ?? '');
+      const toolName = String(event.name ?? 'unknown');
+      const ok = event.ok as boolean;
+      const parentId = event.parentId as string | null;
+      const durationMs = (event.durationMs as number) ?? 0;
+
+      upsertToolCall(assistantMessageId, callId, {
+        tool_name: toolName,
+        success: ok,
+        completed_at: now,
+        duration_ms: durationMs,
+        session_id: String(event.agentId ?? ''),
+        parent_session_id: parentId,
+        is_sub_agent: parentId != null,
+      });
+
+      toolActivity.update(entries => {
+        const status = ok ? 'completed' : 'failed';
+        let updated = false;
+        const next = entries.map(entry => {
+          if (entry.execution_id !== callId) return entry;
+          updated = true;
+          return {
+            ...entry,
+            status: status as ToolActivityEntry['status'],
+            completed_at: now,
+            duration_ms: durationMs,
+          };
+        });
+        if (!updated) {
+          next.unshift({
+            execution_id: callId,
+            tool_name: toolName,
+            status: status as ToolActivityEntry['status'],
+            started_at: now,
+            completed_at: now,
+            duration_ms: durationMs,
+          });
+        }
+        return next.slice(0, TOOL_ACTIVITY_LIMIT);
+      });
+      break;
+    }
+
+    case 'tool:proposed': {
+      console.log('[TS Server] Tool proposed:', event);
+      break;
+    }
+
+    case 'agent:started': {
+      console.log('[TS Server] Agent started:', event.agentId, 'depth:', event.depth);
+      break;
+    }
+
+    case 'agent:completed':
+    case 'agent:failed': {
+      console.log('[TS Server] Agent done:', event.type, event.agentId);
+      break;
+    }
+  }
+}
+
+async function sendMessageViaCustomBackend(
+  content: string,
+  systemPrompt: string,
+  customBackend: CustomBackend,
+  modelName: string,
+  assistantMessageId: string,
+  userMessageId: string,
+) {
+  const customService = CustomProviderService.fromBackend(customBackend);
+
+  // Add user message to the store
+  const userMessage: Message = {
+    id: userMessageId,
+    type: 'sent',
+    content,
+    timestamp: Date.now(),
+  };
+  messages.update(msgs => [...msgs, userMessage]);
+
+  // Set up streaming state
+  streamingAssistantMessageId = assistantMessageId;
+  isStreaming.set(true);
+  streamingMessage.set('');
+
+  // Build conversation history in OpenAI format
+  const existingMessages = get(messages);
+  const formattedMessages = [
+    { role: 'system' as const, content: systemPrompt },
+    ...existingMessages
+      .filter(m => m.id !== userMessageId)
+      .map(m => ({
+        role: m.type === 'sent' ? 'user' as const : 'assistant' as const,
+        content: m.content,
+      })),
+    { role: 'user' as const, content },
+  ];
+
+  try {
+    const result = await customService.createChatCompletion(
+      modelName,
+      customBackend.url,
+      formattedMessages,
+      true, // stream
+      (chunk: string) => {
+        streamingChunkBuffer += chunk;
+        if (!streamingFlushPending) {
+          streamingFlushPending = true;
+          if (typeof window !== 'undefined' && 'requestAnimationFrame' in window) {
+            window.requestAnimationFrame(() => flushStreamingChunks());
+          } else {
+            flushStreamingChunks();
+          }
+        }
+      },
+      AbortSignal.timeout(180_000),
+      (event: { type: string; [key: string]: unknown }) => {
+        handleTsServerEvent(event, assistantMessageId);
+      },
+    );
+
+    // Finalize the message
+    const finalContent = get(streamingMessage) || result.content;
+    messages.update(msgs => {
+      const existing = msgs.findIndex(m => m.id === assistantMessageId);
+      const newMsg: Message = {
+        id: assistantMessageId,
+        type: 'received',
+        content: finalContent,
+        timestamp: Date.now(),
+        tool_calls: getToolCallsForMessage(assistantMessageId),
+      };
+      if (existing !== -1) {
+        const next = [...msgs];
+        next[existing] = newMsg;
+        return next;
+      }
+      return [...msgs, newMsg];
+    });
+  } finally {
+    resetStreamingState();
+  }
 }
 
 export async function sendMessage() {
@@ -1067,20 +1249,77 @@ export async function sendMessage() {
     pendingAssistantMessageId = assistantMessageId;
     startRequestWatchdog(assistantMessageId);
 
-    await invoke('agent_send_message', {
-      payload: {
-        conversation_id: currentConversation?.id,
-        model: selectedModelValue,
-        provider: selectedModelObject?.provider || 'openai',
-        system_prompt: systemPromptContent,
-        content: currentMessageValue,
-        attachments: attachmentsValue,
-        user_message_id: userMessageId,
-        assistant_message_id: assistantMessageId,
-        custom_backend_id: selectedModelObject?.custom_backend_id || null,
-        stream: streamingEnabledValue,
+    // Check if Hono server backend is enabled
+    if (honoBackend.enabled) {
+      const sessionId = honoBackend.getSessionId(currentConversation.id);
+
+      // Add user message directly (Hono doesn't emit message.saved for it)
+      messages.update((msgs) => [
+        ...msgs,
+        {
+          id: userMessageId,
+          type: 'sent' as const,
+          content: currentMessageValue,
+          attachments: attachmentsValue.length ? attachmentsValue : undefined,
+          timestamp: Date.now(),
+        },
+      ]);
+
+      honoStreamController = new AbortController();
+      try {
+        const result = await streamMessageViaHono(
+          currentMessageValue,
+          {
+            conversationId: currentConversation.id,
+            messageId: assistantMessageId,
+            sessionId,
+            model: selectedModelObject && selectedModelValue
+              ? `${selectedModelObject.provider}:${selectedModelValue}`
+              : selectedModelValue || undefined,
+            instructions: systemPromptContent,
+          },
+          handleAgentEvent,
+          honoStreamController.signal,
+        );
+        if (result.sessionId) {
+          honoBackend.setSessionId(currentConversation.id, result.sessionId);
+        }
+      } finally {
+        honoStreamController = null;
       }
-    });
+    // Check if this is a custom backend — call it directly instead of via Tauri
+    } else if (selectedModelObject?.provider === 'custom' && selectedModelObject?.custom_backend_id) {
+      const customBe = await invoke<CustomBackend | null>('get_custom_backend', {
+        id: selectedModelObject.custom_backend_id,
+      });
+      if (!customBe) {
+        throw new Error(`Custom backend not found: ${selectedModelObject.custom_backend_id}`);
+      }
+
+      await sendMessageViaCustomBackend(
+        currentMessageValue,
+        systemPromptContent,
+        customBe,
+        selectedModelValue,
+        assistantMessageId,
+        userMessageId,
+      );
+    } else {
+      await invoke('agent_send_message', {
+        payload: {
+          conversation_id: currentConversation?.id,
+          model: selectedModelValue,
+          provider: selectedModelObject?.provider || 'openai',
+          system_prompt: systemPromptContent,
+          content: currentMessageValue,
+          attachments: attachmentsValue,
+          user_message_id: userMessageId,
+          assistant_message_id: assistantMessageId,
+          custom_backend_id: selectedModelObject?.custom_backend_id || null,
+          stream: streamingEnabledValue,
+        }
+      });
+    }
 
     // Generate a title for the conversation if this is the first message
     console.log('Generating title for conversation:', currentConversation?.id);
@@ -1113,6 +1352,13 @@ export async function cancelCurrentAgentRequest() {
 
   cancelledAssistantMessageIds.add(messageId);
 
+  if (honoStreamController) {
+    honoStreamController.abort();
+    honoStreamController = null;
+    resetStreamingState();
+    return;
+  }
+
   try {
     await invoke('agent_cancel', { message_id: messageId });
   } catch (error) {
@@ -1137,8 +1383,6 @@ export function clearConversation() {
   agentPlan.set(null);
   agentPlanSteps.set([]);
   conversationService.setCurrentConversation(null);
-  // Reset branch context
-  chatService.resetBranchContext();
   // Reset branch store
   branchStore.reset();
 }
@@ -1155,5 +1399,3 @@ export async function resolveToolApproval(
   }
 }
 
-// Initialize streaming setting
-chatService.setStreamResponse(true);

@@ -7,6 +7,7 @@
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";
   import Integrations from "$lib/components/Integrations.svelte";
+  import { honoBackend } from "$lib/stores/honoBackend.svelte";
 
   let { showClose = false, onClose }: { showClose?: boolean; onClose?: () => void } = $props();
 
@@ -34,7 +35,30 @@
   let toolApprovalError = $state<string | null>(null);
   let toolApprovalErrorTool = $state<string | null>(null);
   const isDev = import.meta.env.DEV;
-  let activeTab = $state<"tools" | "vault" | "integrations">("tools");
+  let activeTab = $state<"tools" | "vault" | "integrations" | "server">("tools");
+
+  // Hono server settings (local copies for the form)
+  let honoEnabled = $state(honoBackend.enabled);
+  let honoUrl = $state(honoBackend.serverUrl);
+  let honoToken = $state(honoBackend.token);
+  let honoSaving = $state(false);
+  let honoStatus = $state<{ message: string; tone: "idle" | "success" | "error" }>({ message: "", tone: "idle" });
+
+  async function saveHonoSettings() {
+    honoSaving = true;
+    honoStatus = { message: "", tone: "idle" };
+    try {
+      honoBackend.enabled = honoEnabled;
+      honoBackend.serverUrl = honoUrl;
+      honoBackend.token = honoToken;
+      await honoBackend.save();
+      honoStatus = { message: "Settings saved.", tone: "success" };
+    } catch (e) {
+      honoStatus = { message: "Failed to save settings.", tone: "error" };
+    } finally {
+      honoSaving = false;
+    }
+  }
 
   $effect(() => {
     if (activeTab === "tools") {
@@ -291,6 +315,16 @@
     >
       Integrations
     </button>
+    <button
+      class={`px-3 py-1 rounded-lg transition-all ${
+        activeTab === "server"
+          ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
+          : "text-muted-foreground/70 hover:text-foreground"
+      }`}
+      onclick={() => (activeTab = "server")}
+    >
+      Server
+    </button>
   </div>
 
   <div class="flex-1 min-h-0 rounded-2xl border border-white/10 bg-white/5 p-3">
@@ -534,6 +568,68 @@
               </p>
             {/if}
           </div>
+        </div>
+      </div>
+    {:else if activeTab === "server"}
+      <div class="grid gap-5 text-xs">
+        <div>
+          <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Hono Server</p>
+          <p class="text-[11px] text-muted-foreground/70 mt-1">
+            Route agent requests through a standalone Hono server instead of the local Rust backend.
+          </p>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button
+            role="switch"
+            aria-checked={honoEnabled}
+            class={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+              honoEnabled ? "bg-emerald-500" : "bg-white/20"
+            }`}
+            onclick={() => (honoEnabled = !honoEnabled)}
+          >
+            <span
+              class={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-lg transition-transform ${
+                honoEnabled ? "translate-x-4" : "translate-x-0"
+              }`}
+            ></span>
+          </button>
+          <span class="text-xs">{honoEnabled ? "Enabled" : "Disabled"}</span>
+        </div>
+
+        <div class="grid gap-3">
+          <div class="grid gap-1.5">
+            <label class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Server URL</label>
+            <Input
+              placeholder="http://localhost:3001"
+              bind:value={honoUrl}
+              class="h-8 text-xs bg-white/5 border-white/10"
+            />
+          </div>
+
+          <div class="grid gap-1.5">
+            <label class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Bearer Token</label>
+            <Input
+              type="password"
+              placeholder="Leave empty if auth is disabled"
+              bind:value={honoToken}
+              class="h-8 text-xs bg-white/5 border-white/10"
+            />
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <Button size="sm" onclick={saveHonoSettings} disabled={honoSaving}>
+            {honoSaving ? "Saving..." : "Save"}
+          </Button>
+          {#if honoStatus.message}
+            <p class={`text-[11px] ${
+              honoStatus.tone === "success" ? "text-emerald-400" :
+              honoStatus.tone === "error" ? "text-red-400" : "text-muted-foreground"
+            }`}>
+              {honoStatus.message}
+            </p>
+          {/if}
         </div>
       </div>
     {:else if activeTab === "integrations"}

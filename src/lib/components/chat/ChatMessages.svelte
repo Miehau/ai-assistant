@@ -226,7 +226,7 @@
     for (const msg of messages) {
       if (msg.tool_calls) {
         const allAreSubagent = msg.tool_calls.every(call => call.is_sub_agent);
-        if (allAreSubagent && msg.tool_calls.length > 0) {
+        if (allAreSubagent && msg.tool_calls.length > 0 && !msg.content?.trim()) {
           // This is a subagent-only message
           subagentMessageIds.add(msg.id);
           allSubagentCalls.push(...msg.tool_calls);
@@ -275,13 +275,17 @@
     hasMoreMessages = startIndex > 0;
   }
 
+  // Re-enable auto-scroll whenever a new stream starts
+  $: if ($isStreaming) {
+    autoScroll = true;
+  }
+
   // Only scroll when messages actually change or streaming updates
   $: if (messages.length !== lastMessageCount || ($streamingMessage && $streamingMessage.length !== lastStreamingLength)) {
     lastMessageCount = messages.length;
     lastStreamingLength = $streamingMessage.length;
-    // Use requestAnimationFrame for smoother scrolling
     requestAnimationFrame(() => {
-      throttledScrollToBottom();
+      scrollToBottom();
     });
   }
 

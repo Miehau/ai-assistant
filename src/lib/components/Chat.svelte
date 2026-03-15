@@ -27,15 +27,16 @@
   import ChatInput from "./chat/ChatInput.svelte";
   import ChatControls from "./chat/ChatControls.svelte";
   import { conversationService, currentConversation } from "$lib/services/conversation";
-  import { chatService } from "$lib/services/chat";
   import { fade } from "svelte/transition";
   import { debugModels } from "./debug";
+  import { honoBackend } from "$lib/stores/honoBackend.svelte";
 
   let chatContainer: HTMLElement | null = null;
   let autoScroll = true;
   let isClearing = false;
 
   onMount(() => {
+    void honoBackend.init();
     startAgentEvents();
     void loadModels();
     void loadSystemPrompts();

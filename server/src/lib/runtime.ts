@@ -1,0 +1,143 @@
+import fs from 'fs/promises'
+import path from 'path'
+
+import { createDatabase, SQLiteRepositories, seedDevUser } from '../repositories/sqlite/index.js'
+import type { DrizzleInstance } from '../repositories/sqlite/index.js'
+import { ProviderRegistryImpl } from '../providers/registry.js'
+import { ToolRegistryImpl } from '../tools/registry.js'
+import { AgentEventEmitter } from '../events/emitter.js'
+import { registerFileTools } from '../tools/files.js'
+import { registerShellTools } from '../tools/shell.js'
+import { registerWebTools } from '../tools/web.js'
+import { registerSearchTools } from '../tools/search.js'
+import { registerToolOutputTools } from '../tools/tool-outputs.js'
+import { registerPreferenceTools } from '../tools/preferences.js'
+import { registerDelegateTools } from '../tools/delegate.js'
+import { logger } from './logger.js'
+import type { AppConfig } from './config.js'
+import type { ProviderRegistry } from '../providers/types.js'
+import type { ToolExecutor } from '../tools/types.js'
+import type { EventSink, EventSource } from '../events/types.js'
+import type {
+  UserRepository,
+  SessionRepository,
+  AgentRepository,
+  ItemRepository,
+  ToolOutputRepository,
+  ModelRepository,
+  ApiKeyRepository,
+  SystemPromptRepository,
+  PreferenceRepository,
+} from '../repositories/types.js'
+
+export interface RuntimeContext {
+  repositories: {
+    users: UserRepository
+    sessions: SessionRepository
+    agents: AgentRepository
+    items: ItemRepository
+    toolOutputs: ToolOutputRepository
+    models: ModelRepository
+    apiKeys: ApiKeyRepository
+    systemPrompts: SystemPromptRepository
+    preferences: PreferenceRepository
+  }
+  providers: ProviderRegistry
+  tools: ToolExecutor
+  events: EventSink & EventSource
+  config: AppConfig
+  db: DrizzleInstance
+}
+
+export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
+  // 1. Ensure data directory exists for SQLite file
+  const dbDir = path.dirname(config.databaseUrl)
+  await fs.mkdir(dbDir, { recursive: true })
+  logger.info({ path: config.databaseUrl }, 'Opening database')
+
+  // 2. Create database connection and repositories
+  const db = createDatabase(config.databaseUrl)
+  const repos = new SQLiteRepositories(db)
+
+  // 3. Seed dev user
+  const devUser = await seedDevUser(db)
+  logger.info({ userId: devUser.id, email: devUser.email }, 'Dev user ready')
+
+  // 4. Create event emitter
+  const events = new AgentEventEmitter()
+
+  // 5. Create tool registry and register all tools
+  const tools = new ToolRegistryImpl(repos.toolOutputs)
+  registerFileTools(tools)
+  registerShellTools(tools)
+  registerWebTools(tools)
+  registerSearchTools(tools)
+  registerToolOutputTools(tools, repos.toolOutputs)
+  registerPreferenceTools(tools, repos.preferences)
+  registerDelegateTools(tools)
+
+  const toolCount = tools.listMetadata().length
+  logger.info({ toolCount }, 'Tool registry initialized')
+
+  // 6. Create provider registry
+  //    Priority: .env keys → DB-stored keys (DB keys won't overwrite .env ones)
+  const providers = new ProviderRegistryImpl()
+  providers.setApiKeyRepository(repos.apiKeys)
+
+  const envRegistered: string[] = []
+
+  if (config.anthropicApiKey) {
+    providers.registerFromKey('anthropic', config.anthropicApiKey)
+    envRegistered.push('anthropic')
+  }
+  if (config.openaiApiKey) {
+    providers.registerFromKey('openai', config.openaiApiKey)
+    envRegistered.push('openai')
+  }
+  if (config.ollamaBaseUrl) {
+    providers.registerFromKey('ollama', config.ollamaBaseUrl)
+    envRegistered.push('ollama')
+  }
+  if (config.openrouterApiKey) {
+    providers.registerFromKey('openrouter', config.openrouterApiKey)
+    envRegistered.push('openrouter')
+  }
+
+  if (envRegistered.length > 0) {
+    logger.info({ providers: envRegistered }, 'Providers registered from environment')
+  }
+
+  // Load any additional keys stored in the database (e.g. saved via the UI)
+  const dbRegistered = await providers.loadKeysFromDatabase()
+
+  if (envRegistered.length === 0 && dbRegistered.length === 0) {
+    logger.warn('No LLM providers configured. Set keys via .env or PUT /api/keys/:provider')
+  }
+
+  // 7. Return RuntimeContext
+  return {
+    repositories: {
+      users: repos.users,
+      sessions: repos.sessions,
+      agents: repos.agents,
+      items: repos.items,
+      toolOutputs: repos.toolOutputs,
+      models: repos.models,
+      apiKeys: repos.apiKeys,
+      systemPrompts: repos.systemPrompts,
+      preferences: repos.preferences,
+    },
+    providers,
+    tools,
+    events,
+    config,
+    db,
+  }
+}
+
+export async function shutdownRuntime(runtime: RuntimeContext): Promise<void> {
+  logger.info('Shutting down runtime')
+  // Close the database connection if the underlying driver exposes it.
+  // DrizzleInstance wraps better-sqlite3 which is synchronous — no async cleanup needed.
+  // The process exit will finalize WAL and release the file lock.
+}

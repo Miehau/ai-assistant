@@ -58,7 +58,8 @@ export class CustomProviderService extends LLMService {
     messages: any[],
     streamResponse: boolean,
     onStreamResponse: (chunk: string) => void,
-    signal: AbortSignal
+    signal: AbortSignal,
+    onEvent?: (event: { type: string; [key: string]: unknown }) => void,
   ): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     const body = JSON.stringify({
       messages,
@@ -90,7 +91,7 @@ export class CustomProviderService extends LLMService {
         || response.headers.get('transfer-encoding')?.includes('chunked');
 
       if (streamResponse && isStreaming && response.body) {
-        return this.handleStreamingResponse(response, onStreamResponse);
+        return this.handleStreamingResponse(response, onStreamResponse, onEvent);
       }
       const data = await response.json();
       const content = data.message?.content || data.choices?.[0]?.message?.content || '';
@@ -129,8 +130,9 @@ export class CustomProviderService extends LLMService {
   }
 
   private async handleStreamingResponse(
-    response: Response, 
-    onStreamResponse: (chunk: string) => void
+    response: Response,
+    onStreamResponse: (chunk: string) => void,
+    onEvent?: (event: { type: string; [key: string]: unknown }) => void,
   ): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number } }> {
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
@@ -155,6 +157,12 @@ export class CustomProviderService extends LLMService {
             continue;
           }
 
+          // Check if this is a lifecycle event (has type, no choices)
+          if (parsed.type && !parsed.choices && onEvent) {
+            onEvent(parsed);
+            continue;
+          }
+
           const content = this.extractStreamContent(parsed);
           if (content) {
             fullResponse += content;
@@ -170,14 +178,19 @@ export class CustomProviderService extends LLMService {
       if (buffer.trim()) {
         const parsed = this.parseStreamLine(buffer);
         if (parsed) {
-          const content = this.extractStreamContent(parsed);
-          if (content) {
-            fullResponse += content;
-            onStreamResponse(content);
-          }
-          const parsedUsage = this.extractUsage(parsed);
-          if (parsedUsage) {
-            usage = parsedUsage;
+          // Check if this is a lifecycle event (has type, no choices)
+          if (parsed.type && !parsed.choices && onEvent) {
+            onEvent(parsed);
+          } else {
+            const content = this.extractStreamContent(parsed);
+            if (content) {
+              fullResponse += content;
+              onStreamResponse(content);
+            }
+            const parsedUsage = this.extractUsage(parsed);
+            if (parsedUsage) {
+              usage = parsedUsage;
+            }
           }
         }
       }
