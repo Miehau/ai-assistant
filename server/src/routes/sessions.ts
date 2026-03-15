@@ -26,9 +26,9 @@ export function sessionRoutes(runtime: RuntimeContext): Hono {
         return c.json({ error: `Session not found: ${id}` }, 404)
       }
 
-      const agents = await runtime.repositories.agents.listBySession(id)
+      const items = await runtime.repositories.items.listBySession(id)
 
-      return c.json({ ...session, agents })
+      return c.json({ ...session, items })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, 500)

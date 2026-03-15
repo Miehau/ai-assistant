@@ -152,6 +152,8 @@ export interface ToolExecutionProposedPayload {
   iteration: number;
   conversation_id?: string;
   message_id?: string;
+  /** Hono backend only — the agent ID needed to call approveToolExecution */
+  agent_id?: string;
   timestamp_ms: number;
 }
 

@@ -65,7 +65,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
         },
         required: ['path', 'content'],
       },
-      requires_approval: false,
+      requires_approval: true,
     },
     async handle(args: Record<string, unknown>): Promise<ToolResult> {
       const filePath = args.path as string
@@ -97,7 +97,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
         },
         required: ['path', 'old_text', 'new_text'],
       },
-      requires_approval: false,
+      requires_approval: true,
     },
     async handle(args: Record<string, unknown>): Promise<ToolResult> {
       const filePath = args.path as string
@@ -136,7 +136,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
         },
         required: ['path', 'content'],
       },
-      requires_approval: false,
+      requires_approval: true,
     },
     async handle(args: Record<string, unknown>): Promise<ToolResult> {
       const filePath = args.path as string
@@ -174,7 +174,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
         },
         required: ['path', 'content'],
       },
-      requires_approval: false,
+      requires_approval: true,
     },
     async handle(args: Record<string, unknown>): Promise<ToolResult> {
       const filePath = args.path as string

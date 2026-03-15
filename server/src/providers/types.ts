@@ -37,7 +37,12 @@ export interface LLMResponse {
   content: string | unknown
   companion_text?: string
   tool_calls?: LLMToolCall[]
-  usage: { input_tokens: number; output_tokens: number }
+  usage: {
+    input_tokens: number
+    output_tokens: number
+    cache_read_input_tokens?: number
+    cache_creation_input_tokens?: number
+  }
   finish_reason: string
 }
 

@@ -74,6 +74,24 @@ export interface AgentStatusResponse {
   turnCount: number;
 }
 
+/** Mirrors server/src/domain/types.ts → Item */
+export interface SessionItem {
+  id: string;
+  agentId: string;
+  sequence: number;
+  type: 'message' | 'function_call' | 'function_call_output' | 'reasoning';
+  role: 'system' | 'user' | 'assistant' | null;
+  content: string | null;
+  callId: string | null;
+  name: string | null;
+  arguments: string | null;
+  output: string | null;
+  isError: boolean | null;
+  durationMs: number | null;
+  turnNumber: number;
+  createdAt: number;
+}
+
 export interface Session {
   id: string;
   userId: string;
@@ -83,7 +101,7 @@ export interface Session {
   status: 'active' | 'archived';
   createdAt: number;
   updatedAt: number;
-  agents?: unknown[];
+  items?: SessionItem[];
 }
 
 export interface ToolMetadata {

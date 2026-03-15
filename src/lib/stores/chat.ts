@@ -451,6 +451,7 @@ function handleAgentEvent(event: AgentEvent) {
       }
 
       conversationService.applyConversationDeleted(payload.conversation_id);
+      honoBackend.removeSession(payload.conversation_id);
       messages.set([]);
       isFirstMessage.set(true);
       resetStreamingState();

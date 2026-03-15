@@ -47,13 +47,13 @@ function stripUnsupportedSchemaKeywords(schema: Record<string, unknown>): Record
 
 function mapMessagesToAnthropic(
   messages: LLMMessage[],
-): { system: string | undefined; messages: Anthropic.MessageParam[] } {
-  let system: string | undefined
+): { system: Anthropic.TextBlockParam[] | undefined; messages: Anthropic.MessageParam[] } {
+  let systemText: string | undefined
   const mapped: Anthropic.MessageParam[] = []
 
   for (const msg of messages) {
     if (msg.role === 'system') {
-      system = typeof msg.content === 'string' ? msg.content : ''
+      systemText = typeof msg.content === 'string' ? msg.content : ''
       continue
     }
 
@@ -137,14 +137,20 @@ function mapMessagesToAnthropic(
     }
   }
 
+  const system: Anthropic.TextBlockParam[] | undefined = systemText != null
+    ? [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }]
+    : undefined
+
   return { system, messages: mapped }
 }
 
 function mapToolsToAnthropic(tools: LLMToolDefinition[]): Anthropic.Tool[] {
-  return tools.map((tool) => ({
+  return tools.map((tool, i) => ({
     name: sanitizeToolName(tool.name),
     description: tool.description,
     input_schema: stripUnsupportedSchemaKeywords(tool.parameters) as Anthropic.Tool.InputSchema,
+    // Cache the entire tools array by marking the last entry
+    ...(i === tools.length - 1 && { cache_control: { type: 'ephemeral' as const } }),
   }))
 }
 
@@ -186,6 +192,13 @@ export class AnthropicProvider implements LLMProvider {
 
     const response = await this.client.messages.create(params)
 
+    if (response.usage.cache_read_input_tokens) {
+      console.log(
+        `[anthropic] cache hit — read ${response.usage.cache_read_input_tokens} tokens` +
+        (response.usage.cache_creation_input_tokens ? `, wrote ${response.usage.cache_creation_input_tokens}` : ''),
+      )
+    }
+
     return mapAnthropicResponse(response, !!request.structured_output)
   }
 
@@ -225,6 +238,8 @@ export class AnthropicProvider implements LLMProvider {
     const toolCallArgs: Record<string, { id: string; name: string; args: string }> = {}
     let inputTokens = 0
     let outputTokens = 0
+    let cacheReadTokens = 0
+    let cacheCreationTokens = 0
     let stopReason = ''
 
     for await (const event of stream as AsyncIterable<Anthropic.MessageStreamEvent>) {
@@ -232,6 +247,14 @@ export class AnthropicProvider implements LLMProvider {
         case 'message_start':
           if (event.message.usage) {
             inputTokens = event.message.usage.input_tokens
+            cacheReadTokens = event.message.usage.cache_read_input_tokens ?? 0
+            cacheCreationTokens = event.message.usage.cache_creation_input_tokens ?? 0
+            if (cacheReadTokens > 0) {
+              console.log(
+                `[anthropic] cache hit (stream) — read ${cacheReadTokens} tokens` +
+                (cacheCreationTokens > 0 ? `, wrote ${cacheCreationTokens}` : ''),
+              )
+            }
           }
           break
 
@@ -301,7 +324,12 @@ export class AnthropicProvider implements LLMProvider {
               ? toolCalls.filter((tc) => tc.name !== '_structured_output')
               : undefined,
             companion_text: toolCalls.length > 0 && fullText ? fullText : undefined,
-            usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+            usage: {
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              ...(cacheReadTokens > 0 && { cache_read_input_tokens: cacheReadTokens }),
+              ...(cacheCreationTokens > 0 && { cache_creation_input_tokens: cacheCreationTokens }),
+            },
             finish_reason: stopReason || 'end_turn',
           }
 
@@ -335,6 +363,13 @@ function mapAnthropicResponse(
     }
   }
 
+  const usage = {
+    input_tokens: response.usage.input_tokens,
+    output_tokens: response.usage.output_tokens,
+    ...((response.usage.cache_read_input_tokens ?? 0) > 0 && { cache_read_input_tokens: response.usage.cache_read_input_tokens }),
+    ...((response.usage.cache_creation_input_tokens ?? 0) > 0 && { cache_creation_input_tokens: response.usage.cache_creation_input_tokens }),
+  }
+
   // For structured output, return the _structured_output tool's input as content
   if (isStructuredOutput) {
     const structuredCall = toolCalls.find((tc) => tc.name === '_structured_output')
@@ -345,10 +380,7 @@ function mapAnthropicResponse(
         tool_calls: toolCalls.filter((tc) => tc.name !== '_structured_output').length > 0
           ? toolCalls.filter((tc) => tc.name !== '_structured_output')
           : undefined,
-        usage: {
-          input_tokens: response.usage.input_tokens,
-          output_tokens: response.usage.output_tokens,
-        },
+        usage,
         finish_reason: response.stop_reason ?? 'end_turn',
       }
     }
@@ -358,10 +390,7 @@ function mapAnthropicResponse(
     content: text,
     companion_text: toolCalls.length > 0 && text ? text : undefined,
     tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-    usage: {
-      input_tokens: response.usage.input_tokens,
-      output_tokens: response.usage.output_tokens,
-    },
+    usage,
     finish_reason: response.stop_reason ?? 'end_turn',
   }
 }
