@@ -683,13 +683,19 @@ function handleAgentEvent(event: AgentEvent) {
     if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED) {
       const payload = event.payload as ToolExecutionProposedPayload;
       if (payload.message_id && cancelledAssistantMessageIds.has(payload.message_id)) {
+        console.log('[chat] TOOL_EXECUTION_PROPOSED skipped — message cancelled');
         return;
       }
       const currentConversation = conversationService.getCurrentConversation();
       if (payload.conversation_id && currentConversation?.id !== payload.conversation_id) {
+        console.warn('[chat] TOOL_EXECUTION_PROPOSED conversation mismatch', {
+          payloadConvId: payload.conversation_id,
+          currentConvId: currentConversation?.id,
+        });
         return;
       }
 
+      console.log('[chat] TOOL_EXECUTION_PROPOSED queued:', payload.tool_name, payload.approval_id);
       pendingToolApprovals.update((approvals) => {
         if (approvals.some((entry) => entry.approval_id === payload.approval_id)) {
           return approvals;
@@ -968,9 +974,66 @@ export async function loadSystemPrompts(options: { force?: boolean } = {}) {
   }
 }
 
+function honoItemsToMessages(items: import('$lib/backend/http-client').SessionItem[]): Message[] {
+  const outputByCallId = new Map<string, import('$lib/backend/http-client').SessionItem>();
+  for (const item of items) {
+    if (item.type === 'function_call_output' && item.callId) {
+      outputByCallId.set(item.callId, item);
+    }
+  }
+
+  const result: Message[] = [];
+  const pendingToolCalls: ToolCallRecord[] = [];
+
+  for (const item of items) {
+    if (item.type === 'function_call') {
+      let args: Record<string, unknown> = {};
+      try { args = item.arguments ? JSON.parse(item.arguments) : {}; } catch { /* ignore */ }
+      const out = item.callId ? outputByCallId.get(item.callId) : undefined;
+      pendingToolCalls.push({
+        execution_id: item.callId ?? item.id,
+        tool_name: item.name ?? 'unknown',
+        args,
+        result: out?.output ?? undefined,
+        success: out ? !out.isError : undefined,
+        error: out?.isError ? (out.output ?? undefined) : undefined,
+        duration_ms: item.durationMs ?? undefined,
+      });
+    } else if (item.type === 'message') {
+      if (item.role === 'user') {
+        result.push({ id: item.id, type: 'sent', content: item.content ?? '' });
+      } else if (item.role === 'assistant') {
+        const toolCalls = pendingToolCalls.length > 0 ? [...pendingToolCalls] : undefined;
+        pendingToolCalls.length = 0;
+        result.push({ id: item.id, type: 'received', content: item.content ?? '', tool_calls: toolCalls });
+      }
+    }
+    // skip 'system', 'reasoning', 'function_call_output' (handled above)
+  }
+
+  // trailing tool calls with no final assistant message (e.g. agent still waiting)
+  if (pendingToolCalls.length > 0) {
+    result.push({ id: uuidv4(), type: 'received', content: '', tool_calls: [...pendingToolCalls] });
+  }
+
+  return result;
+}
+
 export async function loadConversationHistory(conversationId: string) {
   try {
-    const loadedMessages = await conversationService.getDisplayHistory(conversationId);
+    let loadedMessages: Message[];
+
+    if (honoBackend.enabled) {
+      const sessionId = honoBackend.getSessionId(conversationId);
+      if (sessionId) {
+        const session = await honoBackend.getClient().getSession(sessionId);
+        loadedMessages = honoItemsToMessages(session.items ?? []);
+      } else {
+        loadedMessages = [];
+      }
+    } else {
+      loadedMessages = await conversationService.getDisplayHistory(conversationId);
+    }
 
     // Sync toolCallsByMessageId with the loaded history so that any future
     // upsertToolCall calls do not overwrite the correct completed/failed state
@@ -1392,6 +1455,151 @@ export async function resolveToolApproval(
   approved: boolean,
   scope?: ToolExecutionApprovalScope
 ) {
+  if (honoBackend.enabled) {
+    const approvals = get(pendingToolApprovals);
+    const approval = approvals.find((a) => a.approval_id === approvalId);
+    const agentId = approval?.agent_id;
+    if (agentId) {
+      // Optimistically clear the approval and show loading
+      pendingToolApprovals.update((a) => a.filter((x) => x.approval_id !== approvalId));
+      isLoading.set(true);
+
+      // Subscribe to the event stream BEFORE sending the approval so we receive
+      // events emitted during the resumed agent run (tool activity, text deltas).
+      const eventAbort = new AbortController();
+      const client = honoBackend.getClient();
+      const eventPromise = (async () => {
+        try {
+          for await (const sseEvent of client.subscribeToEvents(agentId, eventAbort.signal)) {
+            // Convert SSE event to the same format honoEventBridge uses
+            const { event, data } = sseEvent;
+            const ts = Date.now();
+            const convId = approval?.conversation_id ?? '';
+            const msgId = approval?.message_id ?? '';
+
+            if (event === 'tool:started') {
+              handleAgentEvent({
+                event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_STARTED,
+                payload: {
+                  execution_id: data.callId as string,
+                  tool_name: data.name as string,
+                  args: (data.args as Record<string, unknown>) ?? {},
+                  message_id: msgId,
+                  conversation_id: convId,
+                  session_id: data.agentId as string | undefined,
+                  parent_session_id: (data.parentId as string) ?? null,
+                  is_sub_agent: data.parentId != null,
+                  timestamp_ms: ts,
+                },
+                timestamp_ms: ts,
+              });
+            } else if (event === 'tool:completed') {
+              handleAgentEvent({
+                event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_COMPLETED,
+                payload: {
+                  execution_id: data.callId as string,
+                  tool_name: (data.name as string) ?? '',
+                  result: data.output,
+                  success: data.success !== false,
+                  duration_ms: data.durationMs as number | undefined,
+                  message_id: msgId,
+                  conversation_id: convId,
+                  session_id: data.agentId as string | undefined,
+                  parent_session_id: (data.parentId as string) ?? null,
+                  is_sub_agent: data.parentId != null,
+                  timestamp_ms: ts,
+                },
+                timestamp_ms: ts,
+              });
+            } else if (event === 'tool:proposed') {
+              handleAgentEvent({
+                event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED,
+                payload: {
+                  execution_id: data.callId as string,
+                  approval_id: data.callId as string,
+                  tool_name: data.name as string,
+                  args: (data.args as Record<string, unknown>) ?? {},
+                  agent_id: data.agentId as string | undefined,
+                  message_id: msgId,
+                  conversation_id: convId,
+                  iteration: 0,
+                  timestamp_ms: ts,
+                },
+                timestamp_ms: ts,
+              });
+            } else if (event === 'text:delta') {
+              handleAgentEvent({
+                event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_CHUNK,
+                payload: { conversation_id: convId, message_id: msgId, chunk: data.text as string, timestamp_ms: ts },
+                timestamp_ms: ts,
+              });
+            } else if (event === 'agent:completed' || event === 'agent:failed') {
+              // Root agent done — stop listening
+              break;
+            }
+          }
+        } catch {
+          // Event stream closed or aborted — expected
+        }
+      })();
+
+      try {
+        const result = await client.approveToolExecution(
+          agentId,
+          approvalId,
+          approved ? 'approved' : 'denied',
+        );
+
+        // Stop event subscription — the HTTP response has the final state
+        eventAbort.abort();
+        await eventPromise.catch(() => {});
+
+        // Show completed output if the agent finished
+        if (result.output && result.output.length > 0) {
+          const lastOutput = result.output[result.output.length - 1];
+          const content = lastOutput.content;
+          if (content && typeof content === 'string' && content.trim()) {
+            const msgId = approval?.message_id ?? generateMessageId();
+            messages.update((msgs) => {
+              const idx = msgs.findIndex((m) => m.id === msgId);
+              const newMsg: Message = { id: msgId, type: 'received', content, timestamp: Date.now() };
+              if (idx === -1) return [...msgs, newMsg];
+              return [...msgs.slice(0, idx), { ...msgs[idx], ...newMsg }, ...msgs.slice(idx + 1)];
+            });
+          }
+        }
+
+        // Surface any further pending approvals from the continued run
+        if (result.status === 'waiting' && result.waitingFor) {
+          for (const w of result.waitingFor) {
+            if (w.type === 'approval') {
+              pendingToolApprovals.update((a) => {
+                if (a.some((x) => x.approval_id === w.callId)) return a;
+                return [...a, {
+                  execution_id: w.callId,
+                  approval_id: w.callId,
+                  tool_name: w.name,
+                  args: w.args ?? {},
+                  agent_id: agentId,
+                  message_id: approval?.message_id,
+                  conversation_id: approval?.conversation_id,
+                  iteration: 0,
+                  timestamp_ms: Date.now(),
+                }];
+              });
+            }
+          }
+        }
+      } catch (error) {
+        eventAbort.abort();
+        console.error('Failed to resolve Hono tool approval:', error);
+      } finally {
+        isLoading.set(false);
+      }
+      return;
+    }
+  }
+
   try {
     await backend.resolveToolExecutionApproval(approvalId, approved, scope);
   } catch (error) {

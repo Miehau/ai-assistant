@@ -46,6 +46,10 @@ export async function streamMessageViaHono(
   let fullText = '';
   let resultSessionId: string | undefined;
   const toolStartTimes = new Map<string, number>();
+  // Track which approval callIds have already been surfaced to avoid duplicates
+  const surfacedApprovalIds = new Set<string>();
+  // True after a tool_end so the next text_delta gets a paragraph separator
+  let pendingTurnSeparator = false;
 
   for await (const sseEvent of client.sendMessageStream(
     input,
@@ -55,7 +59,11 @@ export async function streamMessageViaHono(
     const { event, data } = sseEvent;
 
     if (event === 'text_delta') {
-      const chunk = (data.text as string) ?? '';
+      let chunk = (data.text as string) ?? '';
+      if (pendingTurnSeparator && chunk.length > 0) {
+        chunk = '\n\n' + chunk;
+        pendingTurnSeparator = false;
+      }
       fullText += chunk;
       onEvent({
         event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_CHUNK,
@@ -86,6 +94,7 @@ export async function streamMessageViaHono(
       const started = toolStartTimes.get(callId) ?? Date.now();
       const success = data.success !== false;
       const parentId = data.parentId as string | null | undefined;
+      pendingTurnSeparator = fullText.length > 0;
       onEvent({
         event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_COMPLETED,
         payload: {
@@ -105,12 +114,47 @@ export async function streamMessageViaHono(
         timestamp_ms: ts(),
       });
     } else if (event === 'approval') {
+      const callId = data.callId as string;
+      const toolName = data.name as string;
+      console.log('[honoEventBridge] approval required (approval SSE path):', toolName, callId);
+      surfacedApprovalIds.add(callId);
       onEvent({
         event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED,
         payload: {
-          approval_id: data.callId as string,
-          tool_name: data.name as string,
+          execution_id: callId,
+          approval_id: callId,
+          tool_name: toolName,
           args: (data.args as Record<string, unknown>) ?? {},
+          agent_id: data.agentId as string | undefined,
+          message_id: messageId,
+          conversation_id: conversationId,
+          iteration: 0,
+          timestamp_ms: ts(),
+        },
+        timestamp_ms: ts(),
+      });
+    } else if (event === 'tool_approved') {
+      const callId = data.callId as string;
+      onEvent({
+        event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_APPROVED,
+        payload: {
+          execution_id: callId,
+          approval_id: callId,
+          tool_name: (data.name as string) ?? '',
+          message_id: messageId,
+          conversation_id: conversationId,
+          timestamp_ms: ts(),
+        },
+        timestamp_ms: ts(),
+      });
+    } else if (event === 'tool_denied') {
+      const callId = data.callId as string;
+      onEvent({
+        event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_DENIED,
+        payload: {
+          execution_id: callId,
+          approval_id: callId,
+          tool_name: (data.name as string) ?? '',
           message_id: messageId,
           conversation_id: conversationId,
           timestamp_ms: ts(),
@@ -118,17 +162,85 @@ export async function streamMessageViaHono(
         timestamp_ms: ts(),
       });
     } else if (event === 'agent_status') {
-      const phase = honoStatusToPhase(data.status as string);
-      if (phase) {
+      // AGENT_WAITING payload has `waitingFor` (not `status`) — handle both paths.
+      const waitingFor = data.waitingFor as Array<{
+        callId: string; type: string; name: string; args?: Record<string, unknown>;
+      }> | undefined;
+
+      if (waitingFor && waitingFor.length > 0) {
+        // Emit phase change so the UI knows the agent is paused
         onEvent({
           event_type: AGENT_EVENT_TYPES.AGENT_PHASE_CHANGED,
-          payload: { phase, timestamp_ms: ts() },
+          payload: { phase: 'WaitingForHumanInput', timestamp_ms: ts() },
           timestamp_ms: ts(),
         });
+        // Surface each pending approval — skip those already surfaced via the `approval` SSE event
+        for (const entry of waitingFor) {
+          if (entry.type === 'approval' && !surfacedApprovalIds.has(entry.callId)) {
+            console.log('[honoEventBridge] approval required (agent_status path):', entry.name, entry.callId);
+            surfacedApprovalIds.add(entry.callId);
+            onEvent({
+              event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED,
+              payload: {
+                execution_id: entry.callId,
+                approval_id: entry.callId,
+                tool_name: entry.name,
+                args: entry.args ?? {},
+                agent_id: data.agentId as string | undefined,
+                message_id: messageId,
+                conversation_id: conversationId,
+                iteration: 0,
+                timestamp_ms: ts(),
+              },
+              timestamp_ms: ts(),
+            });
+          }
+        }
+      } else {
+        // Fallback: try the old status-based mapping
+        const phase = honoStatusToPhase(data.status as string);
+        if (phase) {
+          onEvent({
+            event_type: AGENT_EVENT_TYPES.AGENT_PHASE_CHANGED,
+            payload: { phase, timestamp_ms: ts() },
+            timestamp_ms: ts(),
+          });
+        }
       }
     } else if (event === 'done') {
       resultSessionId = (data.sessionId as string | undefined)
         ?? ((data.response as Record<string, unknown> | undefined)?.sessionId as string | undefined);
+
+      // Final-fallback: if agent ended waiting with approvals not yet surfaced, surface them now
+      if (data.status === 'waiting') {
+        const waitingFor = data.waitingFor as Array<{
+          callId: string; type: string; name: string; args?: Record<string, unknown>;
+        }> | undefined;
+        if (waitingFor) {
+          for (const entry of waitingFor) {
+            if (entry.type === 'approval' && !surfacedApprovalIds.has(entry.callId)) {
+              console.log('[honoEventBridge] approval required (done path):', entry.name, entry.callId);
+              surfacedApprovalIds.add(entry.callId);
+              onEvent({
+                event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED,
+                payload: {
+                  execution_id: entry.callId,
+                  approval_id: entry.callId,
+                  tool_name: entry.name,
+                  args: entry.args ?? {},
+                  agent_id: data.id as string | undefined,
+                  message_id: messageId,
+                  conversation_id: conversationId,
+                  iteration: 0,
+                  timestamp_ms: ts(),
+                },
+                timestamp_ms: ts(),
+              });
+            }
+          }
+        }
+      }
+
       onEvent({
         event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_COMPLETED,
         payload: {

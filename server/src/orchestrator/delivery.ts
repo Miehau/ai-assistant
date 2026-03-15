@@ -1,6 +1,7 @@
 import type { OrchestratorDeps, RunResult } from './types.js'
 import { deliverOne } from '../domain/agent.js'
 import { runAgent } from './runner.js'
+import { EVENT_TYPES } from '../events/types.js'
 
 // ---------------------------------------------------------------------------
 // Deliver an external result to a waiting agent
@@ -106,7 +107,7 @@ export async function deliverApproval(
     })
 
     deps.events.emit({
-      type: 'tool:denied',
+      type: EVENT_TYPES.TOOL_DENIED,
       agent_id: agentId,
       session_id: agent.sessionId,
       payload: { callId, name: waitEntry.name },
@@ -134,7 +135,7 @@ export async function deliverApproval(
   // Approved: execute the tool, then resume
 
   deps.events.emit({
-    type: 'tool:approved',
+    type: EVENT_TYPES.TOOL_APPROVED,
     agent_id: agentId,
     session_id: agent.sessionId,
     payload: { callId, name: waitEntry.name },
@@ -154,6 +155,15 @@ export async function deliverApproval(
   const toolArgs: Record<string, unknown> = callItem.arguments
     ? JSON.parse(callItem.arguments)
     : {}
+
+  // Emit TOOL_STARTED so the UI shows activity
+  deps.events.emit({
+    type: EVENT_TYPES.TOOL_STARTED,
+    agent_id: agentId,
+    session_id: agent.sessionId,
+    payload: { callId, name: toolName, args: toolArgs, parentId: agent.parentId, depth: agent.depth },
+    timestamp: Date.now(),
+  })
 
   // Execute the tool
   const startMs = Date.now()
@@ -182,10 +192,10 @@ export async function deliverApproval(
   })
 
   deps.events.emit({
-    type: 'tool:completed',
+    type: EVENT_TYPES.TOOL_COMPLETED,
     agent_id: agentId,
     session_id: agent.sessionId,
-    payload: { callId, name: toolName, ok: result.ok, durationMs },
+    payload: { callId, name: toolName, success: result.ok, output: outputStr, durationMs, parentId: agent.parentId, depth: agent.depth },
     timestamp: Date.now(),
   })
 
@@ -197,7 +207,26 @@ export async function deliverApproval(
   })
 
   if (updated.status === 'running') {
-    return runAgent(agentId, deps)
+    const result = await runAgent(agentId, deps)
+
+    // Auto-propagate: if this agent has a parent and completed, deliver result upward
+    const freshAgent = await deps.agents.getById(agentId)
+    if (
+      freshAgent &&
+      result.status === 'completed' &&
+      freshAgent.parentId &&
+      freshAgent.sourceCallId
+    ) {
+      return deliverResult(
+        freshAgent.parentId,
+        freshAgent.sourceCallId,
+        result.result ?? '(completed)',
+        false,
+        deps,
+      )
+    }
+
+    return result
   }
 
   return {

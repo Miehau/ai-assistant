@@ -169,66 +169,34 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
           }))
 
           // Pipe non-text events as SSE (text_delta already handled by onTextDelta)
-          let done = false
           const iterator = eventStream[Symbol.asyncIterator]()
 
-          // Set up a completion handler
-          resultPromise.then(() => {
-            done = true
-          })
-
-          while (!done) {
-            const next = await Promise.race([
-              iterator.next(),
-              resultPromise.then(() => null),
-            ])
-
-            if (!next || next.done) break
-
-            const event = next.value
-
-            // TEXT_DELTA is already written synchronously via onTextDelta — skip here
-            if (event.type === EVENT_TYPES.TEXT_DELTA) continue
-
-            // Root agent done/failed: break and let the explicit final 'done' below handle it.
-            // Writing 'done' here would make the client stop the stream before the final
-            // result SSE is sent, and would also fire prematurely if a child agent finishes first.
+          // Maps an internal event to an SSE event name, or null to skip
+          const mapEventToSSE = (event: { type: string; agent_id: string }): string | null => {
+            if (event.type === EVENT_TYPES.TEXT_DELTA) return null
+            // Root agent done/failed handled separately
             if (
               (event.type === EVENT_TYPES.AGENT_COMPLETED || event.type === EVENT_TYPES.AGENT_FAILED) &&
               event.agent_id === agent.id
-            ) {
-              break
-            }
-
-            let sseEvent: string
+            ) return null
 
             switch (event.type) {
-              case EVENT_TYPES.COMPANION_TEXT:
-                sseEvent = 'text_delta'
-                break
-              case EVENT_TYPES.TOOL_STARTED:
-                sseEvent = 'tool_start'
-                break
-              case EVENT_TYPES.TOOL_COMPLETED:
-                sseEvent = 'tool_end'
-                break
-              case EVENT_TYPES.TOOL_PROPOSED:
-                sseEvent = 'approval'
-                break
-              case EVENT_TYPES.AGENT_WAITING:
-                sseEvent = 'agent_status'
-                break
-              // Child agent lifecycle — use non-terminal names so the client doesn't close the stream
-              case EVENT_TYPES.AGENT_COMPLETED:
-                sseEvent = 'subagent_done'
-                break
-              case EVENT_TYPES.AGENT_FAILED:
-                sseEvent = 'subagent_error'
-                break
-              default:
-                sseEvent = event.type
+              case EVENT_TYPES.COMPANION_TEXT: return 'text_delta'
+              case EVENT_TYPES.TOOL_STARTED: return 'tool_start'
+              case EVENT_TYPES.TOOL_COMPLETED: return 'tool_end'
+              case EVENT_TYPES.TOOL_PROPOSED: return 'approval'
+              case EVENT_TYPES.TOOL_APPROVED: return 'tool_approved'
+              case EVENT_TYPES.TOOL_DENIED: return 'tool_denied'
+              case EVENT_TYPES.AGENT_WAITING: return 'agent_status'
+              case EVENT_TYPES.AGENT_COMPLETED: return 'subagent_done'
+              case EVENT_TYPES.AGENT_FAILED: return 'subagent_error'
+              default: return event.type
             }
+          }
 
+          const writeEvent = async (event: { type: string; agent_id: string; payload: unknown }) => {
+            const sseEvent = mapEventToSSE(event)
+            if (!sseEvent) return
             await stream.writeSSE({
               event: sseEvent,
               data: JSON.stringify({
@@ -241,6 +209,44 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
             })
           }
 
+          // Phase 1: consume events until the agent finishes or waits
+          let agentDone = false
+          resultPromise.then(() => { agentDone = true })
+
+          while (!agentDone) {
+            const next = await Promise.race([
+              iterator.next(),
+              resultPromise.then(() => null),
+            ])
+
+            if (!next || next.done) break
+
+            const event = next.value
+            if (
+              (event.type === EVENT_TYPES.AGENT_COMPLETED || event.type === EVENT_TYPES.AGENT_FAILED) &&
+              event.agent_id === agent.id
+            ) break
+
+            await writeEvent(event)
+          }
+
+          // Phase 2: drain any events that were queued before the agent finished
+          // but not yet consumed (race condition between event emission and loop exit).
+          // A short timeout detects when the queue is empty.
+          while (true) {
+            const pending = await Promise.race([
+              iterator.next().then((v) => v),
+              new Promise<null>((r) => setTimeout(() => r(null), 50)),
+            ])
+            if (!pending || pending.done) break
+            const event = pending.value
+            if (
+              (event.type === EVENT_TYPES.AGENT_COMPLETED || event.type === EVENT_TYPES.AGENT_FAILED) &&
+              event.agent_id === agent.id
+            ) break
+            await writeEvent(event)
+          }
+
           // Send final result
           const result = await resultPromise
           await stream.writeSSE({
@@ -251,6 +257,7 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
               status: result.status,
               result: 'result' in result ? result.result : undefined,
               error: 'error' in result ? result.error : undefined,
+              waitingFor: 'waitingFor' in result ? result.waitingFor : undefined,
               turnCount: result.turnCount,
             }),
             id: randomUUID(),
