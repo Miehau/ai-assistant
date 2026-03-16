@@ -45,6 +45,23 @@ function stripUnsupportedSchemaKeywords(schema: Record<string, unknown>): Record
   return result
 }
 
+function logCacheStats(
+  label: string,
+  input: number,
+  cacheRead: number,
+  cacheWrite: number,
+): void {
+  const total = input + cacheRead + cacheWrite
+  if (total === 0) return
+  const hitPct = ((cacheRead / total) * 100).toFixed(1)
+  const writePct = ((cacheWrite / total) * 100).toFixed(1)
+  const freshPct = ((input / total) * 100).toFixed(1)
+  console.log(
+    `[anthropic] ${label} — cache ${hitPct}% hit, ${writePct}% write, ${freshPct}% fresh` +
+    ` (read=${cacheRead}, write=${cacheWrite}, fresh=${input}, total=${total})`,
+  )
+}
+
 function mapMessagesToAnthropic(
   messages: LLMMessage[],
 ): { system: Anthropic.TextBlockParam[] | undefined; messages: Anthropic.MessageParam[] } {
@@ -138,19 +155,17 @@ function mapMessagesToAnthropic(
   }
 
   const system: Anthropic.TextBlockParam[] | undefined = systemText != null
-    ? [{ type: 'text', text: systemText, cache_control: { type: 'ephemeral' } }]
+    ? [{ type: 'text', text: systemText }]
     : undefined
 
   return { system, messages: mapped }
 }
 
 function mapToolsToAnthropic(tools: LLMToolDefinition[]): Anthropic.Tool[] {
-  return tools.map((tool, i) => ({
+  return tools.map((tool) => ({
     name: sanitizeToolName(tool.name),
     description: tool.description,
     input_schema: stripUnsupportedSchemaKeywords(tool.parameters) as Anthropic.Tool.InputSchema,
-    // Cache the entire tools array by marking the last entry
-    ...(i === tools.length - 1 && { cache_control: { type: 'ephemeral' as const } }),
   }))
 }
 
@@ -184,6 +199,7 @@ export class AnthropicProvider implements LLMProvider {
       model: request.model,
       max_tokens: request.max_tokens ?? 4096,
       messages,
+      cache_control: { type: 'ephemeral' },
       ...(system && { system }),
       ...(tools && { tools }),
       ...(toolChoice && { tool_choice: toolChoice }),
@@ -192,12 +208,12 @@ export class AnthropicProvider implements LLMProvider {
 
     const response = await this.client.messages.create(params)
 
-    if (response.usage.cache_read_input_tokens) {
-      console.log(
-        `[anthropic] cache hit — read ${response.usage.cache_read_input_tokens} tokens` +
-        (response.usage.cache_creation_input_tokens ? `, wrote ${response.usage.cache_creation_input_tokens}` : ''),
-      )
-    }
+    logCacheStats(
+      'generate',
+      response.usage.input_tokens,
+      response.usage.cache_read_input_tokens ?? 0,
+      response.usage.cache_creation_input_tokens ?? 0,
+    )
 
     return mapAnthropicResponse(response, !!request.structured_output)
   }
@@ -224,6 +240,7 @@ export class AnthropicProvider implements LLMProvider {
       model: request.model,
       max_tokens: request.max_tokens ?? 4096,
       messages,
+      cache_control: { type: 'ephemeral' },
       ...(system && { system }),
       ...(tools && { tools }),
       ...(toolChoice && { tool_choice: toolChoice }),
@@ -249,12 +266,7 @@ export class AnthropicProvider implements LLMProvider {
             inputTokens = event.message.usage.input_tokens
             cacheReadTokens = event.message.usage.cache_read_input_tokens ?? 0
             cacheCreationTokens = event.message.usage.cache_creation_input_tokens ?? 0
-            if (cacheReadTokens > 0) {
-              console.log(
-                `[anthropic] cache hit (stream) — read ${cacheReadTokens} tokens` +
-                (cacheCreationTokens > 0 ? `, wrote ${cacheCreationTokens}` : ''),
-              )
-            }
+            logCacheStats('stream', inputTokens, cacheReadTokens, cacheCreationTokens)
           }
           break
 
