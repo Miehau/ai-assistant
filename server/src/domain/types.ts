@@ -19,6 +19,7 @@ export interface AgentConfig {
   max_turns: number
   max_tool_calls_per_step: number
   tool_execution_timeout_ms: number
+  system_prompt?: string
 }
 
 export interface Agent {

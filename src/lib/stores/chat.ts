@@ -15,7 +15,7 @@ import { startAgentEventBridge } from '$lib/services/eventBridge';
 import { streamMessageViaHono } from '$lib/services/honoEventBridge';
 import { honoBackend } from '$lib/stores/honoBackend.svelte';
 import { AGENT_EVENT_TYPES } from '$lib/types/events';
-import type { AgentEvent, Attachment, ToolCallRecord } from '$lib/types';
+import type { AgentEvent, Attachment, ToolCallRecord, MessageSegment } from '$lib/types';
 import { CustomProviderService } from '$lib/services/customProvider';
 import type { CustomBackend } from '$lib/types/customBackend';
 import type {
@@ -89,6 +89,28 @@ let requestWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
 const cancelledAssistantMessageIds = new Set<string>();
 const TOOL_ACTIVITY_LIMIT = 8;
 const toolCallsByMessageId = new Map<string, Map<string, ToolCallRecord>>();
+const segmentsByMessageId = new Map<string, MessageSegment[]>();
+/** Tracks how much of the accumulated streaming text has already been captured as text segments. */
+let segmentedTextLength = 0;
+
+function appendSegment(messageId: string, segment: MessageSegment) {
+  const existing = segmentsByMessageId.get(messageId) ?? [];
+  segmentsByMessageId.set(messageId, [...existing, segment]);
+}
+
+/**
+ * Flush any un-segmented streaming text as a text segment.
+ * Call this BEFORE appending a tool segment so text appears in correct order.
+ */
+function flushTextSegment(messageId: string, fullText: string) {
+  if (fullText.length > segmentedTextLength) {
+    const newText = fullText.slice(segmentedTextLength);
+    if (newText.trim().length > 0) {
+      appendSegment(messageId, { kind: 'text', content: newText });
+    }
+    segmentedTextLength = fullText.length;
+  }
+}
 
 function normalizeSuccess(value: unknown): boolean | undefined {
   if (value === true || value === false) return value;
@@ -330,6 +352,7 @@ function resetStreamingState() {
   streamingMessage.set('');
   streamingChunkBuffer = '';
   streamingFlushPending = false;
+  segmentedTextLength = 0;
   isLoading.set(false);
 }
 
@@ -458,6 +481,7 @@ function handleAgentEvent(event: AgentEvent) {
       pendingToolApprovals.set([]);
       toolActivity.set([]);
       toolCallsByMessageId.clear();
+      segmentsByMessageId.clear();
       cancelledAssistantMessageIds.clear();
       agentPhase.set(null);
       agentPlan.set(null);
@@ -531,6 +555,13 @@ function handleAgentEvent(event: AgentEvent) {
       const hasToolCalls = Boolean(toolCalls && toolCalls.length > 0);
       const hasContent = payload.content.trim().length > 0;
 
+      // Capture any remaining un-segmented text (text after the last tool call)
+      if (hasContent) {
+        flushTextSegment(payload.message_id, payload.content);
+      }
+      const segments = segmentsByMessageId.get(payload.message_id);
+      const hasSegments = segments && segments.length > 0;
+
       if (!hasContent && !hasToolCalls) {
         messages.update((msgs) => msgs.filter((msg) => msg.id !== payload.message_id));
       } else {
@@ -544,6 +575,7 @@ function handleAgentEvent(event: AgentEvent) {
             timestamp: payload.timestamp_ms,
             tool_calls: toolCalls,
             isError: isAgentErrorContent(content),
+            segments: hasSegments ? segments : undefined,
           };
 
           if (existingIndex === -1) {
@@ -556,6 +588,7 @@ function handleAgentEvent(event: AgentEvent) {
             ...newMessage,
             attachments: existing.attachments,
             tool_calls: toolCalls ?? existing.tool_calls,
+            segments: hasSegments ? segments : existing.segments,
           };
           const next = [...msgs];
           next[existingIndex] = updated;
@@ -586,6 +619,11 @@ function handleAgentEvent(event: AgentEvent) {
           parent_session_id: payload.parent_session_id,
           is_sub_agent: payload.is_sub_agent,
         });
+        // Flush any accumulated streaming text as a text segment BEFORE the tool segment
+        // so the interleaved order is preserved: text → tool → text → tool → ...
+        const accumulatedText = get(streamingMessage) + streamingChunkBuffer;
+        flushTextSegment(payload.message_id, accumulatedText);
+        appendSegment(payload.message_id, { kind: 'tool', execution_id: payload.execution_id });
       }
 
       toolActivity.update((entries) => {
@@ -1362,7 +1400,7 @@ export async function sendMessage() {
             model: selectedModelObject && selectedModelValue
               ? `${selectedModelObject.provider}:${selectedModelValue}`
               : selectedModelValue || undefined,
-            instructions: systemPromptContent,
+            systemPrompt: systemPromptContent,
           },
           handleAgentEvent,
           honoStreamController.signal,

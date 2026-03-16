@@ -45,6 +45,11 @@ export interface DisplayMessage extends BaseMessage {
   tool_calls?: ToolCallRecord[];
   /** Whether this message represents an error (e.g., agent error) */
   isError?: boolean;
+  /**
+   * Ordered segments for interleaved rendering (text + tool calls in streaming order).
+   * When present, use this instead of rendering tool_calls before content.
+   */
+  segments?: MessageSegment[];
 }
 
 /**
@@ -91,6 +96,14 @@ export interface MessageWithBranch extends DisplayMessage {
   /** Whether this message has child branches */
   has_branches?: boolean;
 }
+
+/**
+ * A segment within a message — either a text block or a tool call reference.
+ * Used to render interleaved text and tool calls in streaming order.
+ */
+export type MessageSegment =
+  | { kind: 'text'; content: string }
+  | { kind: 'tool'; execution_id: string };
 
 export interface ToolCallRecord {
   execution_id: string;

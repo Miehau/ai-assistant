@@ -3,7 +3,7 @@
   import ChatMessage from "../ChatMessage.svelte";
   import { fade, fly, scale } from "svelte/transition";
   import { backOut } from "svelte/easing";
-  import type { Message } from "$lib/types";
+  import type { Message, ToolCallRecord } from "$lib/types";
   import { streamingMessage, isStreaming } from "$lib/stores/chat";
   import { pageVisible } from "$lib/stores/visibility";
   import ToolApprovalQueue from "./ToolApprovalQueue.svelte";
@@ -328,60 +328,127 @@
   {/if}
 
   {#each visibleMessages as msg, i (msg.id || `${msg.type}-${i}`)}
-    {#if msg.type === "received" && msg.tool_calls && msg.tool_calls.length > 0}
-      {@const toolGroups = groupToolCallsBySession(msg.tool_calls)}
-      {#each toolGroups as group (group.isSubAgent ? group.sessionId : group.calls[0]?.execution_id)}
-        {#if i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
-          <div
-            in:fly={{ y: 10, duration: 150, easing: backOut }}
-            class="w-full message-container flex justify-start"
-          >
-            {#if group.isSubAgent}
-              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
-            {:else}
-              <ToolCallBubble call={group.calls[0]} />
-            {/if}
-          </div>
-        {:else}
-          <div class="w-full message-container flex justify-start">
-            {#if group.isSubAgent}
-              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
-            {:else}
-              <ToolCallBubble call={group.calls[0]} />
-            {/if}
-          </div>
+    {@const animated = i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
+    {#if msg.segments && msg.segments.length > 0}
+      <!-- Interleaved rendering: text and tool calls in streaming order -->
+      {@const toolCallMap = Object.fromEntries((msg.tool_calls ?? []).map((tc: ToolCallRecord) => [tc.execution_id, tc]))}
+      {#each msg.segments as segment, si (segment.kind === 'tool' ? segment.execution_id : `text-${i}-${si}`)}
+        {#if segment.kind === 'text' && segment.content.trim().length > 0}
+          {#if animated}
+            <div
+              in:fly={{ y: 10, duration: 150, easing: backOut }}
+              out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
+              class="w-full message-container"
+            >
+              <ChatMessage
+                type={msg.type}
+                content={segment.content}
+                attachments={msg.attachments}
+                messageId={msg.id}
+                conversationId={conversationId}
+                agentActivity={msg.agentActivity}
+                isError={msg.isError}
+              />
+            </div>
+          {:else}
+            <div class="w-full message-container">
+              <ChatMessage
+                type={msg.type}
+                content={segment.content}
+                attachments={msg.attachments}
+                messageId={msg.id}
+                conversationId={conversationId}
+                agentActivity={msg.agentActivity}
+                isError={msg.isError}
+              />
+            </div>
+          {/if}
+        {:else if segment.kind === 'tool'}
+          {@const toolCall = toolCallMap[segment.execution_id]}
+          {#if toolCall}
+            {@const toolGroups = groupToolCallsBySession([toolCall])}
+            {#each toolGroups as group (group.isSubAgent ? group.sessionId : group.calls[0]?.execution_id)}
+              {#if animated}
+                <div
+                  in:fly={{ y: 10, duration: 150, easing: backOut }}
+                  class="w-full message-container flex justify-start"
+                >
+                  {#if group.isSubAgent}
+                    <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
+                  {:else}
+                    <ToolCallBubble call={group.calls[0]} />
+                  {/if}
+                </div>
+              {:else}
+                <div class="w-full message-container flex justify-start">
+                  {#if group.isSubAgent}
+                    <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
+                  {:else}
+                    <ToolCallBubble call={group.calls[0]} />
+                  {/if}
+                </div>
+              {/if}
+            {/each}
+          {/if}
         {/if}
       {/each}
-    {/if}
-    {#if shouldRenderMessage(msg)}
-      {#if i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
-        <div
-          in:fly={{ y: 10, duration: 150, easing: backOut }}
-          out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
-          class="w-full message-container"
-        >
-          <ChatMessage
-            type={msg.type}
-            content={msg.content}
-            attachments={msg.attachments}
-            messageId={msg.id}
-            conversationId={conversationId}
-            agentActivity={msg.agentActivity}
-            isError={msg.isError}
-          />
-        </div>
-      {:else}
-        <div class="w-full message-container">
-          <ChatMessage
-            type={msg.type}
-            content={msg.content}
-            attachments={msg.attachments}
-            messageId={msg.id}
-            conversationId={conversationId}
-            agentActivity={msg.agentActivity}
-            isError={msg.isError}
-          />
-        </div>
+    {:else}
+      <!-- Legacy rendering: tool calls first, then message text -->
+      {#if msg.type === "received" && msg.tool_calls && msg.tool_calls.length > 0}
+        {@const toolGroups = groupToolCallsBySession(msg.tool_calls)}
+        {#each toolGroups as group (group.isSubAgent ? group.sessionId : group.calls[0]?.execution_id)}
+          {#if animated}
+            <div
+              in:fly={{ y: 10, duration: 150, easing: backOut }}
+              class="w-full message-container flex justify-start"
+            >
+              {#if group.isSubAgent}
+                <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
+              {:else}
+                <ToolCallBubble call={group.calls[0]} />
+              {/if}
+            </div>
+          {:else}
+            <div class="w-full message-container flex justify-start">
+              {#if group.isSubAgent}
+                <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
+              {:else}
+                <ToolCallBubble call={group.calls[0]} />
+              {/if}
+            </div>
+          {/if}
+        {/each}
+      {/if}
+      {#if shouldRenderMessage(msg)}
+        {#if animated}
+          <div
+            in:fly={{ y: 10, duration: 150, easing: backOut }}
+            out:scale={{ duration: 100, start: 0.98, opacity: 0 }}
+            class="w-full message-container"
+          >
+            <ChatMessage
+              type={msg.type}
+              content={msg.content}
+              attachments={msg.attachments}
+              messageId={msg.id}
+              conversationId={conversationId}
+              agentActivity={msg.agentActivity}
+              isError={msg.isError}
+            />
+          </div>
+        {:else}
+          <div class="w-full message-container">
+            <ChatMessage
+              type={msg.type}
+              content={msg.content}
+              attachments={msg.attachments}
+              messageId={msg.id}
+              conversationId={conversationId}
+              agentActivity={msg.agentActivity}
+              isError={msg.isError}
+            />
+          </div>
+        {/if}
       {/if}
     {/if}
   {/each}

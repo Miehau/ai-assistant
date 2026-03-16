@@ -121,6 +121,7 @@ export async function runAgent(
       const messages = buildControllerMessages(systemPrompt, toolListStr, items, {
         useNativeFunctionCalling: useNativeTools,
         agentTask: ctx.agent.task,
+        customSystemPrompt: ctx.agent.config.system_prompt,
       })
 
       // 2. Call LLM provider

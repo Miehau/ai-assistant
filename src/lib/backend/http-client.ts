@@ -48,6 +48,7 @@ export interface CompletionRequest {
   model?: string;
   input: string | Item[];
   instructions?: string;
+  systemPrompt?: string;
   tools?: string[];
   stream?: boolean;
   temperature?: number;

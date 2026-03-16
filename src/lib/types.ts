@@ -16,7 +16,8 @@ import type {
     MessageTreeNode as MessageTreeNodeType,
     BaseMessage,
     ToolCallRecord,
-    ToolExecutionDbRecord
+    ToolExecutionDbRecord,
+    MessageSegment
 } from './types/message';
 import type { Attachment, FileMetadata } from './types/attachments';
 import type { AgentTraceEntry } from './types/agent';
@@ -43,6 +44,7 @@ export type {
     AgentEventType,
     ToolCallRecord,
     ToolExecutionDbRecord,
+    MessageSegment,
     ToolMetadata,
     IntegrationMetadata,
     GoogleCalendarListItem,

@@ -56,6 +56,7 @@ export function chatRoutes(runtime: RuntimeContext) {
         model?: string
         input: string | Item[]
         instructions?: string
+        systemPrompt?: string
         tools?: string[]
         stream?: boolean
         temperature?: number
@@ -120,6 +121,7 @@ export function chatRoutes(runtime: RuntimeContext) {
             max_turns: 50,
             max_tool_calls_per_step: 10,
             tool_execution_timeout_ms: 60_000,
+            ...(body.systemPrompt ? { system_prompt: body.systemPrompt } : {}),
           },
         })
       }

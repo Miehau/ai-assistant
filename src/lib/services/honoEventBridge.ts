@@ -15,6 +15,7 @@ export interface HonoStreamOptions {
   sessionId?: string;
   model?: string;
   instructions?: string;
+  systemPrompt?: string;
 }
 
 export interface HonoStreamResult {
@@ -53,7 +54,7 @@ export async function streamMessageViaHono(
 
   for await (const sseEvent of client.sendMessageStream(
     input,
-    { sessionId: options.sessionId, model: options.model, instructions: options.instructions },
+    { sessionId: options.sessionId, model: options.model, instructions: options.instructions, systemPrompt: options.systemPrompt },
     signal,
   )) {
     const { event, data } = sseEvent;
