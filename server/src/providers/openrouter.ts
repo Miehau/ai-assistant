@@ -1,22 +1,226 @@
-import OpenAI from 'openai'
-import { OpenAIProvider } from './openai.js'
+import type {
+  LLMProvider,
+  LLMRequest,
+  LLMResponse,
+  LLMStreamEvent,
+  LLMToolCall,
+} from './types.js'
+
+const BASE_URL = 'https://openrouter.ai/api/v1/chat/completions'
+
+function buildTokenLimit(model: string, maxTokens?: number): Record<string, number> {
+  return { max_tokens: 4068 }
+}
+
+/** Replace dots with __ so tool names satisfy OpenAI's ^[a-zA-Z0-9_-]{1,64}$ requirement. */
+function sanitizeToolName(name: string): string {
+  return name.replace(/\./g, '__')
+}
+
+/** Reverse sanitizeToolName — restores original dot-separated names. */
+function restoreToolName(name: string): string {
+  return name.replace(/__/g, '.')
+}
 
 /**
- * OpenRouter provider — reuses OpenAI-compatible API with OpenRouter's base URL
- * and required HTTP headers.
+ * OpenRouter provider — raw fetch against the OpenAI-compatible
+ * /api/v1/chat/completions endpoint. Non-streaming only for simplicity.
  */
-export class OpenRouterProvider extends OpenAIProvider {
-  constructor(apiKey: string) {
-    super(apiKey, 'https://openrouter.ai/api/v1')
+export class OpenRouterProvider implements LLMProvider {
+  private apiKey: string
 
-    // Re-create the client with default headers that OpenRouter requires
-    this.client = new OpenAI({
-      apiKey,
-      baseURL: 'https://openrouter.ai/api/v1',
-      defaultHeaders: {
+  constructor(apiKey: string) {
+    this.apiKey = apiKey
+  }
+
+  async generate(request: LLMRequest): Promise<LLMResponse> {
+    const body = buildRequestBody(request)
+
+    const res = await fetch(BASE_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
         'HTTP-Referer': 'https://ai-frontend.app',
         'X-Title': 'AI Frontend',
       },
+      body: JSON.stringify(body),
+      signal: request.signal,
     })
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`OpenRouter ${res.status}: ${err}`)
+    }
+
+    const json = (await res.json()) as ChatCompletionResponse
+
+    return mapResponse(json)
   }
+
+  async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+    const response = await this.generate(request)
+
+    if (response.content) {
+      yield { type: 'text_delta', text: typeof response.content === 'string' ? response.content : String(response.content) }
+      yield { type: 'text_done', text: typeof response.content === 'string' ? response.content : String(response.content) }
+    }
+
+    yield { type: 'done', response }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Request building
+// ---------------------------------------------------------------------------
+
+function buildRequestBody(request: LLMRequest): Record<string, unknown> {
+  const messages = request.messages.map((msg) => {
+    if (msg.role === 'system') {
+      return {
+        role: 'system',
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+      }
+    }
+
+    if (msg.role === 'tool') {
+      return {
+        role: 'tool',
+        tool_call_id: msg.tool_call_id,
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+      }
+    }
+
+    if (msg.role === 'assistant') {
+      const tool_calls = msg.tool_calls?.map((tc) => ({
+        id: tc.call_id,
+        type: 'function',
+        function: {
+          name: sanitizeToolName(tc.name),
+          arguments: JSON.stringify(tc.arguments),
+        },
+      }))
+
+      return {
+        role: 'assistant',
+        content: typeof msg.content === 'string' ? msg.content : '',
+        ...(tool_calls?.length && { tool_calls }),
+      }
+    }
+
+    // user message
+    if (typeof msg.content === 'string') {
+      return { role: 'user', content: msg.content }
+    }
+
+    if (Array.isArray(msg.content)) {
+      const parts = msg.content.map((block) => {
+        if (block.type === 'text' && block.text) {
+          return { type: 'text', text: block.text }
+        }
+        if (block.type === 'image' && block.data) {
+          return {
+            type: 'image_url',
+            image_url: {
+              url: `data:${block.media_type ?? 'image/png'};base64,${block.data}`,
+            },
+          }
+        }
+        return null
+      }).filter(Boolean)
+
+      return { role: 'user', content: parts }
+    }
+
+    return { role: 'user', content: '' }
+  })
+
+  const tools = request.tools?.length
+    ? request.tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: sanitizeToolName(t.name),
+          description: t.description,
+          parameters: t.parameters,
+        },
+      }))
+    : undefined
+
+  return {
+    model: request.model,
+    messages,
+    ...(tools && { tools }),
+    ...(request.temperature !== undefined && { temperature: request.temperature }),
+    ...buildTokenLimit(request.model, request.max_tokens),
+    ...(request.structured_output && {
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'response',
+          schema: request.structured_output,
+          strict: true,
+        },
+      },
+    }),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Response mapping
+// ---------------------------------------------------------------------------
+
+function mapResponse(json: ChatCompletionResponse): LLMResponse {
+  const choice = json.choices?.[0]
+
+  if (!choice) {
+    return {
+      content: '',
+      usage: {
+        input_tokens: json.usage?.prompt_tokens ?? 0,
+        output_tokens: json.usage?.completion_tokens ?? 0,
+      },
+      finish_reason: 'stop',
+    }
+  }
+
+  const text = choice.message.content ?? choice.message.reasoning_content ?? ''
+
+  const toolCalls: LLMToolCall[] = (choice.message.tool_calls ?? []).map((tc) => ({
+    call_id: tc.id,
+    name: restoreToolName(tc.function.name),
+    arguments: tc.function.arguments ? JSON.parse(tc.function.arguments) : {},
+  }))
+
+  return {
+    content: text,
+    companion_text: toolCalls.length > 0 && text ? text : undefined,
+    tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage: {
+      input_tokens: json.usage?.prompt_tokens ?? 0,
+      output_tokens: json.usage?.completion_tokens ?? 0,
+    },
+    finish_reason: choice.finish_reason ?? 'stop',
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface ChatCompletionResponse {
+  choices?: Array<{
+    index: number
+    message: {
+      role: string
+      content: string | null
+      reasoning_content?: string
+      tool_calls?: Array<{
+        id: string
+        type: string
+        function: { name: string; arguments: string }
+      }>
+    }
+    finish_reason: string | null
+  }>
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
 }
