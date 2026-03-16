@@ -366,8 +366,8 @@ function mapAnthropicResponse(
   const usage = {
     input_tokens: response.usage.input_tokens,
     output_tokens: response.usage.output_tokens,
-    ...((response.usage.cache_read_input_tokens ?? 0) > 0 && { cache_read_input_tokens: response.usage.cache_read_input_tokens }),
-    ...((response.usage.cache_creation_input_tokens ?? 0) > 0 && { cache_creation_input_tokens: response.usage.cache_creation_input_tokens }),
+    ...((response.usage.cache_read_input_tokens ?? 0) > 0 && { cache_read_input_tokens: response.usage.cache_read_input_tokens ?? undefined }),
+    ...((response.usage.cache_creation_input_tokens ?? 0) > 0 && { cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? undefined }),
   }
 
   // For structured output, return the _structured_output tool's input as content

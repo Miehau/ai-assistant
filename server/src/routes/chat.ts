@@ -43,8 +43,10 @@ function formatOutput(items: Item[]): Item[] {
 // Routes
 // ---------------------------------------------------------------------------
 
-export function chatRoutes(runtime: RuntimeContext): Hono {
-  const app = new Hono()
+type ChatEnv = { Variables: { userId: string } }
+
+export function chatRoutes(runtime: RuntimeContext) {
+  const app = new Hono<ChatEnv>()
 
   // POST /completions — Start or continue a conversation
   app.post('/completions', async (c) => {
@@ -61,13 +63,7 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
       }>()
 
       const model = body.model ?? runtime.config.defaultModel
-
-      // Resolve user — look up dev user by API key hash for now
-      // TODO: extract from auth middleware when auth is wired
-      const { createHash } = await import('node:crypto')
-      const devHash = createHash('sha256').update('dev-key').digest('hex')
-      const devUser = await runtime.repositories.users.getByApiKeyHash(devHash)
-      const userId = devUser?.id ?? 'unknown'
+      const userId = c.get('userId') as string
 
       // 1. Get or create session
       let sessionId = body.sessionId
@@ -86,31 +82,56 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
         }
       }
 
-      // 2. Create agent with task from input
-      const task = typeof body.input === 'string'
-        ? body.input
-        : JSON.stringify(body.input)
+      // 2. Reuse existing root agent or create a new one
+      let agent = await runtime.repositories.agents.findRootAgent(sessionId)
 
-      const agent = await runtime.repositories.agents.create({
-        sessionId,
-        task,
-        config: {
-          model,
-          provider: extractProviderName(model),
-          max_turns: 50,
-          max_tool_calls_per_step: 10,
-          tool_execution_timeout_ms: 60_000,
-        },
-      })
+      if (agent && (agent.status === 'completed' || agent.status === 'failed')) {
+        // Resume the existing agent — add new message and re-run
+        await runtime.repositories.agents.update(agent.id, {
+          status: 'running',
+          result: null,
+          error: null,
+          completedAt: null,
+        })
+        agent = (await runtime.repositories.agents.getById(agent.id))!
+      } else if (agent && (agent.status === 'running' || agent.status === 'waiting')) {
+        // Agent is still active — return its current state
+        const items = await runtime.repositories.items.listByAgent(agent.id)
+        const output = formatOutput(items)
+        return c.json({
+          id: agent.id,
+          sessionId,
+          status: agent.status,
+          output,
+          waitingFor: agent.waitingFor.length > 0 ? agent.waitingFor : undefined,
+        }, 202)
+      } else {
+        // No root agent — create one
+        const task = typeof body.input === 'string'
+          ? body.input
+          : JSON.stringify(body.input)
 
-      // Store user input as an item
+        agent = await runtime.repositories.agents.create({
+          sessionId,
+          task,
+          config: {
+            model,
+            provider: extractProviderName(model),
+            max_turns: 50,
+            max_tool_calls_per_step: 10,
+            tool_execution_timeout_ms: 60_000,
+          },
+        })
+      }
+
+      // 3. Store user input as item(s) on the agent
       if (typeof body.input === 'string') {
         await runtime.repositories.items.create({
           agentId: agent.id,
           type: 'message',
           role: 'user',
           content: body.input,
-          turnNumber: 0,
+          turnNumber: agent.turnCount,
         })
       } else if (Array.isArray(body.input)) {
         for (const item of body.input) {
@@ -124,7 +145,7 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
             arguments: item.arguments ?? null,
             output: item.output ?? null,
             isError: item.isError ?? null,
-            turnNumber: 0,
+            turnNumber: agent.turnCount,
           })
         }
       }
@@ -136,48 +157,42 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
           type: 'message',
           role: 'system',
           content: body.instructions,
-          turnNumber: 0,
+          turnNumber: agent.turnCount,
         })
       }
 
-      // 3. Resolve provider and build deps
+      // 4. Resolve provider and build deps
       const deps = buildDeps(runtime, model)
 
-      // 4. Streaming vs non-streaming
+      // 5. Streaming vs non-streaming
       if (body.stream) {
         return streamSSE(c, async (stream) => {
-          // Subscribe to events for this agent
           const eventStream = runtime.events.subscribe({
             session_id: sessionId,
           })
 
-          // Awaited text delta writer — each chunk is flushed before the next arrives
           const writeTextDelta = async (text: string) => {
             await stream.writeSSE({
               event: 'text_delta',
-              data: JSON.stringify({ type: 'text_delta', agentId: agent.id, sessionId, text }),
+              data: JSON.stringify({ type: 'text_delta', agentId: agent!.id, sessionId, text }),
               id: randomUUID(),
             })
           }
 
-          // Run the agent in background with direct text delta callback
-          const resultPromise = runAgent(agent.id, deps, { stream: true, onTextDelta: writeTextDelta }).catch((err) => ({
-            agentId: agent.id,
+          const resultPromise = runAgent(agent!.id, deps, { stream: true, onTextDelta: writeTextDelta }).catch((err) => ({
+            agentId: agent!.id,
             status: 'failed' as const,
             error: err instanceof Error ? err.message : String(err),
             turnCount: 0,
           }))
 
-          // Pipe non-text events as SSE (text_delta already handled by onTextDelta)
           const iterator = eventStream[Symbol.asyncIterator]()
 
-          // Maps an internal event to an SSE event name, or null to skip
           const mapEventToSSE = (event: { type: string; agent_id: string }): string | null => {
             if (event.type === EVENT_TYPES.TEXT_DELTA) return null
-            // Root agent done/failed handled separately
             if (
               (event.type === EVENT_TYPES.AGENT_COMPLETED || event.type === EVENT_TYPES.AGENT_FAILED) &&
-              event.agent_id === agent.id
+              event.agent_id === agent!.id
             ) return null
 
             switch (event.type) {
@@ -209,7 +224,7 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
             })
           }
 
-          // Phase 1: consume events until the agent finishes or waits
+          // Consume events until the agent finishes or waits
           let agentDone = false
           resultPromise.then(() => { agentDone = true })
 
@@ -224,15 +239,14 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
             const event = next.value
             if (
               (event.type === EVENT_TYPES.AGENT_COMPLETED || event.type === EVENT_TYPES.AGENT_FAILED) &&
-              event.agent_id === agent.id
+              event.agent_id === agent!.id
             ) break
 
             await writeEvent(event)
           }
 
-          // Phase 2: drain any events that were queued before the agent finished
-          // but not yet consumed (race condition between event emission and loop exit).
-          // A short timeout detects when the queue is empty.
+          // Drain queued events — the iterator yields synchronously from its buffer
+          // when events are already queued, so this loop finishes immediately once empty.
           while (true) {
             const pending = await Promise.race([
               iterator.next().then((v) => v),
@@ -242,7 +256,7 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
             const event = pending.value
             if (
               (event.type === EVENT_TYPES.AGENT_COMPLETED || event.type === EVENT_TYPES.AGENT_FAILED) &&
-              event.agent_id === agent.id
+              event.agent_id === agent!.id
             ) break
             await writeEvent(event)
           }
@@ -252,7 +266,7 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
           await stream.writeSSE({
             event: 'done',
             data: JSON.stringify({
-              id: agent.id,
+              id: agent!.id,
               sessionId,
               status: result.status,
               result: 'result' in result ? result.result : undefined,
@@ -263,15 +277,14 @@ export function chatRoutes(runtime: RuntimeContext): Hono {
             id: randomUUID(),
           })
 
-          // Clean up the iterator
           await iterator.return?.()
         })
       }
 
-      // 5. Non-streaming: run agent synchronously
+      // 6. Non-streaming: run agent synchronously
       const result = await runAgent(agent.id, deps)
 
-      // 6. Get output items
+      // 7. Get output items
       const items = await runtime.repositories.items.listByAgent(agent.id)
       const output = formatOutput(items)
 

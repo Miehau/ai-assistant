@@ -134,6 +134,7 @@ export interface AgentRepository {
   getById(id: string): Promise<Agent | null>
   update(id: string, input: UpdateAgentInput): Promise<Agent>
   findWaitingForCall(callId: string): Promise<Agent | null>
+  findRootAgent(sessionId: string): Promise<Agent | null>
   listBySession(sessionId: string): Promise<Agent[]>
   listByParent(parentId: string): Promise<Agent[]>
 }
@@ -163,6 +164,7 @@ export interface ToolOutputRepository {
   save(input: SaveToolOutputInput): Promise<ToolOutput>
   getById(id: string): Promise<ToolOutput | null>
   listByAgent(agentId: string): Promise<ToolOutput[]>
+  getLastId(agentId: string): Promise<string | undefined>
 }
 
 export interface ModelRepository {

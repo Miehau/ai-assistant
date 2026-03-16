@@ -3,7 +3,6 @@ export interface ToolExecutor {
     name: string,
     args: Record<string, unknown>,
     ctx: ToolContext,
-    options?: { save?: boolean },
   ): Promise<ToolResult>
   executeBatch(calls: ToolCall[], ctx: ToolContext): Promise<ToolBatchResult>
   getMetadata(name: string): ToolMetadata | undefined
@@ -17,6 +16,8 @@ export interface ToolMetadata {
   description: string
   parameters: Record<string, unknown> // JSON Schema
   requires_approval: boolean
+  /** Tool is intercepted by the orchestrator — handler is not called directly. */
+  orchestrator_intercept?: boolean
 }
 
 export interface ToolContext {

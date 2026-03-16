@@ -211,6 +211,13 @@ export async function streamMessageViaHono(
       resultSessionId = (data.sessionId as string | undefined)
         ?? ((data.response as Record<string, unknown> | undefined)?.sessionId as string | undefined);
 
+      // Propagate agent failures as thrown errors so the chat store shows an error state
+      // rather than silently completing with empty content (which gets filtered out).
+      if (data.status === 'failed') {
+        const errorMsg = (data.error as string) ?? 'Agent run failed';
+        throw new Error(errorMsg);
+      }
+
       // Final-fallback: if agent ended waiting with approvals not yet surfaced, surface them now
       if (data.status === 'waiting') {
         const waitingFor = data.waitingFor as Array<{
@@ -241,12 +248,20 @@ export async function streamMessageViaHono(
         }
       }
 
+      // Prefer the server's parsed result over raw streamed text when non-empty.
+      // For native providers (anthropic, openai, openrouter) the model streams
+      // text via text_delta and `data.result` holds the same final text — either
+      // works as the authoritative content.  Use `||` (not `??`) so an empty
+      // string `result` falls back to accumulated fullText from text_delta events.
+      const serverResult = data.result as string | undefined;
+      const content = serverResult || fullText;
+
       onEvent({
         event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_COMPLETED,
         payload: {
           conversation_id: conversationId,
           message_id: messageId,
-          content: fullText,
+          content,
           timestamp_ms: ts(),
         },
         timestamp_ms: ts(),

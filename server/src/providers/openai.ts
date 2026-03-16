@@ -10,6 +10,27 @@ import type {
   LLMContentBlock,
 } from './types.js'
 
+/**
+ * GPT-5 family models require `max_completion_tokens` instead of `max_tokens`.
+ * Sending `max_tokens` to GPT-5 causes a 400 error; omitting both causes 0 output tokens.
+ */
+const DEFAULT_MAX_COMPLETION_TOKENS = 16384
+
+function needsMaxCompletionTokens(model: string): boolean {
+  const m = model.toLowerCase()
+  return m.includes('gpt-5') || m.includes('o3') || m.includes('o4')
+}
+
+function buildTokenLimit(model: string, maxTokens?: number): Record<string, number> {
+  if (needsMaxCompletionTokens(model)) {
+    return { max_completion_tokens: maxTokens ?? DEFAULT_MAX_COMPLETION_TOKENS }
+  }
+  if (maxTokens !== undefined) {
+    return { max_tokens: maxTokens }
+  }
+  return {}
+}
+
 function mapMessagesToOpenAI(messages: LLMMessage[]): OpenAI.ChatCompletionMessageParam[] {
   const mapped: OpenAI.ChatCompletionMessageParam[] = []
 
@@ -105,7 +126,7 @@ export class OpenAIProvider implements LLMProvider {
       messages,
       ...(tools && { tools }),
       ...(request.temperature !== undefined && { temperature: request.temperature }),
-      ...(request.max_tokens !== undefined && { max_tokens: request.max_tokens }),
+      ...buildTokenLimit(request.model, request.max_tokens),
     }
 
     // Structured output via json_schema response format
@@ -135,7 +156,7 @@ export class OpenAIProvider implements LLMProvider {
       stream: true,
       ...(tools && { tools }),
       ...(request.temperature !== undefined && { temperature: request.temperature }),
-      ...(request.max_tokens !== undefined && { max_tokens: request.max_tokens }),
+      ...buildTokenLimit(request.model, request.max_tokens),
     }
 
     if (request.structured_output) {
@@ -177,6 +198,14 @@ export class OpenAIProvider implements LLMProvider {
       if (delta?.content) {
         fullText += delta.content
         yield { type: 'text_delta', text: delta.content }
+      }
+
+      // Reasoning models (GPT-5, o-series) may stream thinking via reasoning_content
+      // which isn't in the SDK types yet — access it from the raw object.
+      const reasoningChunk = (delta as Record<string, unknown>)?.reasoning_content as string | undefined
+      if (reasoningChunk) {
+        fullText += reasoningChunk
+        yield { type: 'text_delta', text: reasoningChunk }
       }
 
       // Tool call deltas
@@ -252,6 +281,7 @@ export class OpenAIProvider implements LLMProvider {
 
 function mapOpenAIResponse(response: OpenAI.ChatCompletion): LLMResponse {
   const choice = response.choices[0]
+
   if (!choice) {
     return {
       content: '',
@@ -263,7 +293,12 @@ function mapOpenAIResponse(response: OpenAI.ChatCompletion): LLMResponse {
     }
   }
 
-  const text = choice.message.content ?? ''
+  // Reasoning models (GPT-5, o-series) may put output in reasoning_content
+  const rawMessage = choice.message as unknown as Record<string, unknown>
+  const text = choice.message.content
+    ?? (rawMessage.reasoning_content as string | undefined)
+    ?? ''
+
   const toolCalls: LLMToolCall[] = (choice.message.tool_calls ?? []).map((tc) => ({
     call_id: tc.id,
     name: tc.function.name,

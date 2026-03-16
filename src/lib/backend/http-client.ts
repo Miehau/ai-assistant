@@ -452,6 +452,31 @@ export class HttpBackendClient {
     return this.request<ModelInfo[]>('GET', '/api/models', undefined, signal);
   }
 
+  async addModel(
+    provider: string,
+    modelName: string,
+    displayName?: string,
+    contextWindow?: number,
+    maxTokens?: number,
+    signal?: AbortSignal,
+  ): Promise<ModelInfo> {
+    return this.request<ModelInfo>(
+      'POST',
+      '/api/models',
+      { provider, modelName, displayName, contextWindow, maxTokens },
+      signal,
+    );
+  }
+
+  async deleteModel(id: string, signal?: AbortSignal): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(
+      'DELETE',
+      `/api/models/${id}`,
+      undefined,
+      signal,
+    );
+  }
+
   // ========================================================================
   // Tools
   // ========================================================================

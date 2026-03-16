@@ -338,10 +338,10 @@ async function main() {
     console.log('\n13. Event emitter')
     let receivedEvent: any = null
     const testEvent = {
-      type: 'agent:started',
+      type: 'agent:started' as const,
       agent_id: 'test-agent',
       session_id: 'test-session',
-      payload: { foo: 'bar' },
+      payload: { task: 'test-task', model: 'test-model', parentId: null, depth: 0 },
       timestamp: Date.now(),
     }
 
@@ -357,7 +357,7 @@ async function main() {
     assert(receivedEvent != null, 'Event emitter delivers events')
     assert(receivedEvent.type === 'agent:started', 'Received event type matches')
     assert(receivedEvent.agent_id === 'test-agent', 'Received event agent_id matches')
-    assert((receivedEvent.payload as any).foo === 'bar', 'Received event payload matches')
+    assert((receivedEvent.payload as any).task === 'test-task', 'Received event payload matches')
 
     // Test filtering - event should not match different agent_id
     let filterTimeout = false

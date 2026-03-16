@@ -1,6 +1,10 @@
 import { EventEmitter } from 'events'
 import type { AgentEvent, EventFilter, EventSink, EventSource } from './types.js'
 
+// Drop oldest events when a subscriber falls behind — prevents unbounded memory growth
+// under slow SSE clients or paused consumers.
+const MAX_QUEUE_SIZE = 500
+
 function matchesFilter(event: AgentEvent, filter: EventFilter): boolean {
   if (filter.agent_id && event.agent_id !== filter.agent_id) return false
   if (filter.session_id && event.session_id !== filter.session_id) return false
@@ -30,6 +34,9 @@ export class AgentEventEmitter implements EventSink, EventSource {
             resolve = null
             r({ value: event, done: false })
           } else {
+            if (queue.length >= MAX_QUEUE_SIZE) {
+              queue.shift() // drop oldest to maintain backpressure bound
+            }
             queue.push(event)
           }
         }
@@ -71,14 +78,22 @@ export class AgentEventEmitter implements EventSink, EventSource {
     }
   }
 
-  subscribeOnce(filter: EventFilter): Promise<AgentEvent> {
-    return new Promise<AgentEvent>((resolve) => {
+  subscribeOnce(filter: EventFilter, signal?: AbortSignal): Promise<AgentEvent> {
+    return new Promise<AgentEvent>((resolve, reject) => {
       const listener = (event: AgentEvent) => {
         if (!matchesFilter(event, filter)) return
+        signal?.removeEventListener('abort', onAbort)
         this.emitter.off('event', listener)
         resolve(event)
       }
+
+      const onAbort = () => {
+        this.emitter.off('event', listener)
+        reject(new DOMException('subscribeOnce aborted', 'AbortError'))
+      }
+
       this.emitter.on('event', listener)
+      signal?.addEventListener('abort', onAbort, { once: true })
     })
   }
 }

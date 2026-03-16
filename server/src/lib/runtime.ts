@@ -47,6 +47,8 @@ export interface RuntimeContext {
   events: EventSink & EventSource
   config: AppConfig
   db: DrizzleInstance
+  /** AbortController for graceful shutdown — aborts all in-flight agent runs. */
+  shutdownController: AbortController
 }
 
 export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
@@ -57,7 +59,11 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
 
   // 2. Create database connection and repositories
   const db = createDatabase(config.databaseUrl)
-  const repos = new SQLiteRepositories(db)
+  const repos = new SQLiteRepositories(db, config.encryptionKey)
+
+  if (!config.encryptionKey) {
+    logger.warn('ENCRYPTION_KEY not set — API keys stored without encryption. Set ENCRYPTION_KEY in .env for production.')
+  }
 
   // 3. Seed dev user
   const devUser = await seedDevUser(db)
@@ -67,7 +73,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   const events = new AgentEventEmitter()
 
   // 5. Create tool registry and register all tools
-  const tools = new ToolRegistryImpl(repos.toolOutputs)
+  const tools = new ToolRegistryImpl()
   registerFileTools(tools)
   registerShellTools(tools)
   registerWebTools(tools)
@@ -132,12 +138,36 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     events,
     config,
     db,
+    shutdownController: new AbortController(),
   }
 }
 
 export async function shutdownRuntime(runtime: RuntimeContext): Promise<void> {
-  logger.info('Shutting down runtime')
-  // Close the database connection if the underlying driver exposes it.
-  // DrizzleInstance wraps better-sqlite3 which is synchronous — no async cleanup needed.
-  // The process exit will finalize WAL and release the file lock.
+  logger.info('Shutting down runtime — aborting in-flight agents')
+
+  // Signal all in-flight agent runs to abort
+  runtime.shutdownController.abort()
+
+  // Mark any running/waiting agents as failed so they don't appear stuck on restart
+  try {
+    const { agents } = await import('../db/schema.js')
+    const { eq: eqOp, or: orOp } = await import('drizzle-orm')
+    runtime.db.update(agents)
+      .set({
+        status: 'failed',
+        error: 'Server shutdown',
+        completedAt: Date.now(),
+      })
+      .where(
+        orOp(
+          eqOp(agents.status, 'running'),
+          eqOp(agents.status, 'waiting'),
+        )!,
+      )
+      .run()
+  } catch {
+    // Best-effort — don't block shutdown
+  }
+
+  logger.info('Runtime shutdown complete')
 }

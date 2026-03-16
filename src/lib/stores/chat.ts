@@ -846,6 +846,28 @@ export async function loadModels(options: { force?: boolean } = {}) {
       // Add custom backend models to the list
       combinedModels.push(...customBackendModels);
 
+      // In server (Hono) mode, also load models registered in the server DB
+      if (honoBackend.enabled) {
+        try {
+          const serverModels = await honoBackend.getClient().listModels();
+          for (const sm of serverModels) {
+            const alreadyPresent = combinedModels.some(
+              m => m.model_name === sm.name && m.provider === sm.provider,
+            );
+            if (!alreadyPresent) {
+              combinedModels.push({
+                provider: sm.provider,
+                model_name: sm.name,
+                name: sm.displayName ?? sm.name,
+                enabled: true,
+              });
+            }
+          }
+        } catch (e) {
+          console.warn('[ChatStore] Failed to load server models:', e);
+        }
+      }
+
       console.log('[ChatStore] Combined models count:', combinedModels.length);
       console.log('[ChatStore] Custom backend models:', customBackendModels.map(m => m.name));
 

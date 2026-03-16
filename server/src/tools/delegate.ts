@@ -2,8 +2,10 @@ import type { ToolHandler } from './types.js'
 
 /**
  * Delegate tool — spawns a child agent to handle a subtask.
- * The handler is a no-op validator; the runner intercepts tools with
- * name === 'delegate' and runs handleDelegation() instead.
+ *
+ * Marked `orchestrator_intercept: true` — the runner intercepts this tool
+ * and runs handleDelegation() instead of calling handle(). The handle()
+ * method exists only as a safety net if interception is bypassed.
  */
 export function registerDelegateTools(registry: { register: (h: ToolHandler) => void }): void {
   registry.register({
@@ -22,14 +24,10 @@ export function registerDelegateTools(registry: { register: (h: ToolHandler) => 
         required: ['task'],
       },
       requires_approval: false,
+      orchestrator_intercept: true,
     },
-    async handle(args) {
-      // Validation only — real spawning happens in runner's handleDelegation()
-      const task = (args as Record<string, unknown>).task as string
-      if (!task) {
-        return { ok: false, error: '"task" is required' }
-      }
-      return { ok: true, output: JSON.stringify({ task }) }
+    async handle() {
+      return { ok: false, error: 'delegate must be intercepted by the orchestrator — this is a bug' }
     },
   })
 }

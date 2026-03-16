@@ -3,61 +3,38 @@ import type { ToolResult } from '../tools/types.js'
 const MAX_OUTPUT_BYTES = 32 * 1024 // 32 KB
 
 // ---------------------------------------------------------------------------
-// Format a single tool result for LLM context
+// Format a tool result for storage and LLM context
 // ---------------------------------------------------------------------------
 
-export function buildToolResultMessage(
-  toolName: string,
-  callId: string,
-  result: ToolResult,
-): string {
+export function formatToolOutput(result: ToolResult | ({ call_id: string } & ToolResult)): string {
   if (!result.ok) {
-    return `[Tool Error: ${toolName}] ${result.error ?? 'Unknown error'}`
+    return result.error ?? 'Unknown error'
+  }
+  if (result.output === undefined || result.output === null) {
+    return '(no output)'
   }
 
   let body: string
-  if (result.output === undefined || result.output === null) {
-    body = '(no output)'
-  } else if (typeof result.output === 'string') {
+  if (typeof result.output === 'string') {
     body = result.output
   } else {
-    body = JSON.stringify(result.output, null, 2)
+    body = JSON.stringify(result.output)
   }
 
-  body = truncateIfNeeded(body, toolName)
-  return body
-}
-
-// ---------------------------------------------------------------------------
-// Format batch results
-// ---------------------------------------------------------------------------
-
-export function buildBatchResultMessage(
-  results: Array<{ callId: string; name: string; result: ToolResult }>,
-): string {
-  const parts = results.map((r) => {
-    const header = `### ${r.name} (${r.callId})`
-    const body = buildToolResultMessage(r.name, r.callId, r.result)
-    return `${header}\n${body}`
-  })
-
-  let combined = parts.join('\n\n')
-  combined = truncateIfNeeded(combined, 'batch')
-  return combined
+  return truncateIfNeeded(body)
 }
 
 // ---------------------------------------------------------------------------
 // Truncation helper
 // ---------------------------------------------------------------------------
 
-function truncateIfNeeded(text: string, toolName: string): string {
+function truncateIfNeeded(text: string): string {
   const byteLength = Buffer.byteLength(text, 'utf-8')
   if (byteLength <= MAX_OUTPUT_BYTES) {
     return text
   }
 
   // Truncate to roughly MAX_OUTPUT_BYTES (conservative: char-based cut)
-  // Walk backwards to find a safe cut point
   let cutPoint = text.length
   let currentBytes = byteLength
   while (currentBytes > MAX_OUTPUT_BYTES - 200 && cutPoint > 0) {

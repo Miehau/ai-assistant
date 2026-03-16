@@ -3,6 +3,7 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { eq, and, desc, asc, sql, max, isNull } from 'drizzle-orm'
 import { v4 as uuid } from 'uuid'
 import { createHash } from 'crypto'
+import { encrypt, decrypt, deriveKey } from '../../lib/crypto.js'
 
 import * as schema from '../../db/schema.js'
 import type {
@@ -252,23 +253,21 @@ function createSessionRepo(db: DrizzleInstance): SessionRepository {
     },
 
     async delete(id: string): Promise<void> {
-      // Delete items belonging to agents of this session
-      const agentRows = db
-        .select({ id: schema.agents.id })
-        .from(schema.agents)
-        .where(eq(schema.agents.sessionId, id))
-        .all()
+      db.transaction((tx) => {
+        const agentRows = tx
+          .select({ id: schema.agents.id })
+          .from(schema.agents)
+          .where(eq(schema.agents.sessionId, id))
+          .all()
 
-      for (const agent of agentRows) {
-        db.delete(schema.items).where(eq(schema.items.agentId, agent.id)).run()
-        db.delete(schema.toolOutputs).where(eq(schema.toolOutputs.agentId, agent.id)).run()
-      }
+        for (const agent of agentRows) {
+          tx.delete(schema.items).where(eq(schema.items.agentId, agent.id)).run()
+          tx.delete(schema.toolOutputs).where(eq(schema.toolOutputs.agentId, agent.id)).run()
+        }
 
-      // Delete agents
-      db.delete(schema.agents).where(eq(schema.agents.sessionId, id)).run()
-
-      // Delete session
-      db.delete(schema.sessions).where(eq(schema.sessions.id, id)).run()
+        tx.delete(schema.agents).where(eq(schema.agents.sessionId, id)).run()
+        tx.delete(schema.sessions).where(eq(schema.sessions.id, id)).run()
+      })
     },
   }
 }
@@ -335,6 +334,22 @@ function createAgentRepo(db: DrizzleInstance): AgentRepository {
       return rows.length > 0 ? toAgent(rows[0]) : null
     },
 
+    async findRootAgent(sessionId: string): Promise<Agent | null> {
+      const rows = db
+        .select()
+        .from(schema.agents)
+        .where(
+          and(
+            eq(schema.agents.sessionId, sessionId),
+            isNull(schema.agents.parentId),
+          )
+        )
+        .orderBy(desc(schema.agents.createdAt))
+        .limit(1)
+        .all()
+      return rows.length > 0 ? toAgent(rows[0]) : null
+    },
+
     async listBySession(sessionId: string): Promise<Agent[]> {
       const rows = db
         .select()
@@ -363,32 +378,37 @@ function createItemRepo(db: DrizzleInstance): ItemRepository {
       const now = Date.now()
       const id = uuid()
 
-      // Auto-increment sequence per agent
-      const maxSeqResult = db
-        .select({ maxSeq: max(schema.items.sequence) })
-        .from(schema.items)
-        .where(eq(schema.items.agentId, input.agentId))
-        .all()
-      const nextSequence = (maxSeqResult[0]?.maxSeq ?? -1) + 1
+      // Atomic: SELECT MAX(sequence) + INSERT in a single transaction to avoid
+      // duplicate sequence numbers when concurrent awaits interleave on the event loop.
+      const row = db.transaction((tx) => {
+        const maxSeqResult = tx
+          .select({ maxSeq: max(schema.items.sequence) })
+          .from(schema.items)
+          .where(eq(schema.items.agentId, input.agentId))
+          .all()
+        const nextSequence = (maxSeqResult[0]?.maxSeq ?? -1) + 1
 
-      const row = {
-        id,
-        agentId: input.agentId,
-        sequence: nextSequence,
-        type: input.type,
-        role: input.role ?? null,
-        content: input.content ?? null,
-        callId: input.callId ?? null,
-        name: input.name ?? null,
-        arguments: input.arguments ?? null,
-        output: input.output ?? null,
-        isError: input.isError != null ? (input.isError ? 1 : 0) : null,
-        saveOutput: input.saveOutput != null ? (input.saveOutput ? 1 : 0) : null,
-        turnNumber: input.turnNumber,
-        durationMs: input.durationMs ?? null,
-        createdAt: now,
-      }
-      db.insert(schema.items).values(row).run()
+        const insertRow = {
+          id,
+          agentId: input.agentId,
+          sequence: nextSequence,
+          type: input.type,
+          role: input.role ?? null,
+          content: input.content ?? null,
+          callId: input.callId ?? null,
+          name: input.name ?? null,
+          arguments: input.arguments ?? null,
+          output: input.output ?? null,
+          isError: input.isError != null ? (input.isError ? 1 : 0) : null,
+          saveOutput: input.saveOutput != null ? (input.saveOutput ? 1 : 0) : null,
+          turnNumber: input.turnNumber,
+          durationMs: input.durationMs ?? null,
+          createdAt: now,
+        }
+        tx.insert(schema.items).values(insertRow).run()
+        return insertRow
+      })
+
       return toItem(row)
     },
 
@@ -470,6 +490,17 @@ function createToolOutputRepo(db: DrizzleInstance): ToolOutputRepository {
         .all()
       return rows.map(toToolOutput)
     },
+
+    async getLastId(agentId: string): Promise<string | undefined> {
+      const rows = db
+        .select({ id: schema.toolOutputs.id })
+        .from(schema.toolOutputs)
+        .where(eq(schema.toolOutputs.agentId, agentId))
+        .orderBy(desc(schema.toolOutputs.createdAt))
+        .limit(1)
+        .all()
+      return rows[0]?.id
+    },
   }
 }
 
@@ -520,7 +551,7 @@ function createModelRepo(db: DrizzleInstance): ModelRepository {
   }
 }
 
-function createApiKeyRepo(db: DrizzleInstance): ApiKeyRepository {
+function createApiKeyRepo(db: DrizzleInstance, encKey: string | null): ApiKeyRepository {
   return {
     async getByProvider(provider: string): Promise<ApiKeyRecord | null> {
       const rows = db
@@ -529,11 +560,17 @@ function createApiKeyRepo(db: DrizzleInstance): ApiKeyRepository {
         .where(eq(schema.apiKeys.provider, provider))
         .limit(1)
         .all()
-      return rows.length > 0 ? toApiKeyRecord(rows[0]) : null
+      if (rows.length === 0) return null
+      const record = toApiKeyRecord(rows[0])
+      // Decrypt the stored key (gracefully handles legacy plaintext)
+      record.encryptedKey = encKey ? decrypt(record.encryptedKey, encKey) : record.encryptedKey
+      return record
     },
 
-    async upsert(provider: string, encryptedKey: string): Promise<ApiKeyRecord> {
+    async upsert(provider: string, plaintextKey: string): Promise<ApiKeyRecord> {
       const now = Date.now()
+      const storedValue = encKey ? encrypt(plaintextKey, encKey) : plaintextKey
+
       const existing = db
         .select()
         .from(schema.apiKeys)
@@ -543,12 +580,12 @@ function createApiKeyRepo(db: DrizzleInstance): ApiKeyRepository {
 
       if (existing.length > 0) {
         db.update(schema.apiKeys)
-          .set({ apiKey: encryptedKey })
+          .set({ apiKey: storedValue })
           .where(eq(schema.apiKeys.provider, provider))
           .run()
         return {
           provider,
-          encryptedKey,
+          encryptedKey: plaintextKey, // return plaintext to caller
           createdAt: existing[0].createdAt,
           updatedAt: now,
         }
@@ -558,11 +595,16 @@ function createApiKeyRepo(db: DrizzleInstance): ApiKeyRepository {
       const row = {
         id,
         provider,
-        apiKey: encryptedKey,
+        apiKey: storedValue,
         createdAt: now,
       }
       db.insert(schema.apiKeys).values(row).run()
-      return toApiKeyRecord(row)
+      return {
+        provider,
+        encryptedKey: plaintextKey, // return plaintext to caller
+        createdAt: now,
+        updatedAt: now,
+      }
     },
 
     async delete(provider: string): Promise<void> {
@@ -771,14 +813,15 @@ export class SQLiteRepositories {
   systemPrompts: SystemPromptRepository
   preferences: PreferenceRepository
 
-  constructor(db: DrizzleInstance) {
+  constructor(db: DrizzleInstance, encryptionKey?: string) {
+    const encKey = encryptionKey ? deriveKey(encryptionKey) : null
     this.users = createUserRepo(db)
     this.sessions = createSessionRepo(db)
     this.agents = createAgentRepo(db)
     this.items = createItemRepo(db)
     this.toolOutputs = createToolOutputRepo(db)
     this.models = createModelRepo(db)
-    this.apiKeys = createApiKeyRepo(db)
+    this.apiKeys = createApiKeyRepo(db, encKey)
     this.systemPrompts = createSystemPromptRepo(db)
     this.preferences = createPreferenceRepo(db)
   }

@@ -9,15 +9,9 @@ import type {
   ValidationResult,
   ToolPreview,
 } from './types.js'
-import type { ToolOutputRepository } from '../repositories/types.js'
 
 export class ToolRegistryImpl implements ToolExecutor {
   private handlers = new Map<string, ToolHandler>()
-  private outputRepo: ToolOutputRepository | null
-
-  constructor(outputRepo?: ToolOutputRepository) {
-    this.outputRepo = outputRepo ?? null
-  }
 
   register(handler: ToolHandler): void {
     if (this.handlers.has(handler.metadata.name)) {
@@ -30,7 +24,6 @@ export class ToolRegistryImpl implements ToolExecutor {
     name: string,
     args: Record<string, unknown>,
     ctx: ToolContext,
-    options?: { save?: boolean },
   ): Promise<ToolResult> {
     const handler = this.handlers.get(name)
     if (!handler) {
@@ -43,18 +36,7 @@ export class ToolRegistryImpl implements ToolExecutor {
     }
 
     try {
-      const result = await handler.handle(args, ctx)
-
-      if (options?.save && result.ok && this.outputRepo) {
-        await this.outputRepo.save({
-          agentId: ctx.agent_id,
-          callId: crypto.randomUUID(),
-          toolName: name,
-          data: result.output,
-        })
-      }
-
-      return result
+      return await handler.handle(args, ctx)
     } catch (err) {
       if (ctx.signal.aborted) {
         return { ok: false, error: 'Tool execution aborted' }
@@ -67,9 +49,7 @@ export class ToolRegistryImpl implements ToolExecutor {
   async executeBatch(calls: ToolCall[], ctx: ToolContext): Promise<ToolBatchResult> {
     const settled = await Promise.allSettled(
       calls.map(async (call) => {
-        const result = await this.execute(call.name, call.args, ctx, {
-          save: call.save,
-        })
+        const result = await this.execute(call.name, call.args, ctx)
         return { call_id: call.call_id, ...result }
       }),
     )

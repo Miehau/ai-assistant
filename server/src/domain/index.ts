@@ -24,6 +24,7 @@ export {
   completeAgent,
   failAgent,
   cancelAgent,
+  resumeAgent,
 } from './agent'
 
 export {

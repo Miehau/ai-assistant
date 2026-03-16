@@ -115,3 +115,15 @@ export function cancelAgent(agent: Agent): Agent {
     completedAt: timestamp,
   }
 }
+
+export function resumeAgent(agent: Agent): Agent {
+  transition(agent, 'running', ['completed', 'failed'])
+  return {
+    ...agent,
+    status: 'running',
+    result: null,
+    error: null,
+    completedAt: null,
+    updatedAt: now(),
+  }
+}

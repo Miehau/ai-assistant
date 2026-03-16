@@ -10,7 +10,7 @@ import type {
 } from './types.js'
 import type { WaitingFor } from '../domain/types.js'
 import type { LLMProvider, LLMRequest, LLMToolDefinition, LLMResponse } from '../providers/types.js'
-import type { ToolResult, ToolCall } from '../tools/types.js'
+import type { ToolCall } from '../tools/types.js'
 import { startAgent, completeAgent, failAgent, waitForMany } from '../domain/agent.js'
 import {
   parseControllerAction,
@@ -25,7 +25,7 @@ import {
   buildControllerMessages,
   buildToolListString,
 } from './prompts.js'
-import { buildToolResultMessage } from './output.js'
+import { formatToolOutput } from './output.js'
 import { hydrateToolArgs } from './hydration.js'
 import { EVENT_TYPES } from '../events/types.js'
 
@@ -145,7 +145,9 @@ export async function runAgent(
         signal,
       }
 
-      const llmResponse: LLMResponse = ctx.stream
+      // Only stream for native tool providers — non-native providers output raw JSON
+      // which is meaningless to stream character-by-character to the UI.
+      const llmResponse: LLMResponse = (ctx.stream && useNativeTools)
         ? await streamLLMTurn(ctx.provider, llmRequest, deps, agentId, ctx.agent.sessionId, ctx.agent.parentId, ctx.agent.depth, ctx.onTextDelta)
         : await ctx.provider.generate(llmRequest)
 
@@ -323,7 +325,7 @@ async function streamLLMTurn(
           type: EVENT_TYPES.TEXT_DELTA,
           agent_id: agentId,
           session_id: sessionId,
-          payload: { text: event.text, parentId, depth },
+          payload: { text: event.text, parentId: parentId ?? null, depth: depth ?? 0 },
           timestamp: Date.now(),
         })
         break
@@ -338,6 +340,14 @@ async function streamLLMTurn(
   if (!finalResponse) {
     throw new Error('LLM stream ended without a done event')
   }
+
+  // Fallback: some reasoning models (GPT-5 family) return empty content when
+  // streaming via chat completions but work fine non-streaming.  Retry once.
+  if (!finalResponse.content && !finalResponse.tool_calls?.length) {
+    console.warn('[streamLLMTurn] Streaming returned empty content — falling back to non-streaming generate()')
+    return provider.generate(request)
+  }
+
   return finalResponse
 }
 
@@ -346,7 +356,7 @@ async function streamLLMTurn(
 // ---------------------------------------------------------------------------
 
 function isNativeToolProvider(provider: string): boolean {
-  const native = ['anthropic', 'openai', 'deepseek', 'ollama']
+  const native = ['anthropic', 'openai', 'deepseek', 'ollama', 'openrouter']
   return native.includes(provider.toLowerCase())
 }
 
@@ -356,6 +366,7 @@ function selectSystemPrompt(provider: string): string {
       return CONTROLLER_PROMPT_ANTHROPIC
     case 'openai':
     case 'deepseek':
+    case 'openrouter':
       return CONTROLLER_PROMPT_OPENAI
     default:
       return CONTROLLER_PROMPT_BASE
@@ -499,7 +510,7 @@ async function executeFlatStep(
     type: EVENT_TYPES.STEP_STARTED,
     agent_id: ctx.agent.id,
     session_id: ctx.agent.sessionId,
-    payload: { stepType, turn: ctx.turnNumber, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+    payload: { stepType: stepType ?? 'unknown', turn: ctx.turnNumber, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
     timestamp: Date.now(),
   })
 
@@ -558,7 +569,7 @@ async function executeFlatStep(
     type: EVENT_TYPES.STEP_COMPLETED,
     agent_id: ctx.agent.id,
     session_id: ctx.agent.sessionId,
-    payload: { stepType, turn: ctx.turnNumber, outcomeType: outcome.type, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+    payload: { stepType: stepType ?? 'unknown', turn: ctx.turnNumber, outcomeType: outcome.type, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
     timestamp: Date.now(),
   })
 
@@ -576,8 +587,9 @@ async function executeTool(
   callId: string,
   save?: boolean,
 ): Promise<StepExecutionOutcome> {
-  // Intercept delegate tool — runs child agent instead of normal execution
-  if (name === 'delegate') {
+  // Intercept orchestrator tools (e.g. delegate) — handled by the runner, not the registry
+  const meta = ctx.tools.getMetadata(name)
+  if (meta?.orchestrator_intercept) {
     await ctx.items.create({
       agentId: ctx.agent.id,
       type: 'function_call',
@@ -610,7 +622,6 @@ async function executeTool(
   const hydratedArgs = hydrateToolArgs(name, args, lastOutputId)
 
   // Check if tool requires approval
-  const meta = ctx.tools.getMetadata(name)
   if (meta?.requires_approval) {
     // Save the function_call item
     await ctx.items.create({
@@ -682,7 +693,7 @@ async function executeTool(
     agent_id: ctx.agent.id,
     session_id: ctx.agent.sessionId,
     signal: ctx.signal,
-  }, { save })
+  })
   const durationMs = Date.now() - startMs
 
   const outputStr = formatToolOutput(result)
@@ -729,40 +740,40 @@ async function executeToolBatch(
 ): Promise<StepExecutionOutcome> {
   const lastOutputId = await getLastOutputId(ctx)
 
-  // Separate delegate tools, tools needing approval, and directly executable ones
-  const delegateSpecs: Array<ToolCallSpec & { callId: string }> = []
+  // Separate orchestrator-intercepted tools, tools needing approval, and directly executable ones
+  const interceptedSpecs: Array<ToolCallSpec & { callId: string }> = []
   const needsApproval: Array<ToolCallSpec & { callId: string }> = []
   const canExecute: Array<ToolCallSpec & { callId: string }> = []
 
   for (const spec of specs) {
-    if (spec.tool === 'delegate') {
-      delegateSpecs.push(spec)
+    const meta = ctx.tools.getMetadata(spec.tool)
+    if (meta?.orchestrator_intercept) {
+      interceptedSpecs.push(spec)
+    } else if (meta?.requires_approval) {
+      needsApproval.push(spec)
     } else {
-      const meta = ctx.tools.getMetadata(spec.tool)
-      if (meta?.requires_approval) {
-        needsApproval.push(spec)
-      } else {
-        canExecute.push(spec)
-      }
+      canExecute.push(spec)
     }
   }
 
-  // Save function_call items for ALL tools
+  // Hydrate args once and save function_call items for ALL tools
+  const hydratedMap = new Map<string, Record<string, unknown>>()
   for (const spec of specs) {
-    const hydratedArgs = hydrateToolArgs(spec.tool, spec.args, lastOutputId)
+    const hydrated = hydrateToolArgs(spec.tool, spec.args, lastOutputId)
+    hydratedMap.set(spec.callId, hydrated)
     await ctx.items.create({
       agentId: ctx.agent.id,
       type: 'function_call',
       callId: spec.callId,
       name: spec.tool,
-      arguments: JSON.stringify(hydratedArgs),
+      arguments: JSON.stringify(hydrated),
       saveOutput: spec.save ?? null,
       turnNumber: ctx.turnNumber,
     })
   }
 
-  // Execute delegate tools sequentially (each spawns a child agent)
-  if (delegateSpecs.length > 0) {
+  // Execute orchestrator-intercepted tools sequentially (e.g. delegate spawns child agents)
+  if (interceptedSpecs.length > 0) {
     const deps: OrchestratorDeps = {
       agents: ctx.agents,
       items: ctx.items,
@@ -771,16 +782,16 @@ async function executeToolBatch(
       tools: ctx.tools,
       events: ctx.events,
     }
-    for (const spec of delegateSpecs) {
+    for (const spec of interceptedSpecs) {
       ctx.events.emit({
         type: EVENT_TYPES.TOOL_STARTED,
         agent_id: ctx.agent.id,
         session_id: ctx.agent.sessionId,
-        payload: { callId: spec.callId, name: 'delegate', args: spec.args, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+        payload: { callId: spec.callId, name: spec.tool, args: spec.args, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
         timestamp: Date.now(),
       })
-      const delegateBatchStartMs = Date.now()
-      const outcome = await handleDelegation(spec.callId, spec.args, ctx, deps, delegateBatchStartMs)
+      const interceptStartMs = Date.now()
+      const outcome = await handleDelegation(spec.callId, spec.args, ctx, deps, interceptStartMs)
       if (outcome.type === 'waiting') {
         return outcome
       }
@@ -792,7 +803,7 @@ async function executeToolBatch(
     const toolCalls: ToolCall[] = canExecute.map((spec) => ({
       call_id: spec.callId,
       name: spec.tool,
-      args: hydrateToolArgs(spec.tool, spec.args, lastOutputId),
+      args: hydratedMap.get(spec.callId) ?? spec.args,
       save: spec.save,
     }))
 
@@ -837,7 +848,7 @@ async function executeToolBatch(
         type: EVENT_TYPES.TOOL_COMPLETED,
         agent_id: ctx.agent.id,
         session_id: ctx.agent.sessionId,
-        payload: { callId: res.call_id, name: spec?.tool, success: res.ok, output: outputStr, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+        payload: { callId: res.call_id, name: spec?.tool ?? 'unknown', success: res.ok, output: outputStr, durationMs: 0, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
         timestamp: Date.now(),
       })
     }
@@ -849,7 +860,7 @@ async function executeToolBatch(
       callId: spec.callId,
       type: 'approval' as const,
       name: spec.tool,
-      args: hydrateToolArgs(spec.tool, spec.args, lastOutputId),
+      args: hydratedMap.get(spec.callId) ?? spec.args,
       description: `Approve execution of ${spec.tool}?`,
     }))
 
@@ -858,7 +869,7 @@ async function executeToolBatch(
         type: EVENT_TYPES.TOOL_PROPOSED,
         agent_id: ctx.agent.id,
         session_id: ctx.agent.sessionId,
-        payload: { callId: entry.callId, name: entry.name, args: entry.args, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+        payload: { callId: entry.callId, name: entry.name, args: entry.args ?? {}, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
         timestamp: Date.now(),
       })
     }
@@ -1069,26 +1080,10 @@ async function handleDelegation(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatToolOutput(result: ToolResult | ({ call_id: string } & ToolResult)): string {
-  if (!result.ok) {
-    return result.error ?? 'Unknown error'
-  }
-  if (result.output === undefined || result.output === null) {
-    return '(no output)'
-  }
-  if (typeof result.output === 'string') {
-    return result.output
-  }
-  return JSON.stringify(result.output)
-}
-
 function isToolOutputsTool(name: string): boolean {
   return name.startsWith('tool_outputs.')
 }
 
 async function getLastOutputId(ctx: RunContext): Promise<string | undefined> {
-  const outputs = await ctx.toolOutputs.listByAgent(ctx.agent.id)
-  if (outputs.length === 0) return undefined
-  // Return the most recent output's id
-  return outputs[outputs.length - 1].id
+  return ctx.toolOutputs.getLastId(ctx.agent.id)
 }

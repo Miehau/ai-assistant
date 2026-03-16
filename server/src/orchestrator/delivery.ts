@@ -1,13 +1,32 @@
 import type { OrchestratorDeps, RunResult } from './types.js'
 import { deliverOne } from '../domain/agent.js'
 import { runAgent } from './runner.js'
+import { formatToolOutput } from './output.js'
 import { EVENT_TYPES } from '../events/types.js'
+import { AgentLock } from '../lib/agent-lock.js'
+
+const agentLock = new AgentLock()
 
 // ---------------------------------------------------------------------------
 // Deliver an external result to a waiting agent
 // ---------------------------------------------------------------------------
 
 export async function deliverResult(
+  agentId: string,
+  callId: string,
+  output: string,
+  isError: boolean,
+  deps: OrchestratorDeps,
+): Promise<RunResult> {
+  const release = await agentLock.acquire(agentId)
+  try {
+    return await deliverResultLocked(agentId, callId, output, isError, deps)
+  } finally {
+    release()
+  }
+}
+
+async function deliverResultLocked(
   agentId: string,
   callId: string,
   output: string,
@@ -42,36 +61,18 @@ export async function deliverResult(
     waitingFor: updated.waitingFor,
   })
 
-  // If no more pending waits, resume the agent
-  if (updated.status === 'running') {
-    const result = await runAgent(agentId, deps)
-
-    // Auto-propagate: if this agent has a parent and completed, deliver result upward
-    const agent = await deps.agents.getById(agentId)
-    if (
-      agent &&
-      result.status === 'completed' &&
-      agent.parentId &&
-      agent.sourceCallId
-    ) {
-      return deliverResult(
-        agent.parentId,
-        agent.sourceCallId,
-        result.result ?? '(completed)',
-        false,
-        deps,
-      )
+  // If still waiting for other deliveries, return
+  if (updated.status !== 'running') {
+    return {
+      agentId,
+      status: updated.status,
+      waitingFor: updated.waitingFor,
+      turnCount: updated.turnCount,
     }
-
-    return result
   }
 
-  return {
-    agentId,
-    status: updated.status,
-    waitingFor: updated.waitingFor,
-    turnCount: updated.turnCount,
-  }
+  // Resume the agent and propagate completion up the parent chain iteratively
+  return runAndPropagateUp(agentId, deps)
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,20 @@ export async function deliverResult(
 // ---------------------------------------------------------------------------
 
 export async function deliverApproval(
+  agentId: string,
+  callId: string,
+  decision: 'approved' | 'denied',
+  deps: OrchestratorDeps,
+): Promise<RunResult> {
+  const release = await agentLock.acquire(agentId)
+  try {
+    return await deliverApprovalLocked(agentId, callId, decision, deps)
+  } finally {
+    release()
+  }
+}
+
+async function deliverApprovalLocked(
   agentId: string,
   callId: string,
   decision: 'approved' | 'denied',
@@ -121,7 +136,7 @@ export async function deliverApproval(
     })
 
     if (updated.status === 'running') {
-      return runAgent(agentId, deps)
+      return runAndPropagateUp(agentId, deps)
     }
 
     return {
@@ -174,12 +189,7 @@ export async function deliverApproval(
   })
   const durationMs = Date.now() - startMs
 
-  // Store the output
-  const outputStr = result.ok
-    ? typeof result.output === 'string'
-      ? result.output
-      : JSON.stringify(result.output)
-    : result.error ?? 'Unknown error'
+  const outputStr = formatToolOutput(result)
 
   await deps.items.create({
     agentId,
@@ -207,26 +217,7 @@ export async function deliverApproval(
   })
 
   if (updated.status === 'running') {
-    const result = await runAgent(agentId, deps)
-
-    // Auto-propagate: if this agent has a parent and completed, deliver result upward
-    const freshAgent = await deps.agents.getById(agentId)
-    if (
-      freshAgent &&
-      result.status === 'completed' &&
-      freshAgent.parentId &&
-      freshAgent.sourceCallId
-    ) {
-      return deliverResult(
-        freshAgent.parentId,
-        freshAgent.sourceCallId,
-        result.result ?? '(completed)',
-        false,
-        deps,
-      )
-    }
-
-    return result
+    return runAndPropagateUp(agentId, deps)
   }
 
   return {
@@ -235,4 +226,61 @@ export async function deliverApproval(
     waitingFor: updated.waitingFor,
     turnCount: updated.turnCount,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Iterative parent propagation (replaces recursive deliverResult calls)
+// ---------------------------------------------------------------------------
+
+async function runAndPropagateUp(
+  startAgentId: string,
+  deps: OrchestratorDeps,
+): Promise<RunResult> {
+  let currentId = startAgentId
+  let result = await runAgent(currentId, deps)
+
+  // Walk up the parent chain: if the agent completed and has a parent, deliver the result
+  while (result.status === 'completed') {
+    const agent = await deps.agents.getById(currentId)
+    if (!agent?.parentId || !agent.sourceCallId) break
+
+    // Deliver result to parent
+    const parent = await deps.agents.getById(agent.parentId)
+    if (!parent || parent.status !== 'waiting') break
+
+    const parentWait = parent.waitingFor.find((w) => w.callId === agent.sourceCallId)
+    if (!parentWait) break
+
+    // Store child result as parent's function_call_output
+    await deps.items.create({
+      agentId: parent.id,
+      type: 'function_call_output',
+      callId: agent.sourceCallId,
+      output: result.result ?? '(completed)',
+      isError: false,
+      turnNumber: parent.turnCount,
+    })
+
+    // Transition parent
+    const updated = deliverOne(parent, agent.sourceCallId)
+    await deps.agents.update(parent.id, {
+      status: updated.status,
+      waitingFor: updated.waitingFor,
+    })
+
+    if (updated.status !== 'running') {
+      return {
+        agentId: parent.id,
+        status: updated.status,
+        waitingFor: updated.waitingFor,
+        turnCount: updated.turnCount,
+      }
+    }
+
+    // Continue the loop — run the parent
+    currentId = parent.id
+    result = await runAgent(currentId, deps)
+  }
+
+  return result
 }
