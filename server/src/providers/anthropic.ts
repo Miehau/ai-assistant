@@ -75,16 +75,39 @@ function mapMessagesToAnthropic(
     }
 
     if (msg.role === 'tool') {
-      mapped.push({
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: msg.tool_call_id!,
-            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-          },
-        ],
-      })
+      if (Array.isArray(msg.content)) {
+        // Multimodal tool result — map each block into Anthropic's tool_result content array
+        const contentBlocks: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> = []
+        for (const block of msg.content as LLMContentBlock[]) {
+          if (block.type === 'text' && block.text) {
+            contentBlocks.push({ type: 'text', text: block.text })
+          } else if (block.type === 'image' && block.data) {
+            contentBlocks.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: (block.media_type ?? 'image/png') as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp',
+                data: block.data,
+              },
+            })
+          }
+        }
+        mapped.push({
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id!, content: contentBlocks }],
+        })
+      } else {
+        mapped.push({
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: msg.tool_call_id!,
+              content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+            },
+          ],
+        })
+      }
       continue
     }
 

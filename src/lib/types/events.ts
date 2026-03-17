@@ -19,6 +19,7 @@ export const AGENT_EVENT_TYPES = {
   AGENT_STEP_STARTED: 'agent.step.started',
   AGENT_STEP_COMPLETED: 'agent.step.completed',
   AGENT_COMPLETED: 'agent.completed',
+  AGENT_OUTPUT_DELTA: 'agent.output.delta',
 } as const;
 
 export type AgentEventType = typeof AGENT_EVENT_TYPES[keyof typeof AGENT_EVENT_TYPES];
@@ -67,6 +68,7 @@ export type AgentEventPayloadMap = {
   'agent.step.started': AgentStepStartedPayload;
   'agent.step.completed': AgentStepCompletedPayload;
   'agent.completed': AgentCompletedPayload;
+  'agent.output.delta': AgentOutputDeltaPayload;
 };
 
 export interface EventAttachment {
@@ -220,6 +222,18 @@ export interface AgentStepCompletedPayload {
 export interface AgentCompletedPayload {
   session_id: string;
   response: string;
+}
+
+export interface AgentOutputDeltaPayload {
+  /** The execution_id of the parent tool call (e.g. delegate) that spawned this agent */
+  parent_execution_id: string;
+  /** Accumulated text from the child agent so far */
+  text: string;
+  /** Nesting depth (1 = direct child of root) */
+  depth: number;
+  message_id: string;
+  conversation_id: string;
+  timestamp_ms: number;
 }
 
 export interface AgentEvent<T extends AgentEventType = AgentEventType> {

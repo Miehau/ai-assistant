@@ -63,6 +63,20 @@ export const agentPhase = writable<PhaseKind | null>(null);
 export const agentPlan = writable<AgentPlan | null>(null);
 export const agentPlanSteps = writable<AgentPlanStep[]>([]);
 
+// Sub-agent tracking
+export interface SubAgentEntry {
+  agent_id: string;
+  parent_agent_id: string;
+  depth: number;
+  task: string;
+  model: string;
+  started_at: number;
+  status: 'running' | 'completed' | 'failed';
+  result?: string;
+  error?: string;
+}
+export const activeSubAgents = writable<SubAgentEntry[]>([]);
+
 // Streaming-specific stores for smooth updates without array reactivity
 export const streamingMessage = writable<string>('');
 export const isStreaming = writable<boolean>(false);
@@ -92,9 +106,18 @@ const toolCallsByMessageId = new Map<string, Map<string, ToolCallRecord>>();
 const segmentsByMessageId = new Map<string, MessageSegment[]>();
 /** Tracks how much of the accumulated streaming text has already been captured as text segments. */
 let segmentedTextLength = 0;
+/** Throttle buffer for AGENT_OUTPUT_DELTA — maps execution_id → latest accumulated text */
+const agentOutputBuffer = new Map<string, { messageId: string; text: string }>();
+let agentOutputFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 function appendSegment(messageId: string, segment: MessageSegment) {
   const existing = segmentsByMessageId.get(messageId) ?? [];
+  // Deduplicate tool segments by execution_id (e.g. approval + tool:started for same call)
+  if (segment.kind === 'tool' && segment.execution_id) {
+    if (existing.some((s) => s.kind === 'tool' && s.execution_id === segment.execution_id)) {
+      return;
+    }
+  }
   segmentsByMessageId.set(messageId, [...existing, segment]);
 }
 
@@ -354,6 +377,15 @@ function resetStreamingState() {
   streamingFlushPending = false;
   segmentedTextLength = 0;
   isLoading.set(false);
+  // Flush any pending agent output deltas before clearing
+  if (agentOutputFlushTimer) {
+    clearTimeout(agentOutputFlushTimer);
+    agentOutputFlushTimer = null;
+    for (const [execId, entry] of agentOutputBuffer) {
+      upsertToolCall(entry.messageId, execId, { result: entry.text });
+    }
+  }
+  agentOutputBuffer.clear();
 }
 
 function handleAgentEvent(event: AgentEvent) {
@@ -719,6 +751,27 @@ function handleAgentEvent(event: AgentEvent) {
       updateToolCallByExecutionId(payload.execution_id, completionUpdate);
     }
 
+    // Child agent streaming text → update the delegate tool call's result as live preview.
+    // Throttled: accumulate text locally and flush to the store at most every 150ms
+    // to avoid flooding the reactive graph with per-token updates.
+    if (event.event_type === AGENT_EVENT_TYPES.AGENT_OUTPUT_DELTA) {
+      const payload = event.payload as import('$lib/types/events').AgentOutputDeltaPayload;
+      if (payload.message_id) {
+        agentOutputBuffer.set(payload.parent_execution_id, {
+          messageId: payload.message_id,
+          text: payload.text,
+        });
+        if (!agentOutputFlushTimer) {
+          agentOutputFlushTimer = setTimeout(() => {
+            agentOutputFlushTimer = null;
+            for (const [execId, entry] of agentOutputBuffer) {
+              upsertToolCall(entry.messageId, execId, { result: entry.text });
+            }
+          }, 150);
+        }
+      }
+    }
+
     if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED) {
       const payload = event.payload as ToolExecutionProposedPayload;
       if (payload.message_id && cancelledAssistantMessageIds.has(payload.message_id)) {
@@ -793,6 +846,7 @@ function handleAgentEvent(event: AgentEvent) {
       const payload = event.payload as AgentStepCompletedPayload;
       updatePlanStep(payload.step_id, { status: payload.success ? 'Completed' : 'Failed' });
     }
+
 }
 
 export async function startAgentEvents() {
@@ -1484,7 +1538,7 @@ export async function cancelCurrentAgentRequest() {
   }
 
   try {
-    await invoke('agent_cancel', { message_id: messageId });
+    await invoke('agent_cancel', { payload: { message_id: messageId } });
   } catch (error) {
     console.error('Failed to cancel agent request:', error);
   } finally {
@@ -1530,6 +1584,7 @@ export async function resolveToolApproval(
       const eventAbort = new AbortController();
       const client = honoBackend.getClient();
       const eventPromise = (async () => {
+        let streamStarted = false;
         try {
           for await (const sseEvent of client.subscribeToEvents(agentId, eventAbort.signal)) {
             // Convert SSE event to the same format honoEventBridge uses
@@ -1589,19 +1644,35 @@ export async function resolveToolApproval(
                 timestamp_ms: ts,
               });
             } else if (event === 'text:delta') {
-              handleAgentEvent({
-                event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_CHUNK,
-                payload: { conversation_id: convId, message_id: msgId, chunk: data.text as string, timestamp_ms: ts },
-                timestamp_ms: ts,
-              });
+              // Only emit root-agent text as assistant stream (sub-agent text goes to delegate tool preview)
+              const parentId = data.parentId as string | null | undefined;
+              if (!parentId) {
+                // Emit STREAM_STARTED on first root-agent text so the streaming
+                // handlers (streamingAssistantMessageId gate) accept the chunks.
+                if (!streamStarted) {
+                  streamStarted = true;
+                  handleAgentEvent({
+                    event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_STARTED,
+                    payload: { conversation_id: convId, message_id: msgId, timestamp_ms: ts },
+                    timestamp_ms: ts,
+                  });
+                }
+                handleAgentEvent({
+                  event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_CHUNK,
+                  payload: { conversation_id: convId, message_id: msgId, chunk: data.text as string, timestamp_ms: ts },
+                  timestamp_ms: ts,
+                });
+              }
             } else if (event === 'agent:completed' || event === 'agent:failed') {
-              // Root agent done — stop listening
-              break;
+              // Only break when the ROOT agent is done (parentId is null/undefined)
+              const parentId = data.parentId as string | null | undefined;
+              if (!parentId) break;
             }
           }
         } catch {
           // Event stream closed or aborted — expected
         }
+        return streamStarted;
       })();
 
       try {
@@ -1613,10 +1684,48 @@ export async function resolveToolApproval(
 
         // Stop event subscription — the HTTP response has the final state
         eventAbort.abort();
-        await eventPromise.catch(() => {});
+        const didStream = await eventPromise.catch(() => false);
 
-        // Show completed output if the agent finished
-        if (result.output && result.output.length > 0) {
+        // Mark any still-running delegate tool calls as completed — the server's
+        // runAndPropagateUp may have finished them but the event loop broke early
+        // (on the child's agent:completed) before the delegate's tool:completed arrived.
+        if (result.status === 'completed' || result.status === 'failed') {
+          const msgId = approval?.message_id;
+          if (msgId) {
+            const entries = toolCallsByMessageId.get(msgId);
+            if (entries) {
+              for (const [execId, tc] of entries) {
+                if (tc.tool_name === 'delegate' && tc.success === undefined) {
+                  upsertToolCall(msgId, execId, {
+                    success: result.status === 'completed',
+                    result: result.output?.[result.output.length - 1]?.content ?? '',
+                    completed_at: Date.now(),
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        // Show completed output if the agent finished.
+        // If the event stream already streamed text, finalize via STREAM_COMPLETED
+        // so the message is properly committed. Otherwise, fall back to the static
+        // output from the HTTP response.
+        if (didStream) {
+          const convId = approval?.conversation_id ?? '';
+          const msgId = approval?.message_id ?? '';
+          const lastContent = result.output?.[result.output.length - 1]?.content ?? '';
+          handleAgentEvent({
+            event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_COMPLETED,
+            payload: {
+              conversation_id: convId,
+              message_id: msgId,
+              content: typeof lastContent === 'string' ? lastContent : '',
+              timestamp_ms: Date.now(),
+            },
+            timestamp_ms: Date.now(),
+          });
+        } else if (result.output && result.output.length > 0) {
           const lastOutput = result.output[result.output.length - 1];
           const content = lastOutput.content;
           if (content && typeof content === 'string' && content.trim()) {

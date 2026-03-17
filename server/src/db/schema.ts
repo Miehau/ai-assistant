@@ -58,6 +58,7 @@ export const items = sqliteTable(
     name: text('name'),
     arguments: text('arguments'),
     output: text('output'),
+    contentBlocks: text('content_blocks'),
     isError: integer('is_error'),
     saveOutput: integer('save_output'),
     turnNumber: integer('turn_number'),

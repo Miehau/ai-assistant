@@ -41,16 +41,12 @@ export interface RunContext {
   turnNumber: number
   signal: AbortSignal
   stream: boolean
-  /** Awaited for each text delta — ensures each chunk is flushed to the SSE stream before the next. */
-  onTextDelta?: (text: string) => Promise<void> | void
 }
 
 export interface RunOptions {
   signal?: AbortSignal
   maxTurns?: number
   stream?: boolean
-  /** Awaited for each text delta — ensures each chunk is flushed to the SSE stream before the next. */
-  onTextDelta?: (text: string) => Promise<void> | void
 }
 
 export interface RunResult {

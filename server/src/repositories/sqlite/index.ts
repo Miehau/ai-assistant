@@ -36,6 +36,7 @@ import type {
   AgentConfig,
   AgentStatus,
   Item,
+  ItemContentBlock,
   ItemRole,
   ItemType,
   Plan,
@@ -106,6 +107,7 @@ function toItem(row: typeof schema.items.$inferSelect): Item {
     name: row.name ?? null,
     arguments: row.arguments ?? null,
     output: row.output ?? null,
+    contentBlocks: row.contentBlocks ? (JSON.parse(row.contentBlocks) as ItemContentBlock[]) : null,
     isError: row.isError != null ? Boolean(row.isError) : null,
     saveOutput: row.saveOutput != null ? Boolean(row.saveOutput) : null,
     turnNumber: row.turnNumber ?? 0,
@@ -399,6 +401,7 @@ function createItemRepo(db: DrizzleInstance): ItemRepository {
           name: input.name ?? null,
           arguments: input.arguments ?? null,
           output: input.output ?? null,
+          contentBlocks: input.contentBlocks ? JSON.stringify(input.contentBlocks) : null,
           isError: input.isError != null ? (input.isError ? 1 : 0) : null,
           saveOutput: input.saveOutput != null ? (input.saveOutput ? 1 : 0) : null,
           turnNumber: input.turnNumber,
@@ -798,6 +801,9 @@ export function createDatabase(url: string): DrizzleInstance {
     CREATE INDEX IF NOT EXISTS items_agent_id_sequence_idx ON items(agent_id, sequence);
     CREATE INDEX IF NOT EXISTS items_call_id_idx ON items(call_id);
   `)
+
+  // Incremental migrations — ADD COLUMN IF NOT EXISTS (SQLite has no such syntax, so try/catch)
+  try { sqlite.exec(`ALTER TABLE items ADD COLUMN content_blocks TEXT;`) } catch { /* already exists */ }
 
   return drizzle(sqlite, { schema })
 }

@@ -4,7 +4,8 @@
   let { call }: { call: ToolCallRecord } = $props();
 
   function formatToolPayload(payload: unknown): string {
-    if (payload === undefined) return "";
+    if (payload === undefined || payload === null) return "";
+    if (typeof payload === 'string') return payload;
     try {
       return JSON.stringify(payload, null, 2);
     } catch {

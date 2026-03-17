@@ -84,7 +84,6 @@ export async function runAgent(
     turnNumber: agent.turnCount,
     signal,
     stream: options?.stream ?? false,
-    onTextDelta: options?.onTextDelta,
   }
 
   try {
@@ -149,7 +148,7 @@ export async function runAgent(
       // Only stream for native tool providers — non-native providers output raw JSON
       // which is meaningless to stream character-by-character to the UI.
       const llmResponse: LLMResponse = (ctx.stream && useNativeTools)
-        ? await streamLLMTurn(ctx.provider, llmRequest, deps, agentId, ctx.agent.sessionId, ctx.agent.parentId, ctx.agent.depth, ctx.onTextDelta)
+        ? await streamLLMTurn(ctx.provider, llmRequest, deps, agentId, ctx.agent.sessionId, ctx.agent.parentId, ctx.agent.depth)
         : await ctx.provider.generate(llmRequest)
 
       // 3. Handle companion text (thinking/reasoning shown alongside tool calls)
@@ -312,7 +311,6 @@ async function streamLLMTurn(
   sessionId: string,
   parentId?: string | null,
   depth?: number,
-  onTextDelta?: (text: string) => void,
 ): Promise<LLMResponse> {
   const streamIter = provider.stream(request)
   let finalResponse: LLMResponse | null = null
@@ -320,8 +318,8 @@ async function streamLLMTurn(
   for await (const event of streamIter) {
     switch (event.type) {
       case 'text_delta':
-        // Await the callback so each chunk is flushed before the next LLM event
-        if (onTextDelta) await onTextDelta(event.text)
+        // Emit to event bus — the SSE handler consumes TEXT_DELTA events in order
+        // with all other events, ensuring correct interleaving without concurrent writes.
         deps.events.emit({
           type: EVENT_TYPES.TEXT_DELTA,
           agent_id: agentId,
@@ -421,6 +419,7 @@ async function executePendingApprovedTools(ctx: RunContext): Promise<void> {
       type: 'function_call_output',
       callId,
       output: outputStr,
+      contentBlocks: result.content_blocks ?? null,
       isError: !result.ok,
       turnNumber: ctx.turnNumber,
       durationMs,
@@ -705,6 +704,7 @@ async function executeTool(
     type: 'function_call_output',
     callId,
     output: outputStr,
+    contentBlocks: result.content_blocks ?? null,
     isError: !result.ok,
     turnNumber: ctx.turnNumber,
     durationMs,
@@ -831,6 +831,7 @@ async function executeToolBatch(
         type: 'function_call_output',
         callId: res.call_id,
         output: outputStr,
+        contentBlocks: res.content_blocks ?? null,
         isError: !res.ok,
         turnNumber: ctx.turnNumber,
       })

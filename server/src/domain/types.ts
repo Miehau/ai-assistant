@@ -60,6 +60,13 @@ export interface User {
   updatedAt: number
 }
 
+export interface ItemContentBlock {
+  type: 'text' | 'image'
+  text?: string
+  media_type?: string
+  data?: string
+}
+
 export interface Item {
   id: string
   agentId: string
@@ -71,6 +78,7 @@ export interface Item {
   name: string | null
   arguments: string | null
   output: string | null
+  contentBlocks: ItemContentBlock[] | null
   isError: boolean | null
   saveOutput: boolean | null
   turnNumber: number

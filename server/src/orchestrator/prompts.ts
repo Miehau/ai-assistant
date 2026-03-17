@@ -1,4 +1,4 @@
-import type { LLMMessage } from '../providers/types.js'
+import type { LLMMessage, LLMContentBlock } from '../providers/types.js'
 import type { Item } from '../domain/types.js'
 
 // ---------------------------------------------------------------------------
@@ -110,11 +110,22 @@ function itemToMessages(items: Item[]): LLMMessage[] {
 
       case 'function_call_output': {
         // Tool result — role=tool with tool_call_id
-        messages.push({
-          role: 'tool',
-          content: item.output ?? item.content ?? '',
-          tool_call_id: item.callId ?? undefined,
-        })
+        // If the tool returned content blocks (e.g. images), pass them as an array
+        // so provider mappers can render them correctly (Anthropic: tool_result content array,
+        // OpenAI: split into tool result + synthetic user message).
+        if (item.contentBlocks && item.contentBlocks.length > 0) {
+          messages.push({
+            role: 'tool',
+            content: item.contentBlocks as LLMContentBlock[],
+            tool_call_id: item.callId ?? undefined,
+          })
+        } else {
+          messages.push({
+            role: 'tool',
+            content: item.output ?? item.content ?? '',
+            tool_call_id: item.callId ?? undefined,
+          })
+        }
         break
       }
 

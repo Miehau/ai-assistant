@@ -2,6 +2,10 @@
  * Maps Hono server SSE events into the same AgentEvent format the chat store
  * already handles. This lets us reuse all existing downstream handlers
  * (streaming, tool activity, phase changes) without modification.
+ *
+ * Sub-agent isolation: text deltas from child agents are accumulated separately
+ * and do NOT bleed into the parent message stream. Sub-agent lifecycle events
+ * (started/completed/failed) are emitted so the store can track them.
  */
 
 import { getHttpBackend } from '$lib/backend/http-client';
@@ -44,13 +48,31 @@ export async function streamMessageViaHono(
     timestamp_ms: ts(),
   });
 
-  let fullText = '';
+  // --- Per-agent text isolation ---
+  // Only root-agent text feeds into the parent message stream.
+  // Sub-agent text is accumulated separately and surfaces via subagent_done.
+  let rootAgentId: string | undefined;
+  let rootText = '';
   let resultSessionId: string | undefined;
   const toolStartTimes = new Map<string, number>();
-  // Track which approval callIds have already been surfaced to avoid duplicates
   const surfacedApprovalIds = new Set<string>();
-  // True after a tool_end so the next text_delta gets a paragraph separator
-  let pendingTurnSeparator = false;
+  // Per-agent turn separator: after a tool_end for a given agent, the next
+  // text_delta from that agent gets a paragraph break.
+  const pendingTurnSeparator = new Map<string, boolean>();
+
+  // --- Delegate ↔ child agent text routing ---
+  // Maps the agentId that CALLED delegate → the delegate tool's callId.
+  // When a child's text_delta arrives, parentId matches the caller's agentId.
+  const delegateCallByParent = new Map<string, { callId: string; depth: number }>();
+  // Accumulated child-agent text per delegate callId.
+  const delegateChildText = new Map<string, string>();
+
+  /** Check if an agentId belongs to a sub-agent (not the root). */
+  function isSubAgent(agentId: string | undefined, parentId: string | null | undefined): boolean {
+    if (parentId != null) return true;
+    if (rootAgentId && agentId && agentId !== rootAgentId) return true;
+    return false;
+  }
 
   for await (const sseEvent of client.sendMessageStream(
     input,
@@ -59,13 +81,50 @@ export async function streamMessageViaHono(
   )) {
     const { event, data } = sseEvent;
 
+    if (event !== 'text_delta') {
+      console.log('[honoEventBridge] SSE event:', event, data.name ?? data.status ?? '', data.callId ?? '');
+    }
+
     if (event === 'text_delta') {
-      let chunk = (data.text as string) ?? '';
-      if (pendingTurnSeparator && chunk.length > 0) {
-        chunk = '\n\n' + chunk;
-        pendingTurnSeparator = false;
+      const agentId = data.agentId as string | undefined;
+      const parentId = data.parentId as string | null | undefined;
+
+      // Track root agent from first text event
+      if (!rootAgentId && !parentId && agentId) {
+        rootAgentId = agentId;
       }
-      fullText += chunk;
+
+      // Sub-agent text: do NOT emit as ASSISTANT_STREAM_CHUNK (would corrupt parent message).
+      // Instead, route it into the delegate tool call's output as a live preview.
+      if (isSubAgent(agentId, parentId)) {
+        const delegateInfo = parentId ? delegateCallByParent.get(parentId as string) : undefined;
+        if (delegateInfo) {
+          const text = (data.text as string) ?? '';
+          const accumulated = (delegateChildText.get(delegateInfo.callId) ?? '') + text;
+          delegateChildText.set(delegateInfo.callId, accumulated);
+          onEvent({
+            event_type: AGENT_EVENT_TYPES.AGENT_OUTPUT_DELTA,
+            payload: {
+              parent_execution_id: delegateInfo.callId,
+              text: accumulated,
+              depth: delegateInfo.depth,
+              message_id: messageId,
+              conversation_id: conversationId,
+              timestamp_ms: ts(),
+            },
+            timestamp_ms: ts(),
+          });
+        }
+        continue;
+      }
+
+      let chunk = (data.text as string) ?? '';
+      const agentKey = agentId ?? '__root__';
+      if (pendingTurnSeparator.get(agentKey) && chunk.length > 0) {
+        chunk = '\n\n' + chunk;
+        pendingTurnSeparator.set(agentKey, false);
+      }
+      rootText += chunk;
       onEvent({
         event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_CHUNK,
         payload: { conversation_id: conversationId, message_id: messageId, chunk, timestamp_ms: ts() },
@@ -75,6 +134,15 @@ export async function streamMessageViaHono(
       const callId = data.callId as string;
       const parentId = data.parentId as string | null | undefined;
       toolStartTimes.set(callId, Date.now());
+
+      // Track delegate tool calls so we can route child text into them
+      if ((data.name as string) === 'delegate') {
+        const callerAgentId = data.agentId as string;
+        const depth = ((data.depth as number) ?? 0) + 1;
+        delegateCallByParent.set(callerAgentId, { callId, depth });
+        delegateChildText.set(callId, '');
+      }
+
       onEvent({
         event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_STARTED,
         payload: {
@@ -95,7 +163,21 @@ export async function streamMessageViaHono(
       const started = toolStartTimes.get(callId) ?? Date.now();
       const success = data.success !== false;
       const parentId = data.parentId as string | null | undefined;
-      pendingTurnSeparator = fullText.length > 0;
+      const agentId = data.agentId as string | undefined;
+      console.log('[honoEventBridge] tool_end:', data.name, callId, { success, agentId, parentId });
+
+      // Clean up delegate tracking when the delegate tool completes
+      if ((data.name as string) === 'delegate' && agentId) {
+        delegateCallByParent.delete(agentId);
+        delegateChildText.delete(callId);
+      }
+
+      // Only set turn separator for the agent that owns this tool call
+      const agentKey = agentId ?? '__root__';
+      if (!isSubAgent(agentId, parentId) && rootText.length > 0) {
+        pendingTurnSeparator.set(agentKey, true);
+      }
+
       onEvent({
         event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_COMPLETED,
         payload: {
@@ -107,6 +189,42 @@ export async function streamMessageViaHono(
           duration_ms: Date.now() - started,
           message_id: messageId,
           conversation_id: conversationId,
+          session_id: agentId,
+          parent_session_id: parentId ?? null,
+          is_sub_agent: parentId != null,
+          timestamp_ms: ts(),
+        },
+        timestamp_ms: ts(),
+      });
+    } else if (event === 'agent_started') {
+      // Track root agent ID for text isolation; sub-agent activity is already
+      // tracked via tool_start/tool_end events with parentId/is_sub_agent.
+      const agentId = data.agentId as string;
+      const parentId = data.parentId as string | null | undefined;
+      if (!rootAgentId && !parentId) {
+        rootAgentId = agentId;
+      }
+    } else if (event === 'subagent_done' || event === 'subagent_error') {
+      // Sub-agent lifecycle — no separate client event needed.
+      // The delegate tool_start/tool_end already surfaces in toolActivity.
+    } else if (event === 'approval') {
+      const callId = data.callId as string;
+      const toolName = data.name as string;
+      const parentId = data.parentId as string | null | undefined;
+      console.log('[honoEventBridge] approval required (approval SSE path):', toolName, callId);
+      surfacedApprovalIds.add(callId);
+
+      // Create a tool call record so the tool bubble appears in the message
+      // (approval-required tools don't emit tool_start before the approval event)
+      toolStartTimes.set(callId, Date.now());
+      onEvent({
+        event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_STARTED,
+        payload: {
+          execution_id: callId,
+          tool_name: toolName,
+          args: (data.args as Record<string, unknown>) ?? {},
+          message_id: messageId,
+          conversation_id: conversationId,
           session_id: data.agentId as string | undefined,
           parent_session_id: parentId ?? null,
           is_sub_agent: parentId != null,
@@ -114,11 +232,7 @@ export async function streamMessageViaHono(
         },
         timestamp_ms: ts(),
       });
-    } else if (event === 'approval') {
-      const callId = data.callId as string;
-      const toolName = data.name as string;
-      console.log('[honoEventBridge] approval required (approval SSE path):', toolName, callId);
-      surfacedApprovalIds.add(callId);
+
       onEvent({
         event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED,
         payload: {
@@ -172,7 +286,7 @@ export async function streamMessageViaHono(
         // Emit phase change so the UI knows the agent is paused
         onEvent({
           event_type: AGENT_EVENT_TYPES.AGENT_PHASE_CHANGED,
-          payload: { phase: 'WaitingForHumanInput', timestamp_ms: ts() },
+          payload: { phase: 'WaitingForHumanInput', timestamp_ms: ts() } as any,
           timestamp_ms: ts(),
         });
         // Surface each pending approval — skip those already surfaced via the `approval` SSE event
@@ -203,7 +317,7 @@ export async function streamMessageViaHono(
         if (phase) {
           onEvent({
             event_type: AGENT_EVENT_TYPES.AGENT_PHASE_CHANGED,
-            payload: { phase, timestamp_ms: ts() },
+            payload: { phase, timestamp_ms: ts() } as any,
             timestamp_ms: ts(),
           });
         }
@@ -249,13 +363,12 @@ export async function streamMessageViaHono(
         }
       }
 
-      // Prefer the server's parsed result over raw streamed text when non-empty.
-      // For native providers (anthropic, openai, openrouter) the model streams
-      // text via text_delta and `data.result` holds the same final text — either
-      // works as the authoritative content.  Use `||` (not `??`) so an empty
-      // string `result` falls back to accumulated fullText from text_delta events.
+      // Use the accumulated rootText as the authoritative content — it matches
+      // exactly what was streamed via ASSISTANT_STREAM_CHUNK events (including
+      // turn separators). Only fall back to the server's result when rootText
+      // is empty (non-streaming path or no text output).
       const serverResult = data.result as string | undefined;
-      const content = serverResult || fullText;
+      const content = rootText || serverResult || '';
 
       onEvent({
         event_type: AGENT_EVENT_TYPES.ASSISTANT_STREAM_COMPLETED,

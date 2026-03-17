@@ -237,7 +237,9 @@ async function runAndPropagateUp(
   deps: OrchestratorDeps,
 ): Promise<RunResult> {
   let currentId = startAgentId
-  let result = await runAgent(currentId, deps)
+  // Always stream resumed runs so TEXT_DELTA events flow through the event bus
+  // to the SSE subscription the frontend opens before sending approval/deliver.
+  let result = await runAgent(currentId, deps, { stream: true })
 
   // Walk up the parent chain: if the agent completed and has a parent, deliver the result
   while (result.status === 'completed') {
@@ -252,13 +254,31 @@ async function runAndPropagateUp(
     if (!parentWait) break
 
     // Store child result as parent's function_call_output
+    const delegateOutput = result.result ?? '(completed)'
     await deps.items.create({
       agentId: parent.id,
       type: 'function_call_output',
       callId: agent.sourceCallId,
-      output: result.result ?? '(completed)',
+      output: delegateOutput,
       isError: false,
       turnNumber: parent.turnCount,
+    })
+
+    // Emit TOOL_COMPLETED for the delegate tool so the client can update its status
+    deps.events.emit({
+      type: EVENT_TYPES.TOOL_COMPLETED,
+      agent_id: parent.id,
+      session_id: parent.sessionId,
+      payload: {
+        callId: agent.sourceCallId,
+        name: 'delegate',
+        success: true,
+        output: delegateOutput,
+        durationMs: 0,
+        parentId: parent.parentId ?? null,
+        depth: parent.depth,
+      },
+      timestamp: Date.now(),
     })
 
     // Transition parent
@@ -279,7 +299,7 @@ async function runAndPropagateUp(
 
     // Continue the loop — run the parent
     currentId = parent.id
-    result = await runAgent(currentId, deps)
+    result = await runAgent(currentId, deps, { stream: true })
   }
 
   return result

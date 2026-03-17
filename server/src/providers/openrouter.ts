@@ -75,20 +75,40 @@ export class OpenRouterProvider implements LLMProvider {
 // ---------------------------------------------------------------------------
 
 function buildRequestBody(request: LLMRequest): Record<string, unknown> {
-  const messages = request.messages.map((msg) => {
+  const messages = request.messages.flatMap((msg) => {
     if (msg.role === 'system') {
-      return {
+      return [{
         role: 'system',
         content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-      }
+      }]
     }
 
     if (msg.role === 'tool') {
-      return {
+      if (Array.isArray(msg.content)) {
+        // OpenRouter (OpenAI-compat) tool role only accepts string — extract text, inject user message for images
+        const textContent = (msg.content as Array<{ type: string; text?: string }>)
+          .filter((b) => b.type === 'text')
+          .map((b) => b.text ?? '')
+          .join('\n') || '(tool result)'
+        const imageBlocks = (msg.content as Array<{ type: string; data?: string; media_type?: string }>)
+          .filter((b) => b.type === 'image' && b.data)
+        const out: unknown[] = [{ role: 'tool', tool_call_id: msg.tool_call_id, content: textContent }]
+        if (imageBlocks.length > 0) {
+          out.push({
+            role: 'user',
+            content: imageBlocks.map((b) => ({
+              type: 'image_url',
+              image_url: { url: `data:${b.media_type ?? 'image/png'};base64,${b.data}` },
+            })),
+          })
+        }
+        return out
+      }
+      return [{
         role: 'tool',
         tool_call_id: msg.tool_call_id,
         content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-      }
+      }]
     }
 
     if (msg.role === 'assistant') {
@@ -101,16 +121,16 @@ function buildRequestBody(request: LLMRequest): Record<string, unknown> {
         },
       }))
 
-      return {
+      return [{
         role: 'assistant',
         content: typeof msg.content === 'string' ? msg.content : '',
         ...(tool_calls?.length && { tool_calls }),
-      }
+      }]
     }
 
     // user message
     if (typeof msg.content === 'string') {
-      return { role: 'user', content: msg.content }
+      return [{ role: 'user', content: msg.content }]
     }
 
     if (Array.isArray(msg.content)) {
@@ -129,10 +149,10 @@ function buildRequestBody(request: LLMRequest): Record<string, unknown> {
         return null
       }).filter(Boolean)
 
-      return { role: 'user', content: parts }
+      return [{ role: 'user', content: parts }]
     }
 
-    return { role: 'user', content: '' }
+    return [{ role: 'user', content: '' }]
   })
 
   const tools = request.tools?.length

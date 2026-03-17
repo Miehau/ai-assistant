@@ -173,15 +173,12 @@ export function chatRoutes(runtime: RuntimeContext) {
             session_id: sessionId,
           })
 
-          const writeTextDelta = async (text: string) => {
-            await stream.writeSSE({
-              event: 'text_delta',
-              data: JSON.stringify({ type: 'text_delta', agentId: agent!.id, sessionId, text }),
-              id: randomUUID(),
-            })
-          }
+          const signal = AbortSignal.any([
+            c.req.raw.signal,
+            runtime.shutdownController.signal,
+          ])
 
-          const resultPromise = runAgent(agent!.id, deps, { stream: true, onTextDelta: writeTextDelta }).catch((err) => ({
+          const resultPromise = runAgent(agent!.id, deps, { stream: true, signal }).catch((err) => ({
             agentId: agent!.id,
             status: 'failed' as const,
             error: err instanceof Error ? err.message : String(err),
@@ -191,13 +188,13 @@ export function chatRoutes(runtime: RuntimeContext) {
           const iterator = eventStream[Symbol.asyncIterator]()
 
           const mapEventToSSE = (event: { type: string; agent_id: string }): string | null => {
-            if (event.type === EVENT_TYPES.TEXT_DELTA) return null
             if (
               (event.type === EVENT_TYPES.AGENT_COMPLETED || event.type === EVENT_TYPES.AGENT_FAILED) &&
               event.agent_id === agent!.id
             ) return null
 
             switch (event.type) {
+              case EVENT_TYPES.TEXT_DELTA: return 'text_delta'
               case EVENT_TYPES.COMPANION_TEXT: return 'text_delta'
               case EVENT_TYPES.TOOL_STARTED: return 'tool_start'
               case EVENT_TYPES.TOOL_COMPLETED: return 'tool_end'
@@ -205,6 +202,7 @@ export function chatRoutes(runtime: RuntimeContext) {
               case EVENT_TYPES.TOOL_APPROVED: return 'tool_approved'
               case EVENT_TYPES.TOOL_DENIED: return 'tool_denied'
               case EVENT_TYPES.AGENT_WAITING: return 'agent_status'
+              case EVENT_TYPES.AGENT_STARTED: return 'agent_started'
               case EVENT_TYPES.AGENT_COMPLETED: return 'subagent_done'
               case EVENT_TYPES.AGENT_FAILED: return 'subagent_error'
               default: return event.type
@@ -284,7 +282,9 @@ export function chatRoutes(runtime: RuntimeContext) {
       }
 
       // 6. Non-streaming: run agent synchronously
-      const result = await runAgent(agent.id, deps)
+      const result = await runAgent(agent.id, deps, {
+        signal: AbortSignal.any([c.req.raw.signal, runtime.shutdownController.signal]),
+      })
 
       // 7. Get output items
       const items = await runtime.repositories.items.listByAgent(agent.id)
@@ -339,12 +339,18 @@ export function chatRoutes(runtime: RuntimeContext) {
         deps,
       )
 
-      const items = await runtime.repositories.items.listByAgent(agentId)
+      // After runAndPropagateUp, result may be from a parent agent.
+      // Return the root agent's items so the client sees the final response.
+      const rootAgent = agent.parentId
+        ? await runtime.repositories.agents.findRootAgent(agent.sessionId)
+        : agent
+      const itemsAgentId = rootAgent?.id ?? result.agentId ?? agentId
+      const items = await runtime.repositories.items.listByAgent(itemsAgentId)
       const output = formatOutput(items)
 
       if (result.status === 'waiting') {
         return c.json({
-          id: agentId,
+          id: result.agentId ?? agentId,
           sessionId: agent.sessionId,
           status: 'waiting',
           output,
@@ -353,7 +359,7 @@ export function chatRoutes(runtime: RuntimeContext) {
       }
 
       return c.json({
-        id: agentId,
+        id: result.agentId ?? agentId,
         sessionId: agent.sessionId,
         status: result.status,
         output,
@@ -388,12 +394,18 @@ export function chatRoutes(runtime: RuntimeContext) {
         deps,
       )
 
-      const items = await runtime.repositories.items.listByAgent(agentId)
+      // After runAndPropagateUp, the result may be from a parent agent.
+      // Always return the root agent's items so the client sees the final response.
+      const rootAgent = agent.parentId
+        ? await runtime.repositories.agents.findRootAgent(agent.sessionId)
+        : agent
+      const itemsAgentId = rootAgent?.id ?? result.agentId ?? agentId
+      const items = await runtime.repositories.items.listByAgent(itemsAgentId)
       const output = formatOutput(items)
 
       if (result.status === 'waiting') {
         return c.json({
-          id: agentId,
+          id: result.agentId ?? agentId,
           sessionId: agent.sessionId,
           status: 'waiting',
           output,
@@ -402,7 +414,7 @@ export function chatRoutes(runtime: RuntimeContext) {
       }
 
       return c.json({
-        id: agentId,
+        id: result.agentId ?? agentId,
         sessionId: agent.sessionId,
         status: result.status,
         output,
@@ -449,6 +461,13 @@ export function chatRoutes(runtime: RuntimeContext) {
       return c.json({ error: `Agent not found: ${agentId}` }, 404)
     }
 
+    // Break on root agent completion so that when a child agent is approved,
+    // the event stream continues through the parent's resumed run.
+    const rootAgent = agent.parentId
+      ? await runtime.repositories.agents.findRootAgent(agent.sessionId)
+      : agent
+    const breakAgentId = rootAgent?.id ?? agentId
+
     return streamSSE(c, async (stream) => {
       const eventStream = runtime.events.subscribe({
         session_id: agent.sessionId,
@@ -466,10 +485,10 @@ export function chatRoutes(runtime: RuntimeContext) {
           id: randomUUID(),
         })
 
-        // End the stream only when the root agent (the one requested) is done
+        // End the stream when the root agent is done (not just the requested agent)
         if (
           (event.type === EVENT_TYPES.AGENT_COMPLETED || event.type === EVENT_TYPES.AGENT_FAILED) &&
-          event.agent_id === agentId
+          event.agent_id === breakAgentId
         ) {
           break
         }

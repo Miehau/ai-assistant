@@ -3,6 +3,7 @@ import type {
   AgentConfig,
   AgentStatus,
   Item,
+  ItemContentBlock,
   ItemRole,
   ItemType,
   Plan,
@@ -60,6 +61,7 @@ export interface CreateItemInput {
   name?: string | null
   arguments?: string | null
   output?: string | null
+  contentBlocks?: ItemContentBlock[] | null
   isError?: boolean | null
   saveOutput?: boolean | null
   turnNumber: number

@@ -44,11 +44,33 @@ function mapMessagesToOpenAI(messages: LLMMessage[]): OpenAI.ChatCompletionMessa
     }
 
     if (msg.role === 'tool') {
-      mapped.push({
-        role: 'tool',
-        tool_call_id: msg.tool_call_id!,
-        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-      })
+      if (Array.isArray(msg.content)) {
+        // OpenAI tool role only accepts string content — extract text blocks for the tool result,
+        // then inject a synthetic user message with any image blocks that follow.
+        const textParts = (msg.content as LLMContentBlock[]).filter((b) => b.type === 'text')
+        const imageParts = (msg.content as LLMContentBlock[]).filter((b) => b.type === 'image' && b.data)
+        const textContent = textParts.map((b) => b.text ?? '').join('\n') || '(tool result)'
+        mapped.push({
+          role: 'tool',
+          tool_call_id: msg.tool_call_id!,
+          content: textContent,
+        })
+        if (imageParts.length > 0) {
+          mapped.push({
+            role: 'user',
+            content: imageParts.map((b) => ({
+              type: 'image_url' as const,
+              image_url: { url: `data:${b.media_type ?? 'image/png'};base64,${b.data}` },
+            })),
+          } as OpenAI.ChatCompletionUserMessageParam)
+        }
+      } else {
+        mapped.push({
+          role: 'tool',
+          tool_call_id: msg.tool_call_id!,
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        })
+      }
       continue
     }
 

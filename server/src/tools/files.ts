@@ -4,11 +4,19 @@ import type { ToolHandler, ToolResult, ToolContext } from './types.js'
 
 const DEFAULT_MAX_LINES = 200
 
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+}
+
 export function registerFileTools(registry: { register: (h: ToolHandler) => void }): void {
   registry.register({
     metadata: {
       name: 'files.read',
-      description: 'Read file content. Returns lines from the file, optionally within a range.',
+      description: 'Read file content. Returns lines from the text file, optionally within a range. Loads images.',
       parameters: {
         type: 'object',
         properties: {
@@ -26,6 +34,21 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       const endLine = args.end_line as number | undefined
 
       try {
+        const ext = path.extname(filePath).toLowerCase()
+        const mediaType = IMAGE_EXTENSIONS[ext]
+
+        if (mediaType) {
+          const buffer = await fs.readFile(filePath)
+          return {
+            ok: true,
+            output: { path: filePath, media_type: mediaType },
+            content_blocks: [
+              { type: 'text', text: `Image file: ${filePath} (${mediaType})` },
+              { type: 'image', media_type: mediaType, data: buffer.toString('base64') },
+            ],
+          }
+        }
+
         const content = await fs.readFile(filePath, 'utf-8')
         const lines = content.split('\n')
         const start = Math.max(1, startLine) - 1
