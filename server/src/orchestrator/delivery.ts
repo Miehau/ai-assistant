@@ -1,5 +1,5 @@
 import type { OrchestratorDeps, RunResult } from './types.js'
-import { deliverOne } from '../domain/agent.js'
+import { deliverOne, completeAgent } from '../domain/agent.js'
 import { runAgent } from './runner.js'
 import { formatToolOutput } from './output.js'
 import { EVENT_TYPES } from '../events/types.js'
@@ -79,25 +79,32 @@ async function deliverResultLocked(
 // Deliver an approval or denial for a tool requiring user confirmation
 // ---------------------------------------------------------------------------
 
+export type ApprovalScope = 'once' | 'conversation' | 'always'
+
 export async function deliverApproval(
   agentId: string,
   callId: string,
   decision: 'approved' | 'denied',
   deps: OrchestratorDeps,
+  scope?: ApprovalScope,
 ): Promise<RunResult> {
   const release = await agentLock.acquire(agentId)
   try {
-    return await deliverApprovalLocked(agentId, callId, decision, deps)
+    return await deliverApprovalLocked(agentId, callId, decision, deps, scope)
   } finally {
     release()
   }
 }
+
+const APPROVAL_PREFIX_SESSION = 'tool_approval_session:'
+const APPROVAL_PREFIX_GLOBAL = 'tool_approval_global:'
 
 async function deliverApprovalLocked(
   agentId: string,
   callId: string,
   decision: 'approved' | 'denied',
   deps: OrchestratorDeps,
+  scope?: ApprovalScope,
 ): Promise<RunResult> {
   const agent = await deps.agents.getById(agentId)
   if (!agent) throw new Error(`Agent not found: ${agentId}`)
@@ -129,25 +136,86 @@ async function deliverApprovalLocked(
       timestamp: Date.now(),
     })
 
-    const updated = deliverOne(agent, callId)
-    await deps.agents.update(agentId, {
-      status: updated.status,
-      waitingFor: updated.waitingFor,
+    // Write denial outputs for any remaining pending approvals in this agent
+    const remainingWaits = agent.waitingFor.filter(
+      (w) => w.callId !== callId && w.type === 'approval',
+    )
+    for (const remaining of remainingWaits) {
+      await deps.items.create({
+        agentId,
+        type: 'function_call_output',
+        callId: remaining.callId,
+        output: 'Tool execution denied by user (batch cancelled)',
+        isError: true,
+        turnNumber: agent.turnCount,
+      })
+      deps.events.emit({
+        type: EVENT_TYPES.TOOL_DENIED,
+        agent_id: agentId,
+        session_id: agent.sessionId,
+        payload: { callId: remaining.callId, name: remaining.name },
+        timestamp: Date.now(),
+      })
+    }
+
+    // Complete the agent — denial means "stop", not "try again"
+    const stoppingMessage =
+      "Okay, stopping since the tool request wasn't approved. Let me know how you'd like to continue."
+
+    await deps.items.create({
+      agentId,
+      type: 'message',
+      role: 'assistant',
+      content: stoppingMessage,
+      turnNumber: agent.turnCount,
     })
 
-    if (updated.status === 'running') {
-      return runAndPropagateUp(agentId, deps)
+    const completed = completeAgent({ ...agent, status: 'running', waitingFor: [] }, stoppingMessage)
+    await deps.agents.update(agentId, {
+      status: 'completed',
+      result: completed.result,
+      waitingFor: [],
+      completedAt: completed.completedAt,
+    })
+
+    deps.events.emit({
+      type: EVENT_TYPES.AGENT_COMPLETED,
+      agent_id: agentId,
+      session_id: agent.sessionId,
+      payload: { result: stoppingMessage, parentId: agent.parentId, depth: agent.depth },
+      timestamp: Date.now(),
+    })
+
+    // Propagate denial up the parent chain so parent agents don't stay
+    // stuck in 'waiting' status.  Without this, new messages to a session
+    // whose root agent is still 'waiting' get a 202 instead of running.
+    if (agent.parentId && agent.sourceCallId) {
+      return propagateDenialUp(agent, stoppingMessage, deps)
     }
 
     return {
       agentId,
-      status: updated.status,
-      waitingFor: updated.waitingFor,
-      turnCount: updated.turnCount,
+      status: 'completed',
+      result: stoppingMessage,
+      turnCount: agent.turnCount,
     }
   }
 
-  // Approved: execute the tool, then resume
+  // Approved: persist approval override if scope is broader than "once"
+  if (scope && scope !== 'once') {
+    const toolName = waitEntry.name
+    try {
+      if (scope === 'conversation') {
+        const key = `${APPROVAL_PREFIX_SESSION}${agent.sessionId}:${toolName}`
+        await deps.preferences.set(key, 'false')
+      } else if (scope === 'always') {
+        const key = `${APPROVAL_PREFIX_GLOBAL}${toolName}`
+        await deps.preferences.set(key, 'false')
+      }
+    } catch {
+      // Non-fatal — approval still proceeds, just won't be remembered
+    }
+  }
 
   deps.events.emit({
     type: EVENT_TYPES.TOOL_APPROVED,
@@ -225,6 +293,86 @@ async function deliverApprovalLocked(
     status: updated.status,
     waitingFor: updated.waitingFor,
     turnCount: updated.turnCount,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Propagate a denied subagent's completion up the parent chain
+// ---------------------------------------------------------------------------
+
+async function propagateDenialUp(
+  child: { id: string; parentId: string | null; sourceCallId: string | null; sessionId: string; depth: number },
+  denialResult: string,
+  deps: OrchestratorDeps,
+): Promise<RunResult> {
+  let currentChild = child
+
+  while (currentChild.parentId && currentChild.sourceCallId) {
+    const parent = await deps.agents.getById(currentChild.parentId)
+    if (!parent || parent.status !== 'waiting') break
+
+    const parentWait = parent.waitingFor.find((w) => w.callId === currentChild.sourceCallId)
+    if (!parentWait) break
+
+    // Deliver the denial result as the delegate tool's output (error)
+    await deps.items.create({
+      agentId: parent.id,
+      type: 'function_call_output',
+      callId: currentChild.sourceCallId,
+      output: denialResult,
+      isError: true,
+      turnNumber: parent.turnCount,
+    })
+
+    deps.events.emit({
+      type: EVENT_TYPES.TOOL_COMPLETED,
+      agent_id: parent.id,
+      session_id: parent.sessionId,
+      payload: {
+        callId: currentChild.sourceCallId,
+        name: 'delegate',
+        success: false,
+        output: denialResult,
+        durationMs: 0,
+        parentId: parent.parentId ?? null,
+        depth: parent.depth,
+      },
+      timestamp: Date.now(),
+    })
+
+    // Transition parent — remove this callId from waitingFor
+    const updated = deliverOne(parent, currentChild.sourceCallId)
+    await deps.agents.update(parent.id, {
+      status: updated.status,
+      waitingFor: updated.waitingFor,
+    })
+
+    if (updated.status === 'running') {
+      // Parent is ready to resume — use the normal propagation path
+      return runAndPropagateUp(parent.id, deps)
+    }
+
+    if (updated.status !== 'waiting') {
+      return {
+        agentId: parent.id,
+        status: updated.status,
+        waitingFor: updated.waitingFor,
+        turnCount: updated.turnCount,
+      }
+    }
+
+    // Parent is still waiting for other deliveries — continue up the chain
+    // only if the parent itself is a subagent
+    const parentAgent = await deps.agents.getById(parent.id)
+    if (!parentAgent?.parentId || !parentAgent.sourceCallId) break
+    currentChild = parentAgent
+  }
+
+  return {
+    agentId: child.id,
+    status: 'completed' as const,
+    result: denialResult,
+    turnCount: 0,
   }
 }
 
