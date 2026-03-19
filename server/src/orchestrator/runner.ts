@@ -77,11 +77,13 @@ export async function runAgent(
     agents: deps.agents,
     items: deps.items,
     toolOutputs: deps.toolOutputs,
+    preferences: deps.preferences,
     provider: deps.provider,
     tools: deps.tools,
     events: deps.events,
+    agentDefinitions: deps.agentDefinitions,
     agent,
-    turnNumber: agent.turnCount,
+    turnNumber: 0,
     signal,
     stream: options?.stream ?? false,
   }
@@ -109,7 +111,11 @@ export async function runAgent(
       // 1. Build messages
       const useNativeTools = isNativeToolProvider(ctx.agent.config.provider)
       const systemPrompt = selectSystemPrompt(ctx.agent.config.provider)
-      const toolMetadata = ctx.tools.listMetadata()
+      const allToolMetadata = ctx.tools.listMetadata()
+      const allowedTools = ctx.agent.config.allowed_tools
+      const toolMetadata = allowedTools
+        ? allToolMetadata.filter((t) => t.orchestrator_intercept || allowedTools.includes(t.name))
+        : allToolMetadata
       const toolListStr = buildToolListString(toolMetadata)
 
       // Root agents load the full session history so the LLM sees prior turns.
@@ -577,6 +583,35 @@ async function executeFlatStep(
 }
 
 // ---------------------------------------------------------------------------
+// Approval override resolution
+// ---------------------------------------------------------------------------
+
+const APPROVAL_PREFIX_SESSION = 'tool_approval_session:'
+const APPROVAL_PREFIX_GLOBAL = 'tool_approval_global:'
+
+async function resolveRequiresApproval(
+  ctx: RunContext,
+  toolName: string,
+  defaultRequiresApproval: boolean,
+): Promise<boolean> {
+  try {
+    // 1. Session-scoped override (highest priority)
+    const sessionKey = `${APPROVAL_PREFIX_SESSION}${ctx.agent.sessionId}:${toolName}`
+    const sessionOverride = await ctx.preferences.get(sessionKey)
+    if (sessionOverride !== null) return sessionOverride === 'true'
+
+    // 2. Global override
+    const globalKey = `${APPROVAL_PREFIX_GLOBAL}${toolName}`
+    const globalOverride = await ctx.preferences.get(globalKey)
+    if (globalOverride !== null) return globalOverride === 'true'
+  } catch {
+    // Fall through to default on any error
+  }
+
+  return defaultRequiresApproval
+}
+
+// ---------------------------------------------------------------------------
 // Single tool execution
 // ---------------------------------------------------------------------------
 
@@ -610,9 +645,11 @@ async function executeTool(
       agents: ctx.agents,
       items: ctx.items,
       toolOutputs: ctx.toolOutputs,
+      preferences: ctx.preferences,
       provider: ctx.provider,
       tools: ctx.tools,
       events: ctx.events,
+      agentDefinitions: ctx.agentDefinitions,
     }
     return handleDelegation(callId, args, ctx, deps, delegateStartMs)
   }
@@ -621,8 +658,9 @@ async function executeTool(
   const lastOutputId = await getLastOutputId(ctx)
   const hydratedArgs = hydrateToolArgs(name, args, lastOutputId)
 
-  // Check if tool requires approval
-  if (meta?.requires_approval) {
+  // Check if tool requires approval (with override resolution)
+  const needsApproval = await resolveRequiresApproval(ctx, name, meta?.requires_approval ?? false)
+  if (needsApproval) {
     // Save the function_call item
     await ctx.items.create({
       agentId: ctx.agent.id,
@@ -750,7 +788,7 @@ async function executeToolBatch(
     const meta = ctx.tools.getMetadata(spec.tool)
     if (meta?.orchestrator_intercept) {
       interceptedSpecs.push(spec)
-    } else if (meta?.requires_approval) {
+    } else if (await resolveRequiresApproval(ctx, spec.tool, meta?.requires_approval ?? false)) {
       needsApproval.push(spec)
     } else {
       canExecute.push(spec)
@@ -779,9 +817,11 @@ async function executeToolBatch(
       agents: ctx.agents,
       items: ctx.items,
       toolOutputs: ctx.toolOutputs,
+      preferences: ctx.preferences,
       provider: ctx.provider,
       tools: ctx.tools,
       events: ctx.events,
+      agentDefinitions: ctx.agentDefinitions,
     }
     for (const spec of interceptedSpecs) {
       ctx.events.emit({
@@ -977,6 +1017,34 @@ async function handleDelegation(
     return { type: 'continue' }
   }
 
+  // Resolve named agent definition — explicit name, then "default", then hardcoded fallback
+  const agentName = typeof args.agent === 'string' ? args.agent : undefined
+  const available = ctx.agentDefinitions.list().filter((d) => d.name !== 'default')
+
+  if (agentName) {
+    const exists = ctx.agentDefinitions.get(agentName)
+    if (!exists) {
+      const names = available.map((d) => d.name).join(', ') || 'none'
+      await ctx.items.create({
+        agentId: ctx.agent.id,
+        type: 'function_call_output',
+        callId,
+        output: `Unknown agent: "${agentName}". Available agents: ${names}`,
+        isError: true,
+        turnNumber: ctx.turnNumber,
+      })
+      return { type: 'continue' }
+    }
+  }
+
+  const definition = agentName
+    ? ctx.agentDefinitions.get(agentName)
+    : ctx.agentDefinitions.get('default')
+
+  const childModel = definition?.model ?? 'anthropic:claude-haiku-4-5-20251001'
+  const childProvider = childModel.includes(':') ? childModel.slice(0, childModel.indexOf(':')) : childModel
+  const childMaxTurns = definition?.max_turns ?? 10
+
   // Create child agent
   const child = await ctx.agents.create({
     sessionId: ctx.agent.sessionId,
@@ -984,7 +1052,13 @@ async function handleDelegation(
     sourceCallId: callId,
     depth: ctx.agent.depth + 1,
     task,
-    config: { ...ctx.agent.config },
+    config: {
+      ...ctx.agent.config,
+      model: childModel,
+      provider: childProvider,
+      ...(definition?.system_prompt ? { system_prompt: definition.system_prompt } : {}),
+      ...(definition?.tools ? { allowed_tools: definition.tools } : {}),
+    },
   })
 
   // Seed child with task as user message
@@ -1006,7 +1080,7 @@ async function handleDelegation(
 
   // Run child synchronously (blocking parent)
   const childResult = await runAgent(child.id, deps, {
-    maxTurns: 10,
+    maxTurns: childMaxTurns,
     signal: ctx.signal,
     stream: ctx.stream,
   })

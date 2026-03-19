@@ -8,6 +8,7 @@ import type { Item } from '../domain/types.js'
 import { runAgent } from '../orchestrator/runner.js'
 import { deliverResult, deliverApproval } from '../orchestrator/delivery.js'
 import { EVENT_TYPES } from '../events/types.js'
+import { cancelAgent } from '../domain/index.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,9 +28,11 @@ function buildDeps(runtime: RuntimeContext, model: string): OrchestratorDeps {
     agents: runtime.repositories.agents,
     items: runtime.repositories.items,
     toolOutputs: runtime.repositories.toolOutputs,
+    preferences: runtime.repositories.preferences,
     provider: resolveProvider(runtime, model),
     tools: runtime.tools,
     events: runtime.events,
+    agentDefinitions: runtime.agentDefinitions,
   }
 }
 
@@ -86,7 +89,7 @@ export function chatRoutes(runtime: RuntimeContext) {
       // 2. Reuse existing root agent or create a new one
       let agent = await runtime.repositories.agents.findRootAgent(sessionId)
 
-      if (agent && (agent.status === 'completed' || agent.status === 'failed')) {
+      if (agent && (agent.status === 'completed' || agent.status === 'failed' || agent.status === 'cancelled')) {
         // Resume the existing agent — add new message and re-run
         await runtime.repositories.agents.update(agent.id, {
           status: 'running',
@@ -379,6 +382,7 @@ export function chatRoutes(runtime: RuntimeContext) {
       const body = await c.req.json<{
         callId: string
         decision: 'approved' | 'denied'
+        scope?: 'once' | 'conversation' | 'always'
       }>()
 
       const agent = await runtime.repositories.agents.getById(agentId)
@@ -392,6 +396,7 @@ export function chatRoutes(runtime: RuntimeContext) {
         body.callId,
         body.decision,
         deps,
+        body.scope,
       )
 
       // After runAndPropagateUp, the result may be from a parent agent.
@@ -446,6 +451,33 @@ export function chatRoutes(runtime: RuntimeContext) {
         error: agent.error,
         turnCount: agent.turnCount,
       })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 500)
+    }
+  })
+
+  // POST /agents/:agentId/cancel — Cancel a running or waiting agent
+  app.post('/agents/:agentId/cancel', async (c) => {
+    try {
+      const { agentId } = c.req.param()
+      const agent = await runtime.repositories.agents.getById(agentId)
+
+      if (!agent) {
+        return c.json({ error: `Agent not found: ${agentId}` }, 404)
+      }
+
+      if (agent.status === 'cancelled' || agent.status === 'completed') {
+        return c.json({ id: agentId, status: agent.status })
+      }
+
+      const updated = cancelAgent(agent)
+      await runtime.repositories.agents.update(agentId, {
+        status: updated.status,
+        completedAt: updated.completedAt,
+      })
+
+      return c.json({ id: agentId, status: 'cancelled' })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, 500)

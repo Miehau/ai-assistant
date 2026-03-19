@@ -149,9 +149,11 @@ export function openaiCompatRoutes(runtime: RuntimeContext): Hono {
         agents: runtime.repositories.agents,
         items: runtime.repositories.items,
         toolOutputs: runtime.repositories.toolOutputs,
+        preferences: runtime.repositories.preferences,
         provider: runtime.providers.resolve(model),
         tools: runtime.tools,
         events: runtime.events,
+        agentDefinitions: runtime.agentDefinitions,
       }
 
       const completionId = `chatcmpl-${randomUUID()}`

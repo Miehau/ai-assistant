@@ -25,6 +25,8 @@ export interface HonoStreamOptions {
 export interface HonoStreamResult {
   /** The Hono session ID returned in the `done` event — persist for next turn */
   sessionId?: string;
+  /** Root agent ID — used to cancel the agent if needed */
+  agentId?: string;
 }
 
 /**
@@ -294,6 +296,23 @@ export async function streamMessageViaHono(
           if (entry.type === 'approval' && !surfacedApprovalIds.has(entry.callId)) {
             console.log('[honoEventBridge] approval required (agent_status path):', entry.name, entry.callId);
             surfacedApprovalIds.add(entry.callId);
+            // Emit STARTED so a tool bubble is created (segment + ToolCallRecord)
+            toolStartTimes.set(entry.callId, Date.now());
+            onEvent({
+              event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_STARTED,
+              payload: {
+                execution_id: entry.callId,
+                tool_name: entry.name,
+                args: entry.args ?? {},
+                message_id: messageId,
+                conversation_id: conversationId,
+                session_id: data.agentId as string | undefined,
+                parent_session_id: null,
+                is_sub_agent: false,
+                timestamp_ms: ts(),
+              },
+              timestamp_ms: ts(),
+            });
             onEvent({
               event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED,
               payload: {
@@ -343,6 +362,23 @@ export async function streamMessageViaHono(
             if (entry.type === 'approval' && !surfacedApprovalIds.has(entry.callId)) {
               console.log('[honoEventBridge] approval required (done path):', entry.name, entry.callId);
               surfacedApprovalIds.add(entry.callId);
+              // Emit STARTED so a tool bubble is created (segment + ToolCallRecord)
+              toolStartTimes.set(entry.callId, Date.now());
+              onEvent({
+                event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_STARTED,
+                payload: {
+                  execution_id: entry.callId,
+                  tool_name: entry.name,
+                  args: entry.args ?? {},
+                  message_id: messageId,
+                  conversation_id: conversationId,
+                  session_id: data.id as string | undefined,
+                  parent_session_id: null,
+                  is_sub_agent: false,
+                  timestamp_ms: ts(),
+                },
+                timestamp_ms: ts(),
+              });
               onEvent({
                 event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED,
                 payload: {
@@ -386,7 +422,7 @@ export async function streamMessageViaHono(
     }
   }
 
-  return { sessionId: resultSessionId };
+  return { sessionId: resultSessionId, agentId: rootAgentId };
 }
 
 function honoStatusToPhase(status: string): string | null {

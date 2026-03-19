@@ -5,6 +5,8 @@ export interface ToolCallGroup {
   isSubAgent: boolean;
   parentSessionId: string | null | undefined;
   calls: ToolCallRecord[];
+  /** For subagent groups: the agent.spawn call in the parent that spawned this session. */
+  spawnCall?: ToolCallRecord;
 }
 
 /**
@@ -36,13 +38,21 @@ export function groupToolCallsBySession(toolCalls: ToolCallRecord[]): ToolCallGr
     }
   }
 
-  // Add grouped subagent sessions
+  // Add grouped subagent sessions, linking each to its agent.spawn call.
+  // Match: spawnCall.session_id === subagent.parent_session_id (the parent's session ID
+  // is the session in which agent.spawn was called, propagated into all subagent events).
   for (const [sessionId, calls] of sessionMap.entries()) {
+    const parentSessionId = calls[0]?.parent_session_id;
+    const spawnCall = groups
+      .filter((g) => !g.isSubAgent)
+      .flatMap((g) => g.calls)
+      .find((c) => c.tool_name === 'agent.spawn' && c.session_id === parentSessionId);
     groups.push({
       sessionId,
       isSubAgent: true,
-      parentSessionId: calls[0]?.parent_session_id,
+      parentSessionId,
       calls,
+      spawnCall,
     });
   }
 

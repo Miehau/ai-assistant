@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import path from 'path'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -26,6 +27,14 @@ type AppEnv = {
 }
 
 const config = loadConfig()
+
+if (config.workingDir) {
+  // Resolve DATABASE_URL to absolute before chdir so it doesn't get re-rooted
+  if (!path.isAbsolute(config.databaseUrl)) {
+    config.databaseUrl = path.resolve(process.cwd(), config.databaseUrl)
+  }
+  process.chdir(config.workingDir)
+}
 
 async function main() {
   const runtime = await initRuntime(config)

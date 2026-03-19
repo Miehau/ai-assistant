@@ -1,4 +1,5 @@
 import type { ToolHandler } from './types.js'
+import type { AgentDefinitionRegistry } from '../agents/registry.js'
 
 /**
  * Delegate tool — spawns a child agent to handle a subtask.
@@ -6,13 +7,30 @@ import type { ToolHandler } from './types.js'
  * Marked `orchestrator_intercept: true` — the runner intercepts this tool
  * and runs handleDelegation() instead of calling handle(). The handle()
  * method exists only as a safety net if interception is bypassed.
+ *
+ * Named agents defined in server/agents/*.md are listed in the tool
+ * description so the LLM knows which specialised agents are available.
  */
-export function registerDelegateTools(registry: { register: (h: ToolHandler) => void }): void {
+export function registerDelegateTools(
+  registry: { register: (h: ToolHandler) => void },
+  agentDefs: AgentDefinitionRegistry,
+): void {
+  const named = agentDefs.list().filter((d) => d.name !== 'default')
+
+  let description =
+    'Delegate a subtask to a child agent. Use this when a task can be broken into independent subtasks that benefit from separate context.'
+
+  if (named.length > 0) {
+    const lines = named.map((d) => `- ${d.name}: ${d.description ?? 'no description'}`)
+    description += `\n\nAvailable named agents (pass via the "agent" parameter):\n${lines.join('\n')}`
+  }
+
+  const agentNames = named.map((d) => d.name)
+
   registry.register({
     metadata: {
       name: 'delegate',
-      description:
-        'Delegate a subtask to a child agent. The child agent runs with the same tools and model. Use this when a task can be broken into independent subtasks that benefit from separate context.',
+      description,
       parameters: {
         type: 'object',
         properties: {
@@ -20,6 +38,15 @@ export function registerDelegateTools(registry: { register: (h: ToolHandler) => 
             type: 'string',
             description: 'Clear description of what the child agent should accomplish',
           },
+          ...(agentNames.length > 0
+            ? {
+                agent: {
+                  type: 'string',
+                  enum: agentNames,
+                  description: `Named agent to use. If omitted, the default general-purpose agent is used. Available: ${agentNames.join(', ')}`,
+                },
+              }
+            : {}),
         },
         required: ['task'],
       },

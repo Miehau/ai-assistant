@@ -80,6 +80,9 @@ export const activeSubAgents = writable<SubAgentEntry[]>([]);
 // Streaming-specific stores for smooth updates without array reactivity
 export const streamingMessage = writable<string>('');
 export const isStreaming = writable<boolean>(false);
+/** How many characters of $streamingMessage have already been captured into text segments.
+ *  The streaming div shows only the tail: $streamingMessage.slice($streamingSegmentedLength). */
+export const streamingSegmentedLength = writable<number>(0);
 
 // Derived stores
 export const hasAttachments = derived(
@@ -95,6 +98,7 @@ let systemPromptsLoaded = false;
 let systemPromptsLoadingPromise: Promise<void> | null = null;
 let stopAgentEventBridge: (() => void) | null = null;
 let honoStreamController: AbortController | null = null;
+let honoAgentId: string | null = null;
 let streamingAssistantMessageId: string | null = null;
 let streamingChunkBuffer = '';
 let streamingFlushPending = false;
@@ -118,7 +122,20 @@ function appendSegment(messageId: string, segment: MessageSegment) {
       return;
     }
   }
-  segmentsByMessageId.set(messageId, [...existing, segment]);
+  const updated = [...existing, segment];
+  segmentsByMessageId.set(messageId, updated);
+
+  // Propagate all segments (text + tool) to the message immediately so
+  // the interleaved rendering path shows text in the correct order relative
+  // to tool bubbles during streaming. Text segments are only appended at
+  // tool boundaries (infrequent), so this update is not on the hot chunk path.
+  // The streaming div shows only the tail ($streamingMessage.slice(segmentedLength))
+  // to avoid duplicating text that is already rendered via a text segment.
+  messages.update((msgs) =>
+    msgs.map((msg) =>
+      msg.id === messageId ? { ...msg, segments: updated } : msg
+    )
+  );
 }
 
 /**
@@ -132,6 +149,7 @@ function flushTextSegment(messageId: string, fullText: string) {
       appendSegment(messageId, { kind: 'text', content: newText });
     }
     segmentedTextLength = fullText.length;
+    streamingSegmentedLength.set(segmentedTextLength);
   }
 }
 
@@ -371,11 +389,13 @@ function resetStreamingState() {
   clearRequestWatchdog();
   streamingAssistantMessageId = null;
   pendingAssistantMessageId = null;
+  honoAgentId = null;
   isStreaming.set(false);
   streamingMessage.set('');
   streamingChunkBuffer = '';
   streamingFlushPending = false;
   segmentedTextLength = 0;
+  streamingSegmentedLength.set(0);
   isLoading.set(false);
   // Flush any pending agent output deltas before clearing
   if (agentOutputFlushTimer) {
@@ -804,12 +824,33 @@ function handleAgentEvent(event: AgentEvent) {
       pendingToolApprovals.update((approvals) =>
         approvals.filter((entry) => entry.approval_id !== payload.approval_id)
       );
+
+      // Mark denied tool calls so the UI can show them as denied (amber)
+      if (event.event_type === AGENT_EVENT_TYPES.TOOL_EXECUTION_DENIED) {
+        const msgId = (payload as Record<string, unknown>).message_id as string | undefined;
+        if (msgId) {
+          upsertToolCall(msgId, payload.execution_id, {
+            tool_name: payload.tool_name,
+            success: false,
+            error: 'Tool execution denied by user',
+            completed_at: Date.now(),
+          });
+        }
+      }
     }
 
     if (event.event_type === AGENT_EVENT_TYPES.AGENT_PHASE_CHANGED) {
       const payload = event.payload as AgentPhaseChangedPayload;
       agentPhase.set(payload.phase as PhaseKind);
       if (isNeedsHumanInputPhase(payload.phase)) {
+        // Capture any in-flight streaming text as a text segment before clearing
+        // the streaming state. Without this the text is lost when the agent pauses
+        // for an approval and ASSISTANT_STREAM_COMPLETED never fires.
+        if (streamingAssistantMessageId) {
+          const accumulatedText = get(streamingMessage) + streamingChunkBuffer;
+          streamingChunkBuffer = '';
+          flushTextSegment(streamingAssistantMessageId, accumulatedText);
+        }
         finalizeRunningToolCalls('Awaiting user input', Date.now());
         isLoading.set(false);
         isStreaming.set(false);
@@ -1089,7 +1130,21 @@ export async function loadSystemPrompts(options: { force?: boolean } = {}) {
   }
 }
 
-function honoItemsToMessages(items: import('$lib/backend/http-client').SessionItem[]): Message[] {
+function honoItemsToMessages(
+  items: import('$lib/backend/http-client').SessionItem[],
+  agents: import('$lib/backend/http-client').AgentStatusResponse[] = [],
+): Message[] {
+  // Build agent map for hierarchy lookups
+  const agentMap = new Map<string, import('$lib/backend/http-client').AgentStatusResponse>();
+  for (const a of agents) agentMap.set(a.id, a);
+
+  // sourceCallId → subAgentId: lets us attach subagent tool calls right after agent.spawn
+  const subagentBySourceCallId = new Map<string, string>();
+  for (const a of agents) {
+    if (a.sourceCallId && a.parentId) subagentBySourceCallId.set(a.sourceCallId, a.id);
+  }
+
+  // Build output map for all items (root + subagent)
   const outputByCallId = new Map<string, import('$lib/backend/http-client').SessionItem>();
   for (const item of items) {
     if (item.type === 'function_call_output' && item.callId) {
@@ -1097,14 +1152,47 @@ function honoItemsToMessages(items: import('$lib/backend/http-client').SessionIt
     }
   }
 
+  // Group subagent function_call items by agentId (in sequence order, preserved by listBySession)
+  const subagentCallsByAgentId = new Map<string, ToolCallRecord[]>();
+  for (const item of items) {
+    if (item.type !== 'function_call') continue;
+    const agent = item.agentId ? agentMap.get(item.agentId) : undefined;
+    if (!agent?.parentId) continue; // root agent calls handled in main loop
+
+    let args: Record<string, unknown> = {};
+    try { args = item.arguments ? JSON.parse(item.arguments) : {}; } catch { /* ignore */ }
+    const out = item.callId ? outputByCallId.get(item.callId) : undefined;
+
+    const calls = subagentCallsByAgentId.get(item.agentId!) ?? [];
+    calls.push({
+      execution_id: item.callId ?? item.id,
+      tool_name: item.name ?? 'unknown',
+      args,
+      result: out?.output ?? undefined,
+      success: out ? !out.isError : undefined,
+      error: out?.isError ? (out.output ?? undefined) : undefined,
+      duration_ms: item.durationMs ?? undefined,
+      session_id: item.agentId ?? undefined,
+      parent_session_id: agent.parentId,
+      is_sub_agent: true,
+    });
+    subagentCallsByAgentId.set(item.agentId!, calls);
+  }
+
+  // Process root-agent items to build messages; splice in subagent calls after agent.spawn
   const result: Message[] = [];
   const pendingToolCalls: ToolCallRecord[] = [];
 
   for (const item of items) {
+    const agent = item.agentId ? agentMap.get(item.agentId) : undefined;
+    // Skip subagent items — they've been collected above
+    if (agent?.parentId) continue;
+
     if (item.type === 'function_call') {
       let args: Record<string, unknown> = {};
       try { args = item.arguments ? JSON.parse(item.arguments) : {}; } catch { /* ignore */ }
       const out = item.callId ? outputByCallId.get(item.callId) : undefined;
+
       pendingToolCalls.push({
         execution_id: item.callId ?? item.id,
         tool_name: item.name ?? 'unknown',
@@ -1113,7 +1201,18 @@ function honoItemsToMessages(items: import('$lib/backend/http-client').SessionIt
         success: out ? !out.isError : undefined,
         error: out?.isError ? (out.output ?? undefined) : undefined,
         duration_ms: item.durationMs ?? undefined,
+        session_id: item.agentId ?? undefined,
+        is_sub_agent: false,
       });
+
+      // Splice subagent tool calls right after the agent.spawn that spawned them
+      if (item.callId && item.name === 'agent.spawn') {
+        const subAgentId = subagentBySourceCallId.get(item.callId);
+        if (subAgentId) {
+          const subCalls = subagentCallsByAgentId.get(subAgentId) ?? [];
+          pendingToolCalls.push(...subCalls);
+        }
+      }
     } else if (item.type === 'message') {
       if (item.role === 'user') {
         result.push({ id: item.id, type: 'sent', content: item.content ?? '' });
@@ -1142,7 +1241,7 @@ export async function loadConversationHistory(conversationId: string) {
       const sessionId = honoBackend.getSessionId(conversationId);
       if (sessionId) {
         const session = await honoBackend.getClient().getSession(sessionId);
-        loadedMessages = honoItemsToMessages(session.items ?? []);
+        loadedMessages = honoItemsToMessages(session.items ?? [], session.agents ?? []);
       } else {
         loadedMessages = [];
       }
@@ -1462,6 +1561,9 @@ export async function sendMessage() {
         if (result.sessionId) {
           honoBackend.setSessionId(currentConversation.id, result.sessionId);
         }
+        if (result.agentId) {
+          honoAgentId = result.agentId;
+        }
       } finally {
         honoStreamController = null;
       }
@@ -1533,17 +1635,18 @@ export async function cancelCurrentAgentRequest() {
   if (honoStreamController) {
     honoStreamController.abort();
     honoStreamController = null;
-    resetStreamingState();
-    return;
   }
 
-  try {
-    await invoke('agent_cancel', { payload: { message_id: messageId } });
-  } catch (error) {
-    console.error('Failed to cancel agent request:', error);
-  } finally {
-    resetStreamingState();
+  if (honoAgentId) {
+    const agentId = honoAgentId;
+    try {
+      await honoBackend.getClient().cancelAgent(agentId);
+    } catch {
+      // best-effort
+    }
   }
+
+  resetStreamingState();
 }
 
 export function clearConversation() {
@@ -1628,6 +1731,24 @@ export async function resolveToolApproval(
                 timestamp_ms: ts,
               });
             } else if (event === 'tool:proposed') {
+              // Emit TOOL_EXECUTION_STARTED first so a tool bubble (segment +
+              // ToolCallRecord) is created — mirrors the main bridge's `approval`
+              // handler which emits both STARTED and PROPOSED.
+              handleAgentEvent({
+                event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_STARTED,
+                payload: {
+                  execution_id: data.callId as string,
+                  tool_name: data.name as string,
+                  args: (data.args as Record<string, unknown>) ?? {},
+                  message_id: msgId,
+                  conversation_id: convId,
+                  session_id: data.agentId as string | undefined,
+                  parent_session_id: (data.parentId as string) ?? null,
+                  is_sub_agent: data.parentId != null,
+                  timestamp_ms: ts,
+                },
+                timestamp_ms: ts,
+              });
               handleAgentEvent({
                 event_type: AGENT_EVENT_TYPES.TOOL_EXECUTION_PROPOSED,
                 payload: {
@@ -1663,6 +1784,22 @@ export async function resolveToolApproval(
                   timestamp_ms: ts,
                 });
               }
+            } else if (event === 'tool:denied') {
+              const deniedCallId = data.callId as string;
+              const deniedName = (data.name as string) ?? '';
+              if (msgId) {
+                upsertToolCall(msgId, deniedCallId, {
+                  tool_name: deniedName,
+                  success: false,
+                  error: 'Tool execution denied by user',
+                  completed_at: ts,
+                });
+              }
+              // Also remove from pending approvals in case the batch-cancel path
+              // denied sibling tools that are still shown in the UI.
+              pendingToolApprovals.update((a) =>
+                a.filter((x) => x.approval_id !== deniedCallId)
+              );
             } else if (event === 'agent:completed' || event === 'agent:failed') {
               // Only break when the ROOT agent is done (parentId is null/undefined)
               const parentId = data.parentId as string | null | undefined;
@@ -1680,25 +1817,30 @@ export async function resolveToolApproval(
           agentId,
           approvalId,
           approved ? 'approved' : 'denied',
+          scope,
         );
 
         // Stop event subscription — the HTTP response has the final state
         eventAbort.abort();
         const didStream = await eventPromise.catch(() => false);
 
-        // Mark any still-running delegate tool calls as completed — the server's
-        // runAndPropagateUp may have finished them but the event loop broke early
-        // (on the child's agent:completed) before the delegate's tool:completed arrived.
+        // Reconcile tool calls whose events were missed due to the SSE
+        // subscription racing against the approval POST.  This covers the
+        // approved tool itself, any tools the agent executed in the continued
+        // run, and delegate tools whose tool:completed may not have arrived
+        // before the event loop broke.
         if (result.status === 'completed' || result.status === 'failed') {
           const msgId = approval?.message_id;
           if (msgId) {
             const entries = toolCallsByMessageId.get(msgId);
             if (entries) {
               for (const [execId, tc] of entries) {
-                if (tc.tool_name === 'delegate' && tc.success === undefined) {
+                if (tc.success === undefined) {
                   upsertToolCall(msgId, execId, {
                     success: result.status === 'completed',
-                    result: result.output?.[result.output.length - 1]?.content ?? '',
+                    result: tc.tool_name === 'delegate'
+                      ? (result.output?.[result.output.length - 1]?.content ?? '')
+                      : undefined,
                     completed_at: Date.now(),
                   });
                 }
@@ -1743,6 +1885,17 @@ export async function resolveToolApproval(
         if (result.status === 'waiting' && result.waitingFor) {
           for (const w of result.waitingFor) {
             if (w.type === 'approval') {
+              const wMsgId = approval?.message_id;
+              // Ensure a tool bubble exists for this approval (segment + ToolCallRecord)
+              if (wMsgId) {
+                ensureAssistantMessageForToolExecution(wMsgId, Date.now());
+                upsertToolCall(wMsgId, w.callId, {
+                  tool_name: w.name,
+                  args: w.args ?? {},
+                  started_at: Date.now(),
+                });
+                appendSegment(wMsgId, { kind: 'tool', execution_id: w.callId });
+              }
               pendingToolApprovals.update((a) => {
                 if (a.some((x) => x.approval_id === w.callId)) return a;
                 return [...a, {
@@ -1750,7 +1903,7 @@ export async function resolveToolApproval(
                   approval_id: w.callId,
                   tool_name: w.name,
                   args: w.args ?? {},
-                  agent_id: agentId,
+                  agent_id: result.id ?? agentId,
                   message_id: approval?.message_id,
                   conversation_id: approval?.conversation_id,
                   iteration: 0,

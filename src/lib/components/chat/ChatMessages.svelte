@@ -4,7 +4,7 @@
   import { fade, fly, scale } from "svelte/transition";
   import { backOut } from "svelte/easing";
   import type { Message, ToolCallRecord } from "$lib/types";
-  import { streamingMessage, isStreaming } from "$lib/stores/chat";
+  import { streamingMessage, isStreaming, streamingSegmentedLength } from "$lib/stores/chat";
   import { pageVisible } from "$lib/stores/visibility";
   import ToolApprovalQueue from "./ToolApprovalQueue.svelte";
   import ToolCallBubble from "./ToolCallBubble.svelte";
@@ -39,9 +39,13 @@
   }
 
   $: phaseLabel = getPhaseLabel(agentPhase);
+  // Only the text after the last flushed text segment — shown in the streaming div.
+  // Pre-tool text is already rendered inline via msg.segments, so showing the full
+  // $streamingMessage would duplicate it.
+  $: streamingTail = $streamingMessage.slice($streamingSegmentedLength);
   $: showThinkingStatus =
     (isLoading || $isStreaming) &&
-    !($isStreaming && $streamingMessage && $streamingMessage.length > 0);
+    !($isStreaming && streamingTail.length > 0);
 
   function shouldRenderMessage(msg: Message): boolean {
     if (msg.type === "sent") return true;
@@ -331,7 +335,28 @@
     {@const animated = i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
     {#if msg.segments && msg.segments.length > 0}
       <!-- Interleaved rendering: text and tool calls in streaming order -->
-      {@const toolCallMap = Object.fromEntries((msg.tool_calls ?? []).map((tc: ToolCallRecord) => [tc.execution_id, tc]))}
+      <!-- Pre-compute groups from ALL tool calls so sub-agent calls sharing a session_id are grouped together.
+           Build a set of "anchor" execution_ids: the first segment execution_id for each group.
+           Only the anchor segment renders the full group; later segments for the same group are skipped. -->
+      {@const allToolGroups = groupToolCallsBySession(msg.tool_calls ?? [])}
+      {@const execToGroup = new Map(allToolGroups.flatMap((g) => g.calls.map((c) => [c.execution_id, g])))}
+      {@const toolSegmentIds = msg.segments.filter((s) => s.kind === 'tool').map((s) => s.execution_id)}
+      <!-- For subagent groups, also treat the spawn call's execution_id as an anchor.
+           This handles the segments path where subagent tool calls have no parent-message
+           segments — the agent.spawn segment becomes the render point for the whole group. -->
+      {@const spawnExecToSubagentGroup = new Map(
+        allToolGroups
+          .filter((g) => g.isSubAgent && g.spawnCall)
+          .map((g) => [g.spawnCall!.execution_id, g])
+      )}
+      {@const anchorExecIds = new Set([
+        ...allToolGroups.map((g) => {
+          const groupExecIds = new Set(g.calls.map((c) => c.execution_id));
+          return toolSegmentIds.find((id) => groupExecIds.has(id));
+        }).filter(Boolean),
+        // Subagent groups anchor at their spawn call's segment position
+        ...Array.from(spawnExecToSubagentGroup.keys()).filter((id) => toolSegmentIds.includes(id)),
+      ])}
       {#each msg.segments as segment, si (segment.kind === 'tool' ? segment.execution_id : `text-${i}-${si}`)}
         {#if segment.kind === 'text' && segment.content.trim().length > 0}
           {#if animated}
@@ -363,32 +388,30 @@
               />
             </div>
           {/if}
-        {:else if segment.kind === 'tool'}
-          {@const toolCall = toolCallMap[segment.execution_id]}
-          {#if toolCall}
-            {@const toolGroups = groupToolCallsBySession([toolCall])}
-            {#each toolGroups as group (group.isSubAgent ? group.sessionId : group.calls[0]?.execution_id)}
-              {#if animated}
-                <div
-                  in:fly={{ y: 10, duration: 150, easing: backOut }}
-                  class="w-full message-container flex justify-start"
-                >
-                  {#if group.isSubAgent}
-                    <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
-                  {:else}
-                    <ToolCallBubble call={group.calls[0]} />
-                  {/if}
-                </div>
-              {:else}
-                <div class="w-full message-container flex justify-start">
-                  {#if group.isSubAgent}
-                    <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
-                  {:else}
-                    <ToolCallBubble call={group.calls[0]} />
-                  {/if}
-                </div>
-              {/if}
-            {/each}
+        {:else if segment.kind === 'tool' && anchorExecIds.has(segment.execution_id)}
+          <!-- Resolve which group to render: a spawn-call segment may represent a subagent group -->
+          {@const group = spawnExecToSubagentGroup.get(segment.execution_id) ?? execToGroup.get(segment.execution_id)}
+          {#if group}
+            {#if animated}
+              <div
+                in:fly={{ y: 10, duration: 150, easing: backOut }}
+                class="w-full message-container flex justify-start"
+              >
+                {#if group.isSubAgent}
+                  <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
+                {:else}
+                  <ToolCallBubble call={group.calls[0]} />
+                {/if}
+              </div>
+            {:else}
+              <div class="w-full message-container flex justify-start">
+                {#if group.isSubAgent}
+                  <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
+                {:else}
+                  <ToolCallBubble call={group.calls[0]} />
+                {/if}
+              </div>
+            {/if}
           {/if}
         {/if}
       {/each}
@@ -396,14 +419,19 @@
       <!-- Legacy rendering: tool calls first, then message text -->
       {#if msg.type === "received" && msg.tool_calls && msg.tool_calls.length > 0}
         {@const toolGroups = groupToolCallsBySession(msg.tool_calls)}
+        <!-- In the legacy path, suppress standalone ToolCallBubbles for agent.spawn calls
+             that have an associated subagent group — the group renders those. -->
+        {@const subagentSpawnExecIds = new Set(toolGroups.filter(g => g.isSubAgent && g.spawnCall).map(g => g.spawnCall!.execution_id))}
         {#each toolGroups as group (group.isSubAgent ? group.sessionId : group.calls[0]?.execution_id)}
-          {#if animated}
+          {#if !group.isSubAgent && subagentSpawnExecIds.has(group.calls[0]?.execution_id)}
+            <!-- Suppressed: rendered inside SubagentExecutionGroup below -->
+          {:else if animated}
             <div
               in:fly={{ y: 10, duration: 150, easing: backOut }}
               class="w-full message-container flex justify-start"
             >
               {#if group.isSubAgent}
-                <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
+                <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
               {:else}
                 <ToolCallBubble call={group.calls[0]} />
               {/if}
@@ -411,7 +439,7 @@
           {:else}
             <div class="w-full message-container flex justify-start">
               {#if group.isSubAgent}
-                <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} />
+                <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
               {:else}
                 <ToolCallBubble call={group.calls[0]} />
               {/if}
@@ -482,20 +510,19 @@
     </div>
   {/if}
 
-  <!-- Streaming message displayed separately to avoid array reactivity -->
-  {#if $isStreaming}
+  <!-- Streaming tail: only the text since the last tool boundary.
+       Pre-tool text is already rendered inline via msg.segments. -->
+  {#if $isStreaming && streamingTail}
     <div
       in:fly={{ y: 10, duration: 150, easing: backOut }}
       class="w-full message-container"
     >
-      {#if $streamingMessage}
-        <ChatMessage
-          type="received"
-          content={$streamingMessage}
-          conversationId={conversationId}
-          isStreaming={true}
-        />
-      {/if}
+      <ChatMessage
+        type="received"
+        content={streamingTail}
+        conversationId={conversationId}
+        isStreaming={true}
+      />
     </div>
   {/if}
 </div>

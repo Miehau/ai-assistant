@@ -1237,6 +1237,12 @@ impl DynamicController {
             let call_result =
                 self.execute_tool(step_id, &tool_name, normalized_args, requested_output_mode)?;
 
+            let was_denied = call_result.error.as_deref().is_some_and(|e| {
+                e == "Tool execution denied by approval"
+                    || e == "Tool approval timed out"
+                    || e == "Tool execution cancelled"
+            });
+
             if call_result.success {
                 successful_calls += 1;
             } else if first_error.is_none() {
@@ -1252,6 +1258,14 @@ impl DynamicController {
                 results_summary.push(build_tool_batch_result_summary(execution));
             }
             aggregated_tool_executions.extend(call_result.tool_executions);
+
+            if was_denied {
+                log::info!(
+                    "[tool_batch] tool approval denied for '{}'; aborting remaining batch tools",
+                    tool_name
+                );
+                break;
+            }
         }
 
         Ok(build_batch_step_result(

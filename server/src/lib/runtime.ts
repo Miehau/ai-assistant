@@ -1,5 +1,9 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { fileURLToPath } from 'node:url'
+
+// server/src/lib → server/
+const SERVER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../')
 
 import { createDatabase, SQLiteRepositories, seedDevUser } from '../repositories/sqlite/index.js'
 import type { DrizzleInstance } from '../repositories/sqlite/index.js'
@@ -13,6 +17,10 @@ import { registerSearchTools } from '../tools/search.js'
 import { registerToolOutputTools } from '../tools/tool-outputs.js'
 import { registerPreferenceTools } from '../tools/preferences.js'
 import { registerDelegateTools } from '../tools/delegate.js'
+import { loadAgentDefinitions } from '../agents/loader.js'
+import { AgentDefinitionRegistryImpl } from '../agents/registry.js'
+import type { AgentDefinitionRegistry } from '../agents/registry.js'
+import { registerVerifyTools } from '../tools/verify.js'
 import { logger } from './logger.js'
 import type { AppConfig } from './config.js'
 import type { ProviderRegistry } from '../providers/types.js'
@@ -47,6 +55,7 @@ export interface RuntimeContext {
   events: EventSink & EventSource
   config: AppConfig
   db: DrizzleInstance
+  agentDefinitions: AgentDefinitionRegistry
   /** AbortController for graceful shutdown — aborts all in-flight agent runs. */
   shutdownController: AbortController
 }
@@ -72,7 +81,15 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   // 4. Create event emitter
   const events = new AgentEventEmitter()
 
-  // 5. Create tool registry and register all tools
+  // 5. Load agent definitions from markdown files
+  const agentsDir = path.isAbsolute(config.agentsDir)
+    ? config.agentsDir
+    : path.resolve(SERVER_ROOT, config.agentsDir)
+  const agentDefs = await loadAgentDefinitions(agentsDir)
+  const agentDefinitions = new AgentDefinitionRegistryImpl(agentDefs)
+  logger.info({ count: agentDefs.length, dir: agentsDir }, 'Agent definitions loaded')
+
+  // 6. Create tool registry and register all tools
   const tools = new ToolRegistryImpl()
   registerFileTools(tools)
   registerShellTools(tools)
@@ -80,7 +97,8 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   registerSearchTools(tools)
   registerToolOutputTools(tools, repos.toolOutputs)
   registerPreferenceTools(tools, repos.preferences)
-  registerDelegateTools(tools)
+  registerDelegateTools(tools, agentDefinitions)
+  registerVerifyTools(tools)
 
   const toolCount = tools.listMetadata().length
   logger.info({ toolCount }, 'Tool registry initialized')
@@ -138,6 +156,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     events,
     config,
     db,
+    agentDefinitions,
     shutdownController: new AbortController(),
   }
 }

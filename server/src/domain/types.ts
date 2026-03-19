@@ -20,6 +20,8 @@ export interface AgentConfig {
   max_tool_calls_per_step: number
   tool_execution_timeout_ms: number
   system_prompt?: string
+  /** If set, only these tool names are visible to the LLM. Orchestrator-intercept tools (e.g. delegate) are always included. */
+  allowed_tools?: string[]
 }
 
 export interface Agent {

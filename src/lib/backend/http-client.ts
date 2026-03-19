@@ -68,6 +68,9 @@ export interface CompletionResponse {
 export interface AgentStatusResponse {
   id: string;
   sessionId: string;
+  parentId?: string | null;
+  sourceCallId?: string | null;
+  depth?: number;
   status: AgentStatus;
   waitingFor?: WaitingFor[];
   result?: string | null;
@@ -103,6 +106,7 @@ export interface Session {
   createdAt: number;
   updatedAt: number;
   items?: SessionItem[];
+  agents?: AgentStatusResponse[];
 }
 
 export interface ToolMetadata {
@@ -329,14 +333,30 @@ export class HttpBackendClient {
     agentId: string,
     callId: string,
     decision: 'approved' | 'denied',
+    scope?: 'once' | 'conversation' | 'always',
     signal?: AbortSignal,
   ): Promise<CompletionResponse> {
     return this.request<CompletionResponse>(
       'POST',
       `/api/chat/agents/${agentId}/approve`,
-      { callId, decision },
+      { callId, decision, scope },
       signal,
     );
+  }
+
+  /**
+   * Cancel a running or waiting agent.
+   */
+  async cancelAgent(
+    agentId: string,
+    signal?: AbortSignal,
+  ): Promise<{ id: string; status: string }> {
+    return this.request<{ id: string; status: string }>(
+      'POST',
+      `/api/chat/agents/${agentId}/cancel`,
+      undefined,
+      signal,
+    )
   }
 
   /**

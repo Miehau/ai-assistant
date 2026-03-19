@@ -144,22 +144,21 @@
     }
   }
 
-  // Progressive rendering during rapid updates
+  // Non-streaming: parse immediately so there is no blank-flash between the
+  // streaming div disappearing and the segment-based ChatMessage appearing.
+  // Streaming: throttle at 60 ms to avoid parsing on every incoming chunk.
   $: {
     if (content !== lastContent) {
       lastContent = content;
 
       if (!isStreaming) {
-        // Debounce for non-streaming updates
         if (parseTimeout !== null) {
           clearTimeout(parseTimeout);
-        }
-        parseTimeout = window.setTimeout(() => {
-          htmlContent = parseMarkdown(content);
           parseTimeout = null;
-        }, 16) as unknown as number;
+        }
+        htmlContent = parseMarkdown(content);
       } else if (parseTimeout === null) {
-        // Throttle for streaming updates (do not reset)
+        // Throttle for streaming updates (do not reset on every chunk)
         parseTimeout = window.setTimeout(() => {
           htmlContent = parseMarkdown(content);
           parseTimeout = null;
@@ -167,23 +166,6 @@
       }
     }
   }
-
-  onMount(async () => {
-    if (!isStreaming) {
-      // Defer initial parse to idle time to avoid blocking the main thread
-      // This allows the component to mount quickly and parse during idle time
-      const parseWhenIdle = () => {
-        htmlContent = parseMarkdown(content);
-      };
-
-      if ('requestIdleCallback' in window) {
-        requestIdleCallback(parseWhenIdle);
-      } else {
-        // Fallback for browsers without requestIdleCallback support
-        setTimeout(parseWhenIdle, 0);
-      }
-    }
-  });
 
   onDestroy(() => {
     // Clean up timeout on component destruction
@@ -295,7 +277,7 @@
   data-conversation-id={conversationId}
 >
   <div
-    class="rounded-2xl px-4 py-1.5 w-full max-w-5xl {isError
+    class="rounded-2xl px-4 py-1.5 w-full max-w-5xl min-w-0 {isError
       ? 'message-error'
       : type === 'received'
         ? 'message-glass-ai'
@@ -413,8 +395,20 @@
 
 <style>
   /* Base markdown styles */
+  :global(.markdown-content) {
+    overflow-wrap: break-word;
+    min-width: 0;
+  }
+
   :global(.markdown-content p) {
     line-height: 1.5;
+  }
+
+  /* Table overflow: make tables scroll horizontally within the bubble */
+  :global(.markdown-content table) {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
   }
 
   :global(.markdown-content p:last-child) {

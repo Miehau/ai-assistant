@@ -10,6 +10,8 @@ const configSchema = z.object({
   openaiApiKey: z.string().optional(),
   ollamaBaseUrl: z.string().optional(),
   openrouterApiKey: z.string().optional(),
+  workingDir: z.string().optional(),
+  agentsDir: z.string().default('./agents'),
 })
 
 export type AppConfig = z.infer<typeof configSchema>
@@ -25,5 +27,7 @@ export function loadConfig(): AppConfig {
     openaiApiKey: process.env.OPENAI_API_KEY,
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL,
     openrouterApiKey: process.env.OPENROUTER_API_KEY,
+    workingDir: process.env.WORKING_DIR,
+    agentsDir: process.env.AGENTS_DIR,
   })
 }

@@ -2,7 +2,27 @@
   import type { ToolCallRecord } from "$lib/types";
   import ToolCallBubble from "./ToolCallBubble.svelte";
 
-  let { calls, sessionId }: { calls: ToolCallRecord[]; sessionId?: string } = $props();
+  let { calls, sessionId, spawnCall }: { calls: ToolCallRecord[]; sessionId?: string; spawnCall?: ToolCallRecord } = $props();
+
+  /** The task prompt passed to the subagent. */
+  const taskPrompt = $derived(
+    spawnCall?.args && typeof spawnCall.args === 'object' && 'prompt' in spawnCall.args
+      ? String((spawnCall.args as Record<string, unknown>).prompt)
+      : undefined
+  );
+
+  /** Final text response from the subagent, available after agent.spawn completes. */
+  const responseText = $derived(
+    spawnCall?.result && typeof spawnCall.result === 'object' && 'response' in spawnCall.result
+      ? String((spawnCall.result as Record<string, unknown>).response)
+      : undefined
+  );
+
+  const responseSuccess = $derived(
+    spawnCall?.result && typeof spawnCall.result === 'object' && 'success' in spawnCall.result
+      ? Boolean((spawnCall.result as Record<string, unknown>).success)
+      : undefined
+  );
 
   let isOpen = $state(true);
 
@@ -63,15 +83,18 @@
           d="M9 5l7 7-7 7"
         />
       </svg>
-      <div class="text-left min-w-0">
+      <div class="text-left min-w-0 overflow-hidden">
         <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-xs font-semibold text-purple-300">Subagent Execution</span>
+          <span class="text-xs font-semibold text-purple-300">Subagent</span>
           {#if sessionId}
             <span class="text-[9px] text-purple-400/60 font-mono">
               {sessionId.slice(0, 8)}
             </span>
           {/if}
         </div>
+        {#if taskPrompt}
+          <p class="text-[11px] text-purple-200/75 truncate mt-0.5">{taskPrompt}</p>
+        {/if}
         <p class="text-[10px] text-muted-foreground">
           {calls.length} tool{calls.length === 1 ? "" : "s"} · {statusLabel}
           {#if totalDuration > 0}
@@ -108,6 +131,16 @@
           <ToolCallBubble {call} />
         </div>
       {/each}
+      {#if responseText}
+        <div class="mt-3 pt-3 border-t border-purple-500/20">
+          <p class="text-[10px] uppercase tracking-wide text-purple-400/60 mb-1.5 px-1">
+            {responseSuccess === false ? "Error" : "Response"}
+          </p>
+          <div class="rounded-lg bg-background/50 px-3 py-2.5 text-sm text-foreground whitespace-pre-wrap break-words">
+            {responseText}
+          </div>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

@@ -20,7 +20,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Absolute path to the file' },
+          path: { type: 'string', description: 'Path to the file. Relative paths are resolved from the current working directory.' },
           start_line: { type: 'integer', description: 'Start line (1-based, inclusive)' },
           end_line: { type: 'integer', description: 'End line (1-based, inclusive)' },
         },
@@ -83,7 +83,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Absolute path to the file' },
+          path: { type: 'string', description: 'Path to the file. Relative paths are resolved from the current working directory.' },
           content: { type: 'string', description: 'Content to write' },
         },
         required: ['path', 'content'],
@@ -114,7 +114,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Absolute path to the file' },
+          path: { type: 'string', description: 'Path to the file. Relative paths are resolved from the current working directory.' },
           old_text: { type: 'string', description: 'Text to find' },
           new_text: { type: 'string', description: 'Replacement text' },
         },
@@ -154,7 +154,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Absolute path for the new file' },
+          path: { type: 'string', description: 'Path for the new file. Relative paths are resolved from the current working directory.' },
           content: { type: 'string', description: 'File content' },
         },
         required: ['path', 'content'],
@@ -192,7 +192,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Absolute path to the file' },
+          path: { type: 'string', description: 'Path to the file. Relative paths are resolved from the current working directory.' },
           content: { type: 'string', description: 'Content to append' },
         },
         required: ['path', 'content'],
@@ -222,7 +222,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Directory path to list' },
+          path: { type: 'string', description: 'Directory path to list. Relative paths are resolved from the current working directory.' },
           recursive: { type: 'boolean', description: 'List recursively (default: false)' },
         },
         required: ['path'],

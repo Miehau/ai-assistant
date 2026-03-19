@@ -16,7 +16,7 @@ export function registerShellTools(registry: { register: (h: ToolHandler) => voi
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Shell command to execute' },
-          working_dir: { type: 'string', description: 'Working directory (optional)' },
+          working_dir: { type: 'string', description: 'Working directory for the command. Relative paths are resolved from the current working directory. Omit to use the server process cwd.' },
           timeout_ms: {
             type: 'integer',
             description: `Timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS})`,

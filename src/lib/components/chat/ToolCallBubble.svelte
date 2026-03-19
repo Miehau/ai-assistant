@@ -19,24 +19,32 @@
     return `${(duration / 1000).toFixed(1)} s`;
   }
 
+  let isDenied = $derived(
+    call.success === false && call.error?.toLowerCase().includes('denied')
+  );
+
   let statusLabel = $derived(
-    call.success === true ? "executed" : call.success === false ? "failed" : "running"
+    isDenied ? "denied" : call.success === true ? "executed" : call.success === false ? "failed" : "running"
   );
 
   let bubbleClass = $derived(
-    call.success === true
-      ? "border-emerald-500/20 bg-emerald-500/10 hover:bg-emerald-500/15"
-      : call.success === false
-        ? "border-red-500/25 bg-red-500/10 hover:bg-red-500/15"
-        : "border-sky-500/25 bg-sky-500/10 hover:bg-sky-500/15"
+    isDenied
+      ? "border-amber-500/25 bg-amber-500/10 hover:bg-amber-500/15"
+      : call.success === true
+        ? "border-emerald-500/20 bg-emerald-500/10 hover:bg-emerald-500/15"
+        : call.success === false
+          ? "border-red-500/25 bg-red-500/10 hover:bg-red-500/15"
+          : "border-sky-500/25 bg-sky-500/10 hover:bg-sky-500/15"
   );
 
   let pillClass = $derived(
-    call.success === true
-      ? "bg-emerald-500/20 text-emerald-200"
-      : call.success === false
-        ? "bg-red-500/20 text-red-200"
-        : "bg-sky-500/20 text-sky-200"
+    isDenied
+      ? "bg-amber-500/20 text-amber-200"
+      : call.success === true
+        ? "bg-emerald-500/20 text-emerald-200"
+        : call.success === false
+          ? "bg-red-500/20 text-red-200"
+          : "bg-sky-500/20 text-sky-200"
   );
 </script>
 

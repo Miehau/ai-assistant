@@ -426,19 +426,14 @@ function createItemRepo(db: DrizzleInstance): ItemRepository {
     },
 
     async listBySession(sessionId: string): Promise<Item[]> {
-      // Load items from all root agents (depth=0, no parentId) in the session,
-      // ordered by agent creation time then item sequence — gives full conversation history.
+      // Load items from ALL agents in the session (root + subagents),
+      // ordered by depth so root items come first, then creation time, then sequence.
       const rows = db
         .select({ item: schema.items })
         .from(schema.items)
         .innerJoin(schema.agents, eq(schema.items.agentId, schema.agents.id))
-        .where(
-          and(
-            eq(schema.agents.sessionId, sessionId),
-            isNull(schema.agents.parentId),
-          )
-        )
-        .orderBy(asc(schema.agents.createdAt), asc(schema.items.sequence))
+        .where(eq(schema.agents.sessionId, sessionId))
+        .orderBy(asc(schema.agents.depth), asc(schema.agents.createdAt), asc(schema.items.sequence))
         .all()
       return rows.map((r) => toItem(r.item))
     },
