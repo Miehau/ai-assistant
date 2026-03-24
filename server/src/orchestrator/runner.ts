@@ -118,11 +118,12 @@ export async function runAgent(
         : allToolMetadata
       const toolListStr = buildToolListString(toolMetadata)
 
-      // Root agents load the full session history so the LLM sees prior turns.
-      // Child agents only need their own items (parent's function_call_output summarises them).
-      const items = ctx.agent.parentId == null
-        ? await ctx.items.listBySession(ctx.agent.sessionId)
-        : await ctx.items.listByAgent(agentId)
+      // Load this agent's own items. Root agents already have complete context:
+      // user messages, tool call/output pairs, and delegate results (which summarise
+      // child agent work). Using listBySession would include child agent items after
+      // the root's items, breaking chronological order on follow-up messages and
+      // burying the user's latest message mid-history.
+      const items = await ctx.items.listByAgent(agentId)
       const messages = buildControllerMessages(systemPrompt, toolListStr, items, {
         useNativeFunctionCalling: useNativeTools,
         agentTask: ctx.agent.task,

@@ -80,7 +80,16 @@ function buildToolListString(tools: Array<{ name: string; description: string; p
 function itemToMessages(items: Item[]): LLMMessage[] {
   const messages: LLMMessage[] = []
 
-  for (const item of items) {
+  // Build a set of call IDs that have a corresponding output, so we can detect
+  // orphaned function_call items (e.g. interrupted execution) and inject a
+  // synthetic error response to satisfy the OpenAI tool_call_id contract.
+  const outputCallIds = new Set(
+    items.filter((i) => i.type === 'function_call_output').map((i) => i.callId),
+  )
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+
     switch (item.type) {
       case 'message': {
         const role = item.role ?? 'user'
@@ -93,18 +102,43 @@ function itemToMessages(items: Item[]): LLMMessage[] {
       }
 
       case 'function_call': {
-        // Assistant called a tool — represented as assistant message with tool_calls
+        // Merge consecutive function_call items into a single assistant message
+        // with multiple tool_calls. This is critical for OpenAI compatibility —
+        // an assistant message with tool_calls must be followed by tool messages
+        // for ALL call IDs before any other message type.
+        const toolCalls = [{
+          call_id: item.callId ?? '',
+          name: item.name ?? '',
+          arguments: item.arguments ? JSON.parse(item.arguments) : {},
+        }]
+
+        // Consume any consecutive function_call items that follow
+        while (i + 1 < items.length && items[i + 1].type === 'function_call') {
+          i++
+          const next = items[i]
+          toolCalls.push({
+            call_id: next.callId ?? '',
+            name: next.name ?? '',
+            arguments: next.arguments ? JSON.parse(next.arguments) : {},
+          })
+        }
+
         messages.push({
           role: 'assistant',
           content: '',
-          tool_calls: [
-            {
-              call_id: item.callId ?? '',
-              name: item.name ?? '',
-              arguments: item.arguments ? JSON.parse(item.arguments) : {},
-            },
-          ],
+          tool_calls: toolCalls,
         })
+
+        // Inject synthetic error responses for any orphaned tool calls (no output in history)
+        for (const tc of toolCalls) {
+          if (tc.call_id && !outputCallIds.has(tc.call_id)) {
+            messages.push({
+              role: 'tool',
+              content: '[Tool execution was interrupted]',
+              tool_call_id: tc.call_id,
+            })
+          }
+        }
         break
       }
 
