@@ -1554,6 +1554,9 @@ export async function sendMessage() {
               ? `${selectedModelObject.provider}:${selectedModelValue}`
               : selectedModelValue || undefined,
             systemPrompt: systemPromptContent,
+            // Persist session ID eagerly — if the stream is aborted before `done`,
+            // the next follow-up message still has the correct session to resume.
+            onSessionId: (sid) => honoBackend.setSessionId(currentConversation.id, sid),
           },
           handleAgentEvent,
           honoStreamController.signal,

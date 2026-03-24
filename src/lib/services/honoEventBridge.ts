@@ -20,6 +20,9 @@ export interface HonoStreamOptions {
   model?: string;
   instructions?: string;
   systemPrompt?: string;
+  /** Called as soon as the server's session ID is known (first SSE event).
+   *  Persist it immediately so follow-up messages don't lose context on abort. */
+  onSessionId?: (sessionId: string) => void;
 }
 
 export interface HonoStreamResult {
@@ -82,6 +85,14 @@ export async function streamMessageViaHono(
     signal,
   )) {
     const { event, data } = sseEvent;
+
+    // Capture sessionId from the first event that carries it — the server includes
+    // sessionId in every SSE event, so we don't lose it if the stream is aborted
+    // before the `done` event arrives.
+    if (!resultSessionId && data.sessionId) {
+      resultSessionId = data.sessionId as string;
+      options.onSessionId?.(resultSessionId);
+    }
 
     if (event !== 'text_delta') {
       console.log('[honoEventBridge] SSE event:', event, data.name ?? data.status ?? '', data.callId ?? '');
