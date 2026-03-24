@@ -1,4 +1,5 @@
 import OpenAI from 'openai'
+import { logger } from '../lib/logger.js'
 import type {
   LLMProvider,
   LLMRequest,
@@ -33,6 +34,7 @@ function buildTokenLimit(model: string, maxTokens?: number): Record<string, numb
 
 function mapMessagesToOpenAI(messages: LLMMessage[]): OpenAI.ChatCompletionMessageParam[] {
   const mapped: OpenAI.ChatCompletionMessageParam[] = []
+  let deferredImageParts: LLMContentBlock[] = []
 
   for (const msg of messages) {
     if (msg.role === 'system') {
@@ -45,8 +47,9 @@ function mapMessagesToOpenAI(messages: LLMMessage[]): OpenAI.ChatCompletionMessa
 
     if (msg.role === 'tool') {
       if (Array.isArray(msg.content)) {
-        // OpenAI tool role only accepts string content — extract text blocks for the tool result,
-        // then inject a synthetic user message with any image blocks that follow.
+        // OpenAI tool role only accepts string content — extract text blocks for the tool result.
+        // Defer image blocks to be injected as a synthetic user message AFTER all consecutive
+        // tool messages, so we don't break the tool message chain for batch tool calls.
         const textParts = (msg.content as LLMContentBlock[]).filter((b) => b.type === 'text')
         const imageParts = (msg.content as LLMContentBlock[]).filter((b) => b.type === 'image' && b.data)
         const textContent = textParts.map((b) => b.text ?? '').join('\n') || '(tool result)'
@@ -56,13 +59,7 @@ function mapMessagesToOpenAI(messages: LLMMessage[]): OpenAI.ChatCompletionMessa
           content: textContent,
         })
         if (imageParts.length > 0) {
-          mapped.push({
-            role: 'user',
-            content: imageParts.map((b) => ({
-              type: 'image_url' as const,
-              image_url: { url: `data:${b.media_type ?? 'image/png'};base64,${b.data}` },
-            })),
-          } as OpenAI.ChatCompletionUserMessageParam)
+          deferredImageParts.push(...imageParts)
         }
       } else {
         mapped.push({
@@ -72,6 +69,19 @@ function mapMessagesToOpenAI(messages: LLMMessage[]): OpenAI.ChatCompletionMessa
         })
       }
       continue
+    }
+
+    // Flush deferred image parts from multimodal tool results once the tool message chain ends.
+    // This ensures the synthetic user message doesn't break batch tool call sequences.
+    if (deferredImageParts.length > 0) {
+      mapped.push({
+        role: 'user',
+        content: deferredImageParts.map((b) => ({
+          type: 'image_url' as const,
+          image_url: { url: `data:${b.media_type ?? 'image/png'};base64,${b.data}` },
+        })),
+      } as OpenAI.ChatCompletionUserMessageParam)
+      deferredImageParts = []
     }
 
     if (msg.role === 'assistant') {
@@ -113,6 +123,17 @@ function mapMessagesToOpenAI(messages: LLMMessage[]): OpenAI.ChatCompletionMessa
       }
       mapped.push({ role: 'user', content: parts })
     }
+  }
+
+  // Flush any remaining deferred images (e.g. if the last messages were tool results)
+  if (deferredImageParts.length > 0) {
+    mapped.push({
+      role: 'user',
+      content: deferredImageParts.map((b) => ({
+        type: 'image_url' as const,
+        image_url: { url: `data:${b.media_type ?? 'image/png'};base64,${b.data}` },
+      })),
+    } as OpenAI.ChatCompletionUserMessageParam)
   }
 
   return mapped
@@ -164,6 +185,8 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     const response = await this.client.chat.completions.create(params)
+
+    logger.debug({ provider: 'openai', model: request.model, raw: response }, 'Raw LLM response')
 
     return mapOpenAIResponse(response)
   }
@@ -288,16 +311,17 @@ export class OpenAIProvider implements LLMProvider {
       arguments: buf.args ? JSON.parse(buf.args) : {},
     }))
 
-    yield {
-      type: 'done',
-      response: {
-        content: fullText,
-        tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-        companion_text: toolCalls.length > 0 && fullText ? fullText : undefined,
-        usage: { input_tokens: promptTokens, output_tokens: completionTokens },
-        finish_reason: finishReason || 'stop',
-      },
+    const streamResponse: LLMResponse = {
+      content: fullText,
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      companion_text: toolCalls.length > 0 && fullText ? fullText : undefined,
+      usage: { input_tokens: promptTokens, output_tokens: completionTokens },
+      finish_reason: finishReason || 'stop',
     }
+
+    logger.debug({ provider: 'openai', model: request.model, raw: streamResponse }, 'Raw LLM response (stream)')
+
+    yield { type: 'done', response: streamResponse }
   }
 }
 

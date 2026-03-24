@@ -1,3 +1,4 @@
+import { logger } from '../lib/logger.js'
 import type {
   LLMProvider,
   LLMRequest,
@@ -36,6 +37,8 @@ export class OpenRouterProvider implements LLMProvider {
   async generate(request: LLMRequest): Promise<LLMResponse> {
     const body = buildRequestBody(request)
 
+    logger.debug({ provider: 'openrouter', model: request.model, messages: body.messages }, 'LLM request messages')
+
     const res = await fetch(BASE_URL, {
       method: 'POST',
       headers: {
@@ -54,6 +57,8 @@ export class OpenRouterProvider implements LLMProvider {
     }
 
     const json = (await res.json()) as ChatCompletionResponse
+
+    logger.debug({ provider: 'openrouter', model: request.model, raw: json }, 'Raw LLM response')
 
     return mapResponse(json)
   }
@@ -75,40 +80,53 @@ export class OpenRouterProvider implements LLMProvider {
 // ---------------------------------------------------------------------------
 
 function buildRequestBody(request: LLMRequest): Record<string, unknown> {
-  const messages = request.messages.flatMap((msg) => {
+  const messages: Record<string, unknown>[] = []
+  let deferredImages: Array<{ type: string; data?: string; media_type?: string }> = []
+
+  for (const msg of request.messages) {
     if (msg.role === 'system') {
-      return [{
+      messages.push({
         role: 'system',
         content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-      }]
+      })
+      continue
     }
 
     if (msg.role === 'tool') {
       if (Array.isArray(msg.content)) {
-        // OpenRouter (OpenAI-compat) tool role only accepts string — extract text, inject user message for images
+        // OpenRouter (OpenAI-compat) tool role only accepts string — extract text for the tool result.
+        // Defer image blocks to be injected after all consecutive tool messages to avoid breaking
+        // the tool message chain for batch tool calls.
         const textContent = (msg.content as Array<{ type: string; text?: string }>)
           .filter((b) => b.type === 'text')
           .map((b) => b.text ?? '')
           .join('\n') || '(tool result)'
         const imageBlocks = (msg.content as Array<{ type: string; data?: string; media_type?: string }>)
           .filter((b) => b.type === 'image' && b.data)
-        const out: unknown[] = [{ role: 'tool', tool_call_id: msg.tool_call_id, content: textContent }]
         if (imageBlocks.length > 0) {
-          out.push({
-            role: 'user',
-            content: imageBlocks.map((b) => ({
-              type: 'image_url',
-              image_url: { url: `data:${b.media_type ?? 'image/png'};base64,${b.data}` },
-            })),
-          })
+          deferredImages.push(...imageBlocks)
         }
-        return out
+        messages.push({ role: 'tool', tool_call_id: msg.tool_call_id, content: textContent })
+      } else {
+        messages.push({
+          role: 'tool',
+          tool_call_id: msg.tool_call_id,
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        })
       }
-      return [{
-        role: 'tool',
-        tool_call_id: msg.tool_call_id,
-        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-      }]
+      continue
+    }
+
+    // Flush deferred images once the tool message chain ends
+    if (deferredImages.length > 0) {
+      messages.push({
+        role: 'user',
+        content: deferredImages.map((b) => ({
+          type: 'image_url',
+          image_url: { url: `data:${b.media_type ?? 'image/png'};base64,${b.data}` },
+        })),
+      })
+      deferredImages = []
     }
 
     if (msg.role === 'assistant') {
@@ -121,19 +139,21 @@ function buildRequestBody(request: LLMRequest): Record<string, unknown> {
         },
       }))
 
-      return [{
+      // Use null for empty content when tool_calls are present — OpenAI-compat APIs
+      // may misinterpret empty string as the assistant having spoken.
+      const assistantContent = typeof msg.content === 'string' && msg.content ? msg.content : null
+      messages.push({
         role: 'assistant',
-        content: typeof msg.content === 'string' ? msg.content : '',
+        content: assistantContent,
         ...(tool_calls?.length && { tool_calls }),
-      }]
+      })
+      continue
     }
 
     // user message
     if (typeof msg.content === 'string') {
-      return [{ role: 'user', content: msg.content }]
-    }
-
-    if (Array.isArray(msg.content)) {
+      messages.push({ role: 'user', content: msg.content })
+    } else if (Array.isArray(msg.content)) {
       const parts = msg.content.map((block) => {
         if (block.type === 'text' && block.text) {
           return { type: 'text', text: block.text }
@@ -149,11 +169,22 @@ function buildRequestBody(request: LLMRequest): Record<string, unknown> {
         return null
       }).filter(Boolean)
 
-      return [{ role: 'user', content: parts }]
+      messages.push({ role: 'user', content: parts })
+    } else {
+      messages.push({ role: 'user', content: '' })
     }
+  }
 
-    return [{ role: 'user', content: '' }]
-  })
+  // Flush any remaining deferred images (e.g. if the last messages were tool results)
+  if (deferredImages.length > 0) {
+    messages.push({
+      role: 'user',
+      content: deferredImages.map((b) => ({
+        type: 'image_url',
+        image_url: { url: `data:${b.media_type ?? 'image/png'};base64,${b.data}` },
+      })),
+    })
+  }
 
   const tools = request.tools?.length
     ? request.tools.map((t) => ({

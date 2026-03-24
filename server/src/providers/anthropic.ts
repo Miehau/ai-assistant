@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { logger } from '../lib/logger.js'
 import type {
   LLMProvider,
   LLMRequest,
@@ -75,6 +76,8 @@ function mapMessagesToAnthropic(
     }
 
     if (msg.role === 'tool') {
+      // Build the tool_result block for this tool message
+      let toolResultBlock: Anthropic.ToolResultBlockParam
       if (Array.isArray(msg.content)) {
         // Multimodal tool result — map each block into Anthropic's tool_result content array
         const contentBlocks: Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam> = []
@@ -92,22 +95,30 @@ function mapMessagesToAnthropic(
             })
           }
         }
-        mapped.push({
-          role: 'user',
-          content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id!, content: contentBlocks }],
-        })
+        toolResultBlock = { type: 'tool_result', tool_use_id: msg.tool_call_id!, content: contentBlocks }
       } else {
-        mapped.push({
-          role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: msg.tool_call_id!,
-              content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-            },
-          ],
-        })
+        toolResultBlock = {
+          type: 'tool_result',
+          tool_use_id: msg.tool_call_id!,
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        }
       }
+
+      // Merge consecutive tool results into a single user message.
+      // Anthropic requires alternating user/assistant roles — multiple consecutive
+      // user messages (from batch tool calls) corrupt the conversation structure.
+      const lastMapped = mapped[mapped.length - 1]
+      if (lastMapped?.role === 'user' && Array.isArray(lastMapped.content)) {
+        const hasToolResult = (lastMapped.content as Anthropic.ContentBlockParam[]).some(
+          (b) => b.type === 'tool_result',
+        )
+        if (hasToolResult) {
+          ;(lastMapped.content as Anthropic.ContentBlockParam[]).push(toolResultBlock)
+          continue
+        }
+      }
+
+      mapped.push({ role: 'user', content: [toolResultBlock] })
       continue
     }
 
@@ -230,6 +241,8 @@ export class AnthropicProvider implements LLMProvider {
     }
 
     const response = await this.client.messages.create(params)
+
+    logger.debug({ provider: 'anthropic', model: request.model, raw: response }, 'Raw LLM response')
 
     logCacheStats(
       'generate',
@@ -367,6 +380,8 @@ export class AnthropicProvider implements LLMProvider {
             },
             finish_reason: stopReason || 'end_turn',
           }
+
+          logger.debug({ provider: 'anthropic', model: request.model, raw: response }, 'Raw LLM response (stream)')
 
           if (fullText) {
             yield { type: 'text_done', text: fullText }
