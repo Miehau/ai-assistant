@@ -10,7 +10,7 @@
     <div class="absolute bottom-10 left-20 w-72 h-72 bg-accent-purple/10 rounded-full blur-3xl animate-pulse" style="animation-delay: 2s;"></div>
   </div>
 
-  <div class="flex flex-col min-h-0">
+  <div class="flex flex-col min-h-0 min-w-0">
     <main class="grid flex-1 min-h-0 gap-4 p-4 overflow-hidden">
       <Chat />
     </main>

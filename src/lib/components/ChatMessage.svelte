@@ -272,12 +272,12 @@
 </script>
 
 <div
-  class="flex gap-3 {type === 'received' ? 'justify-start' : 'justify-end'}"
+  class="flex gap-3 min-w-0 {type === 'received' ? 'justify-start' : 'justify-end'}"
   data-message-id={messageId}
   data-conversation-id={conversationId}
 >
   <div
-    class="rounded-2xl px-4 py-1.5 w-full max-w-5xl min-w-0 {isError
+    class="rounded-2xl px-4 py-1.5 w-full max-w-5xl min-w-0 overflow-x-auto {isError
       ? 'message-error'
       : type === 'received'
         ? 'message-glass-ai'
@@ -396,8 +396,10 @@
 <style>
   /* Base markdown styles */
   :global(.markdown-content) {
-    overflow-wrap: break-word;
+    overflow-wrap: anywhere;
+    word-break: break-word;
     min-width: 0;
+    max-width: 100%;
   }
 
   :global(.markdown-content p) {
@@ -492,6 +494,7 @@
     margin: 1rem 0;
     border-radius: 0.5rem;
     overflow: hidden;
+    max-width: 100%;
     transition: all 300ms ease;
   }
 

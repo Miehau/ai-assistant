@@ -48,7 +48,7 @@
   );
 </script>
 
-<div class={`rounded-2xl px-4 py-2 w-full max-w-5xl min-w-0 border ${bubbleClass}`}>
+<div class={`rounded-2xl px-4 py-2 w-full max-w-5xl min-w-0 overflow-x-auto border ${bubbleClass}`}>
   <details class="group">
     <summary class="list-none cursor-pointer">
       <div class="flex flex-wrap items-center justify-between gap-2">
