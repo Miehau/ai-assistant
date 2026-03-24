@@ -46,6 +46,9 @@
         onRemoveMessages?.();
     }
 
+    // Derived value to sync Select with the current system prompt
+    let selectedPromptId = $derived(selectedSystemPrompt?.id ?? "");
+
     // Track if model dropdown is open for lazy-loading tooltips
     let modelDropdownOpen = $state(false);
 
@@ -99,17 +102,15 @@
         <div class="flex items-center gap-2 min-w-0">
             <span class="text-[8px] uppercase tracking-wide text-muted-foreground/50">Prompt</span>
             <Select.Root
-            selected={{
-                value: selectedSystemPrompt?.id ?? "",
-                label: selectedSystemPrompt?.name ?? "",
-            }}
-            onSelectedChange={(v) => {
-                if (v) {
-                    const prompt = systemPrompts.find((p) => p.id === v.value);
-                    if (prompt) selectSystemPrompt(prompt);
-                }
-            }}
-        >
+                type="single"
+                value={selectedPromptId}
+                onValueChange={(v) => {
+                    if (v) {
+                        const prompt = systemPrompts.find((p) => p.id === v);
+                        if (prompt) selectSystemPrompt(prompt);
+                    }
+                }}
+            >
             <Select.Trigger class="min-w-[120px] max-w-[180px] h-6 rounded-full border-white/10 bg-white/[0.02] px-2 text-[11px] shadow-none hover:bg-white/[0.04]">
                 {#if selectedSystemPrompt}
                     <div class="flex items-center gap-2">
