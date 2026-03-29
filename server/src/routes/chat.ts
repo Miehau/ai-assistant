@@ -30,6 +30,7 @@ function buildDeps(runtime: RuntimeContext, model: string): OrchestratorDeps {
     toolOutputs: runtime.repositories.toolOutputs,
     preferences: runtime.repositories.preferences,
     provider: resolveProvider(runtime, model),
+    providers: runtime.providers,
     tools: runtime.tools,
     events: runtime.events,
     agentDefinitions: runtime.agentDefinitions,
@@ -57,6 +58,7 @@ export function chatRoutes(runtime: RuntimeContext) {
       const body = await c.req.json<{
         sessionId?: string
         model?: string
+        agent?: string
         input: string | Item[]
         instructions?: string
         systemPrompt?: string
@@ -66,7 +68,17 @@ export function chatRoutes(runtime: RuntimeContext) {
         maxTokens?: number
       }>()
 
-      const model = body.model ?? runtime.config.defaultModel
+      // Resolve agent definition if specified — its model/prompt/tools take effect
+      const agentDef = body.agent
+        ? runtime.agentDefinitions.get(body.agent)
+        : undefined
+
+      if (body.agent && !agentDef) {
+        const available = runtime.agentDefinitions.list().map((d) => d.name).join(', ')
+        return c.json({ error: `Unknown agent: "${body.agent}". Available: ${available}` }, 400)
+      }
+
+      const model = agentDef?.model ?? body.model ?? runtime.config.defaultModel
       const userId = c.get('userId') as string
 
       // 1. Get or create session
@@ -121,10 +133,15 @@ export function chatRoutes(runtime: RuntimeContext) {
           config: {
             model,
             provider: extractProviderName(model),
-            max_turns: 50,
+            max_turns: agentDef?.max_turns ?? 50,
             max_tool_calls_per_step: 10,
             tool_execution_timeout_ms: 60_000,
-            ...(body.systemPrompt ? { system_prompt: body.systemPrompt } : {}),
+            ...(body.systemPrompt
+              ? { system_prompt: body.systemPrompt }
+              : agentDef?.system_prompt
+                ? { system_prompt: agentDef.system_prompt }
+                : {}),
+            ...(agentDef?.tools ? { allowed_tools: agentDef.tools } : {}),
           },
         })
       }

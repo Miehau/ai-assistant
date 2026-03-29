@@ -11,58 +11,26 @@ export class TitleGeneratorService {
    * @returns A promise that resolves to the model name
    */
   private getTitleGenerationModel(): { model: string; provider: string } {
-    try {
-      const models = modelRegistry.getAllModels();
+    // Check all registered models (not just those with keys stored) so the
+    // Rust backend can produce a proper "missing API key" error if needed,
+    // rather than silently falling through to a random available model.
+    const allModels = modelRegistry.getAllRegisteredModels();
+    const candidates = [
+      config.titleGeneration.preferredModel,
+      ...config.titleGeneration.fallbackModels,
+    ];
 
-      // Try preferred model first
-      const preferredModel = models[config.titleGeneration.preferredModel];
-      if (preferredModel) {
-        console.log(
-          "Using preferred model for title generation:",
-          config.titleGeneration.preferredModel,
-        );
-        return {
-          model: config.titleGeneration.preferredModel,
-          provider: preferredModel.provider,
-        };
+    for (const modelId of candidates) {
+      const model = allModels[modelId];
+      if (model) {
+        console.log("Using model for title generation:", modelId);
+        return { model: modelId, provider: model.provider };
       }
-
-      // Try fallback models
-      for (const fallbackModelName of config.titleGeneration.fallbackModels) {
-        const fallbackModel = models[fallbackModelName];
-        if (fallbackModel) {
-          console.log(
-            "Using fallback model for title generation:",
-            fallbackModelName,
-          );
-          return {
-            model: fallbackModelName,
-            provider: fallbackModel.provider,
-          };
-        }
-      }
-
-      // Last resort: use any available model with text capability
-      const firstTextModel = Object.entries(models).find(
-        ([_, model]) => model.capabilities.text,
-      );
-      if (firstTextModel) {
-        const [modelId, model] = firstTextModel;
-        console.log(
-          "Using first available model for title generation:",
-          model.name,
-        );
-        return {
-          model: modelId,
-          provider: model.provider,
-        };
-      }
-
-      throw new Error("No enabled models found for title generation");
-    } catch (error) {
-      console.error("Failed to get title generation model:", error);
-      throw error;
     }
+
+    throw new Error(
+      `No configured title generation models found in registry. Tried: ${candidates.join(", ")}`,
+    );
   }
 
   /**

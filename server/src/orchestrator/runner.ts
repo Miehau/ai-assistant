@@ -113,9 +113,14 @@ export async function runAgent(
       const systemPrompt = selectSystemPrompt(ctx.agent.config.provider)
       const allToolMetadata = ctx.tools.listMetadata()
       const allowedTools = ctx.agent.config.allowed_tools
-      const toolMetadata = allowedTools
+      let toolMetadata = allowedTools
         ? allToolMetadata.filter((t) => t.orchestrator_intercept || allowedTools.includes(t.name))
         : allToolMetadata
+
+      // Subagents should execute work, not re-plan or re-delegate
+      if (ctx.agent.depth > 0) {
+        toolMetadata = toolMetadata.filter((t) => t.name !== 'delegate' && !t.name.startsWith('tasks.'))
+      }
       const toolListStr = buildToolListString(toolMetadata)
 
       // Load this agent's own items. Root agents already have complete context:
@@ -1079,8 +1084,13 @@ async function handleDelegation(
     timestamp: Date.now(),
   })
 
+  // Resolve the correct provider for the child's model (may differ from parent)
+  const childDeps = deps.providers
+    ? { ...deps, provider: deps.providers.resolve(childModel) }
+    : deps
+
   // Run child synchronously (blocking parent)
-  const childResult = await runAgent(child.id, deps, {
+  const childResult = await runAgent(child.id, childDeps, {
     maxTurns: childMaxTurns,
     signal: ctx.signal,
     stream: ctx.stream,

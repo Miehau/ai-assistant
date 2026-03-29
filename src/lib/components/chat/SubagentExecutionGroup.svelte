@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ToolCallRecord } from "$lib/types";
-  import ToolCallBubble from "./ToolCallBubble.svelte";
+  import ToolCallGroup from "./ToolCallGroup.svelte";
 
   let { calls, sessionId, spawnCall }: { calls: ToolCallRecord[]; sessionId?: string; spawnCall?: ToolCallRecord } = $props();
 
@@ -126,11 +126,9 @@
 
   {#if isOpen}
     <div class="px-3 pb-3 space-y-2">
-      {#each calls as call (call.execution_id)}
-        <div class="pl-4 border-l-2 border-purple-500/20">
-          <ToolCallBubble {call} />
-        </div>
-      {/each}
+      <div class="pl-4 border-l-2 border-purple-500/20">
+        <ToolCallGroup {calls} />
+      </div>
       {#if responseText}
         <div class="mt-3 pt-3 border-t border-purple-500/20">
           <p class="text-[10px] uppercase tracking-wide text-purple-400/60 mb-1.5 px-1">

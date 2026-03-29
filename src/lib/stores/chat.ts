@@ -1553,6 +1553,7 @@ export async function sendMessage() {
             model: selectedModelObject && selectedModelValue
               ? `${selectedModelObject.provider}:${selectedModelValue}`
               : selectedModelValue || undefined,
+            agent: 'planner',
             systemPrompt: systemPromptContent,
             // Persist session ID eagerly — if the stream is aborted before `done`,
             // the next follow-up message still has the correct session to resume.

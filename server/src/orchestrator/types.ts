@@ -1,5 +1,5 @@
 import type { Agent, WaitingFor } from '../domain/types.js'
-import type { LLMProvider } from '../providers/types.js'
+import type { LLMProvider, ProviderRegistry } from '../providers/types.js'
 import type { ToolExecutor } from '../tools/types.js'
 import type { AgentRepository, ItemRepository, ToolOutputRepository, PreferenceRepository } from '../repositories/types.js'
 import type { EventSink } from '../events/types.js'
@@ -28,6 +28,8 @@ export interface OrchestratorDeps {
   toolOutputs: ToolOutputRepository
   preferences: PreferenceRepository
   provider: LLMProvider
+  /** Provider registry for resolving child agent providers during delegation */
+  providers?: ProviderRegistry
   tools: ToolExecutor
   events: EventSink
   agentDefinitions: AgentDefinitionRegistry

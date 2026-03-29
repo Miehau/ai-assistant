@@ -15,8 +15,8 @@
 
   function formatToolDuration(duration?: number): string {
     if (duration === undefined || duration === null) return "";
-    if (duration < 1000) return `${duration} ms`;
-    return `${(duration / 1000).toFixed(1)} s`;
+    if (duration < 1000) return `${duration}ms`;
+    return `${(duration / 1000).toFixed(1)}s`;
   }
 
   let isDenied = $derived(
@@ -25,6 +25,16 @@
 
   let statusLabel = $derived(
     isDenied ? "denied" : call.success === true ? "executed" : call.success === false ? "failed" : "running"
+  );
+
+  let dotClass = $derived(
+    isDenied
+      ? "bg-amber-400"
+      : call.success === true
+        ? "bg-emerald-400"
+        : call.success === false
+          ? "bg-red-400"
+          : "bg-sky-400 animate-pulse"
   );
 
   let bubbleClass = $derived(
@@ -36,38 +46,23 @@
           ? "border-red-500/25 bg-red-500/10 hover:bg-red-500/15"
           : "border-sky-500/25 bg-sky-500/10 hover:bg-sky-500/15"
   );
-
-  let pillClass = $derived(
-    isDenied
-      ? "bg-amber-500/20 text-amber-200"
-      : call.success === true
-        ? "bg-emerald-500/20 text-emerald-200"
-        : call.success === false
-          ? "bg-red-500/20 text-red-200"
-          : "bg-sky-500/20 text-sky-200"
-  );
 </script>
 
-<div class={`rounded-2xl px-4 py-2 w-full max-w-5xl min-w-0 overflow-x-auto border ${bubbleClass}`}>
+<div class={`rounded-xl px-3 py-2 w-full min-w-0 border transition-colors ${bubbleClass}`}>
   <details class="group">
     <summary class="list-none cursor-pointer">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="min-w-0">
-          <p class="text-xs font-semibold text-foreground">{call.tool_name}</p>
-          <p class="text-[10px] text-muted-foreground">
-            {statusLabel}
-            {#if formatToolDuration(call.duration_ms)}
-              · {formatToolDuration(call.duration_ms)}
-            {/if}
-          </p>
-        </div>
-        <span class={`text-[10px] uppercase tracking-wide rounded-full px-2 py-1 ${pillClass}`}>
-          {statusLabel}
+      <div class="flex items-center gap-2 min-w-0">
+        <span class={`shrink-0 w-1.5 h-1.5 rounded-full ${dotClass}`}></span>
+        <span class="text-xs font-mono font-medium text-foreground truncate flex-1 min-w-0">{call.tool_name}</span>
+        <span class="text-[10px] text-muted-foreground/70 shrink-0">
+          {statusLabel}{formatToolDuration(call.duration_ms) ? ` · ${formatToolDuration(call.duration_ms)}` : ''}
         </span>
+        <span class="text-muted-foreground/40 text-[10px] shrink-0 group-open:hidden">▸</span>
+        <span class="text-muted-foreground/40 text-[10px] shrink-0 hidden group-open:inline">▾</span>
       </div>
     </summary>
 
-    <div class="mt-3 grid gap-2 md:grid-cols-2">
+    <div class="mt-2 grid gap-2 md:grid-cols-2">
       <div class="min-w-0">
         <p class="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Input</p>
         <pre class="max-h-40 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/60 p-2 text-[11px] font-mono text-foreground">

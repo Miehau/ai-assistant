@@ -55,10 +55,17 @@ export class ModelRegistryService {
   }
 
   /**
-   * Get all available models
+   * Get all available models (filtered by configured API keys)
    */
   public getAllModels(): Record<string, ModelConfig> {
     return this.availableModels;
+  }
+
+  /**
+   * Get all registered models regardless of API key availability
+   */
+  public getAllRegisteredModels(): Record<string, ModelConfig> {
+    return this.models;
   }
 
   /**

@@ -112,6 +112,16 @@ pub fn create_provider(config: ProviderConfig) -> Result<Box<dyn LlmProvider>, S
                 url,
             )))
         }
+        "openrouter" => {
+            let api_key = config
+                .api_key
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| "Missing API key for provider: openrouter".to_string())?;
+            let url = config
+                .base_url
+                .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
+            Ok(Box::new(CustomProvider::new(Some(api_key), config.model, url)))
+        }
         other => Err(format!("Unsupported provider: {other}")),
     }
 }

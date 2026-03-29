@@ -4,9 +4,9 @@ export const config = {
   // Model configuration for title generation
   // Using a fast, cost-effective model for this simple task
   titleGeneration: {
-    // Preferred model for title generation (fast and cheap)
-    preferredModel: "claude-haiku-4-5-20251001",
+    // Preferred model for title generation (cheap via OpenRouter)
+    preferredModel: "meta-llama/llama-3.2-3b-instruct:free",
     // Fallback models if preferred is not available
-    fallbackModels: ["gpt-4o-mini", "gpt-3.5-turbo"],
+    fallbackModels: ["openai/gpt-4o-mini", "claude-haiku-4-5-20251001"],
   },
 };

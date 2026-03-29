@@ -385,9 +385,24 @@ async function runAndPropagateUp(
   deps: OrchestratorDeps,
 ): Promise<RunResult> {
   let currentId = startAgentId
+
+  // Resolve the correct provider for this agent's model (may differ from the
+  // original request's provider when delegation crosses provider boundaries).
+  const resolveDepsForAgent = async (agentId: string): Promise<OrchestratorDeps> => {
+    if (!deps.providers) return deps
+    const agent = await deps.agents.getById(agentId)
+    if (!agent) return deps
+    try {
+      return { ...deps, provider: deps.providers.resolve(agent.config.model) }
+    } catch {
+      return deps // fall back to original provider if resolution fails
+    }
+  }
+
   // Always stream resumed runs so TEXT_DELTA events flow through the event bus
   // to the SSE subscription the frontend opens before sending approval/deliver.
-  let result = await runAgent(currentId, deps, { stream: true })
+  let agentDeps = await resolveDepsForAgent(currentId)
+  let result = await runAgent(currentId, agentDeps, { stream: true })
 
   // Walk up the parent chain: if the agent completed and has a parent, deliver the result
   while (result.status === 'completed') {
@@ -445,9 +460,10 @@ async function runAndPropagateUp(
       }
     }
 
-    // Continue the loop — run the parent
+    // Continue the loop — run the parent with its own provider
     currentId = parent.id
-    result = await runAgent(currentId, deps, { stream: true })
+    agentDeps = await resolveDepsForAgent(currentId)
+    result = await runAgent(currentId, agentDeps, { stream: true })
   }
 
   return result

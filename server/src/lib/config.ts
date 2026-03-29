@@ -12,6 +12,8 @@ const configSchema = z.object({
   openrouterApiKey: z.string().optional(),
   workingDir: z.string().optional(),
   agentsDir: z.string().default('./agents'),
+  tasksDir: z.string().default('./data/tasks'),
+  workspaceDir: z.string().default('./data/workspace'),
 })
 
 export type AppConfig = z.infer<typeof configSchema>
@@ -29,5 +31,7 @@ export function loadConfig(): AppConfig {
     openrouterApiKey: process.env.OPENROUTER_API_KEY,
     workingDir: process.env.WORKING_DIR,
     agentsDir: process.env.AGENTS_DIR,
+    tasksDir: process.env.TASKS_DIR,
+    workspaceDir: process.env.WORKSPACE_DIR,
   })
 }

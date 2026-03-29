@@ -520,6 +520,54 @@
       "defaultParameters": {
         "temperature": 1
       }
+    },
+    {
+      "id": "openai/gpt-4o-mini",
+      "name": "GPT-4o Mini (OpenRouter)",
+      "provider": "openrouter",
+      "capabilities": {
+        "text": true,
+        "vision": true,
+        "audio": false,
+        "embedding": false,
+        "function_calling": true
+      },
+      "specs": {
+        "contextWindow": 128000,
+        "tokenization": {
+          "encoding": "cl100k_base",
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
+        "top_p": 1
+      }
+    },
+    {
+      "id": "meta-llama/llama-3.2-3b-instruct:free",
+      "name": "Llama 3.2 3B Instruct (Free)",
+      "provider": "openrouter",
+      "capabilities": {
+        "text": true,
+        "vision": false,
+        "audio": false,
+        "embedding": false,
+        "function_calling": false
+      },
+      "specs": {
+        "contextWindow": 131072,
+        "tokenization": {
+          "averageTokensPerChar": 0.3
+        }
+      },
+      "defaultParameters": {
+        "temperature": 1,
+        "top_p": 1
+      },
+      "metadata": {
+        "tags": ["free"]
+      }
     }
   ]
 }

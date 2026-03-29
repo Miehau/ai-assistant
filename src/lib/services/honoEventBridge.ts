@@ -18,6 +18,8 @@ export interface HonoStreamOptions {
   messageId: string;
   sessionId?: string;
   model?: string;
+  /** Named agent definition to use (e.g. "planner"). Applies its model, system prompt, and tool restrictions. */
+  agent?: string;
   instructions?: string;
   systemPrompt?: string;
   /** Called as soon as the server's session ID is known (first SSE event).
@@ -81,7 +83,7 @@ export async function streamMessageViaHono(
 
   for await (const sseEvent of client.sendMessageStream(
     input,
-    { sessionId: options.sessionId, model: options.model, instructions: options.instructions, systemPrompt: options.systemPrompt },
+    { sessionId: options.sessionId, model: options.model, agent: options.agent, instructions: options.instructions, systemPrompt: options.systemPrompt },
     signal,
   )) {
     const { event, data } = sseEvent;

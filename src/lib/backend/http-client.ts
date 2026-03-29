@@ -46,6 +46,7 @@ export interface Item {
 export interface CompletionRequest {
   sessionId?: string;
   model?: string;
+  agent?: string;
   input: string | Item[];
   instructions?: string;
   systemPrompt?: string;

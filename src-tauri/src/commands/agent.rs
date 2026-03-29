@@ -1227,7 +1227,7 @@ Respond ONLY with the title, no quotes, no explanation, no punctuation at the en
 
     // Resolve provider config for title generation
     let (api_key, base_url) = match provider.as_str() {
-        "openai" | "anthropic" | "deepseek" => {
+        "openai" | "anthropic" | "deepseek" | "openrouter" => {
             let key = ModelOperations::get_api_key(&db, &provider)
                 .map_err(|e| e.to_string())?;
             (key, None)

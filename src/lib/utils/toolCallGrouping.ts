@@ -1,4 +1,13 @@
-import type { ToolCallRecord } from '$lib/types';
+import type { MessageSegment, ToolCallRecord } from '$lib/types';
+
+// ---------------------------------------------------------------------------
+// Display item types — used by ChatMessages to batch consecutive tool calls
+// ---------------------------------------------------------------------------
+
+export type DisplayItem =
+  | { kind: 'text'; content: string }
+  | { kind: 'tool-batch'; calls: ToolCallRecord[] }
+  | { kind: 'subagent'; group: ToolCallGroup };
 
 export interface ToolCallGroup {
   sessionId: string | undefined;
@@ -57,4 +66,51 @@ export function groupToolCallsBySession(toolCalls: ToolCallRecord[]): ToolCallGr
   }
 
   return groups;
+}
+
+/**
+ * Converts message segments + resolved tool groups into a flat list of DisplayItems
+ * where consecutive non-subagent tool anchors are batched together.
+ * This powers the "N tool calls" collapsible grouping in ChatMessages.
+ */
+export function computeDisplayItems(
+  segments: MessageSegment[],
+  anchorExecIds: Set<string | undefined>,
+  execToGroup: Map<string, ToolCallGroup>,
+  spawnExecToSubagentGroup: Map<string, ToolCallGroup>,
+): DisplayItem[] {
+  const items: DisplayItem[] = [];
+  let batch: ToolCallRecord[] | null = null;
+
+  function flushBatch() {
+    if (batch && batch.length > 0) {
+      items.push({ kind: 'tool-batch', calls: batch });
+      batch = null;
+    }
+  }
+
+  for (const seg of segments) {
+    if (seg.kind === 'text') {
+      if (seg.content.trim().length > 0) {
+        flushBatch();
+        items.push({ kind: 'text', content: seg.content });
+      }
+    } else if (seg.kind === 'tool' && anchorExecIds.has(seg.execution_id)) {
+      const group =
+        spawnExecToSubagentGroup.get(seg.execution_id) ??
+        execToGroup.get(seg.execution_id);
+      if (!group) continue;
+
+      if (group.isSubAgent) {
+        flushBatch();
+        items.push({ kind: 'subagent', group });
+      } else {
+        if (!batch) batch = [];
+        batch.push(...group.calls);
+      }
+    }
+  }
+
+  flushBatch();
+  return items;
 }

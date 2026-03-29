@@ -7,13 +7,13 @@
   import { streamingMessage, isStreaming, streamingSegmentedLength } from "$lib/stores/chat";
   import { pageVisible } from "$lib/stores/visibility";
   import ToolApprovalQueue from "./ToolApprovalQueue.svelte";
-  import ToolCallBubble from "./ToolCallBubble.svelte";
+  import ToolCallGroup from "./ToolCallGroup.svelte";
   import SubagentExecutionGroup from "./SubagentExecutionGroup.svelte";
   import type { ToolExecutionProposedPayload } from "$lib/types/events";
   import { getPhaseLabel } from "$lib/types/agent";
   import type { AgentPlan, AgentPlanStep, PhaseKind } from "$lib/types/agent";
   import type { ToolActivityEntry } from "$lib/stores/chat";
-  import { groupToolCallsBySession } from "$lib/utils/toolCallGrouping";
+  import { groupToolCallsBySession, computeDisplayItems } from "$lib/utils/toolCallGrouping";
 
   export let messages: Message[] = [];
   export let chatContainer: HTMLElement | null = null;
@@ -334,16 +334,12 @@
   {#each visibleMessages as msg, i (msg.id || `${msg.type}-${i}`)}
     {@const animated = i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
     {#if msg.segments && msg.segments.length > 0}
-      <!-- Interleaved rendering: text and tool calls in streaming order -->
-      <!-- Pre-compute groups from ALL tool calls so sub-agent calls sharing a session_id are grouped together.
-           Build a set of "anchor" execution_ids: the first segment execution_id for each group.
-           Only the anchor segment renders the full group; later segments for the same group are skipped. -->
+      <!-- Interleaved rendering: text and tool calls in streaming order.
+           computeDisplayItems batches consecutive non-subagent tool anchors so they
+           render as a single collapsible ToolCallGroup instead of N separate bubbles. -->
       {@const allToolGroups = groupToolCallsBySession(msg.tool_calls ?? [])}
       {@const execToGroup = new Map(allToolGroups.flatMap((g) => g.calls.map((c) => [c.execution_id, g])))}
       {@const toolSegmentIds = msg.segments.filter((s) => s.kind === 'tool').map((s) => s.execution_id)}
-      <!-- For subagent groups, also treat the spawn call's execution_id as an anchor.
-           This handles the segments path where subagent tool calls have no parent-message
-           segments — the agent.spawn segment becomes the render point for the whole group. -->
       {@const spawnExecToSubagentGroup = new Map(
         allToolGroups
           .filter((g) => g.isSubAgent && g.spawnCall)
@@ -354,11 +350,11 @@
           const groupExecIds = new Set(g.calls.map((c) => c.execution_id));
           return toolSegmentIds.find((id) => groupExecIds.has(id));
         }).filter(Boolean),
-        // Subagent groups anchor at their spawn call's segment position
         ...Array.from(spawnExecToSubagentGroup.keys()).filter((id) => toolSegmentIds.includes(id)),
       ])}
-      {#each msg.segments as segment, si (segment.kind === 'tool' ? segment.execution_id : `text-${i}-${si}`)}
-        {#if segment.kind === 'text' && segment.content.trim().length > 0}
+      {@const displayItems = computeDisplayItems(msg.segments, anchorExecIds, execToGroup, spawnExecToSubagentGroup)}
+      {#each displayItems as item, di (`${i}-${di}`)}
+        {#if item.kind === 'text'}
           {#if animated}
             <div
               in:fly={{ y: 10, duration: 150, easing: backOut }}
@@ -367,7 +363,7 @@
             >
               <ChatMessage
                 type={msg.type}
-                content={segment.content}
+                content={item.content}
                 attachments={msg.attachments}
                 messageId={msg.id}
                 conversationId={conversationId}
@@ -379,7 +375,7 @@
             <div class="w-full message-container">
               <ChatMessage
                 type={msg.type}
-                content={segment.content}
+                content={item.content}
                 attachments={msg.attachments}
                 messageId={msg.id}
                 conversationId={conversationId}
@@ -388,61 +384,67 @@
               />
             </div>
           {/if}
-        {:else if segment.kind === 'tool' && anchorExecIds.has(segment.execution_id)}
-          <!-- Resolve which group to render: a spawn-call segment may represent a subagent group -->
-          {@const group = spawnExecToSubagentGroup.get(segment.execution_id) ?? execToGroup.get(segment.execution_id)}
-          {#if group}
-            {#if animated}
-              <div
-                in:fly={{ y: 10, duration: 150, easing: backOut }}
-                class="w-full message-container flex justify-start"
-              >
-                {#if group.isSubAgent}
-                  <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
-                {:else}
-                  <ToolCallBubble call={group.calls[0]} />
-                {/if}
-              </div>
-            {:else}
-              <div class="w-full message-container flex justify-start">
-                {#if group.isSubAgent}
-                  <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
-                {:else}
-                  <ToolCallBubble call={group.calls[0]} />
-                {/if}
-              </div>
-            {/if}
+        {:else if item.kind === 'tool-batch'}
+          {#if animated}
+            <div
+              in:fly={{ y: 10, duration: 150, easing: backOut }}
+              class="w-full message-container"
+            >
+              <ToolCallGroup calls={item.calls} />
+            </div>
+          {:else}
+            <div class="w-full message-container">
+              <ToolCallGroup calls={item.calls} />
+            </div>
+          {/if}
+        {:else if item.kind === 'subagent'}
+          {#if animated}
+            <div
+              in:fly={{ y: 10, duration: 150, easing: backOut }}
+              class="w-full message-container"
+            >
+              <SubagentExecutionGroup calls={item.group.calls} sessionId={item.group.sessionId} spawnCall={item.group.spawnCall} />
+            </div>
+          {:else}
+            <div class="w-full message-container">
+              <SubagentExecutionGroup calls={item.group.calls} sessionId={item.group.sessionId} spawnCall={item.group.spawnCall} />
+            </div>
           {/if}
         {/if}
       {/each}
     {:else}
-      <!-- Legacy rendering: tool calls first, then message text -->
+      <!-- Legacy rendering: tool calls first, then message text.
+           All non-subagent calls from one message go into a single ToolCallGroup. -->
       {#if msg.type === "received" && msg.tool_calls && msg.tool_calls.length > 0}
         {@const toolGroups = groupToolCallsBySession(msg.tool_calls)}
-        <!-- In the legacy path, suppress standalone ToolCallBubbles for agent.spawn calls
-             that have an associated subagent group — the group renders those. -->
         {@const subagentSpawnExecIds = new Set(toolGroups.filter(g => g.isSubAgent && g.spawnCall).map(g => g.spawnCall!.execution_id))}
-        {#each toolGroups as group (group.isSubAgent ? group.sessionId : group.calls[0]?.execution_id)}
-          {#if !group.isSubAgent && subagentSpawnExecIds.has(group.calls[0]?.execution_id)}
-            <!-- Suppressed: rendered inside SubagentExecutionGroup below -->
-          {:else if animated}
+        {@const mainCalls = toolGroups.filter(g => !g.isSubAgent && !subagentSpawnExecIds.has(g.calls[0]?.execution_id)).flatMap(g => g.calls)}
+        {@const subagentGroups = toolGroups.filter(g => g.isSubAgent)}
+        {#if mainCalls.length > 0}
+          {#if animated}
             <div
               in:fly={{ y: 10, duration: 150, easing: backOut }}
-              class="w-full message-container flex justify-start"
+              class="w-full message-container"
             >
-              {#if group.isSubAgent}
-                <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
-              {:else}
-                <ToolCallBubble call={group.calls[0]} />
-              {/if}
+              <ToolCallGroup calls={mainCalls} />
             </div>
           {:else}
-            <div class="w-full message-container flex justify-start">
-              {#if group.isSubAgent}
-                <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
-              {:else}
-                <ToolCallBubble call={group.calls[0]} />
-              {/if}
+            <div class="w-full message-container">
+              <ToolCallGroup calls={mainCalls} />
+            </div>
+          {/if}
+        {/if}
+        {#each subagentGroups as group (group.sessionId)}
+          {#if animated}
+            <div
+              in:fly={{ y: 10, duration: 150, easing: backOut }}
+              class="w-full message-container"
+            >
+              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
+            </div>
+          {:else}
+            <div class="w-full message-container">
+              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
             </div>
           {/if}
         {/each}

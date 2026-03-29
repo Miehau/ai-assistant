@@ -52,6 +52,15 @@
       "defaultHeaders": {}
     },
     {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "authType": "api_key",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "defaultHeaders": {
+        "Authorization": "Bearer {api_key}"
+      }
+    },
+    {
       "id": "custom",
       "name": "Custom Provider",
       "authType": "api_key",
