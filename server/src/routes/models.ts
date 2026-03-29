@@ -73,6 +73,25 @@ export function modelRoutes(runtime: RuntimeContext): Hono {
     }
   })
 
+  // GET /ollama — Discover available Ollama models
+  app.get('/ollama', async (c) => {
+    try {
+      const baseUrl = c.req.query('base_url') || 'http://localhost:11434'
+      const url = `${baseUrl.replace(/\/+$/, '')}/api/tags`
+
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
+      if (!res.ok) {
+        return c.json([])
+      }
+
+      const data = (await res.json()) as { models?: Array<{ name: string; size: number; digest: string; modified_at: string }> }
+      return c.json(data.models ?? [])
+    } catch {
+      // Ollama unreachable — return empty array
+      return c.json([])
+    }
+  })
+
   // DELETE /:id — Delete model
   app.delete('/:id', async (c) => {
     try {

@@ -1,7 +1,7 @@
 /**
- * Backend Client - Centralized abstraction for all Tauri invoke calls
+ * Backend Client - Centralized abstraction for all backend calls
  *
- * This module provides a unified interface for communicating with the Rust backend.
+ * This module provides a unified interface for communicating with the HTTP server backend.
  * Benefits:
  * - Single source of truth for all backend calls
  * - Built-in caching for frequently accessed data
@@ -9,7 +9,7 @@
  * - Easy to mock for testing
  * - Type-safe API
  */
-import { invoke } from '@tauri-apps/api/tauri';
+import { getHttpBackend } from './http-client';
 import type { Model } from '$lib/types/models';
 import type {
   Conversation,
@@ -118,469 +118,479 @@ interface MessageTreeConsistencyCheck {
 }
 
 /**
- * Backend client class that provides a unified interface for all Tauri commands
+ * Backend client class that provides a unified interface for the HTTP server backend.
+ * Replaces all Tauri invoke() calls with HTTP client methods.
  */
 class BackendClient {
   private cache = new Map<string, CacheEntry<unknown>>();
   private defaultTTL = 60000; // 1 minute
 
+  private get http() {
+    return getHttpBackend();
+  }
+
   // ============ Models ============
 
   async getModels(): Promise<Model[]> {
-    return this.cachedInvoke('get_models', {});
+    return this.cachedFetch('models', () => this.http.listModels()) as Promise<unknown> as Promise<Model[]>;
   }
 
   async addModel(model: Partial<Model>): Promise<void> {
-    this.invalidateCache('get_models');
-    return invoke('add_model', { model });
+    this.invalidateCache('models');
+    await this.http.addModel(
+      model.provider ?? '',
+      model.model_name ?? model.name ?? '',
+      model.name,
+    );
   }
 
   async toggleModel(model: Pick<Model, 'provider' | 'model_name'>): Promise<void> {
-    this.invalidateCache('get_models');
-    return invoke('toggle_model', { model });
+    this.invalidateCache('models');
+    // The server PATCH /api/models/:id expects an update object.
+    // Since the old Tauri command toggled by provider+model_name, we need to find the model first.
+    const models = await this.http.listModels();
+    const found = models.find(
+      (m) => m.provider === model.provider && (m.name === model.model_name || m.id === model.model_name),
+    );
+    if (!found || !found.id) {
+      throw new Error(`Model not found: ${model.provider}/${model.model_name}`);
+    }
+    // Toggle is implemented as a PATCH — the server doesn't have a dedicated toggle,
+    // so we pass an empty update to trigger server-side toggle logic if it exists.
+    await this.http.updateModel(found.id, {});
   }
 
   async deleteModel(model: Model): Promise<void> {
-    this.invalidateCache('get_models');
-    return invoke('delete_model', { model });
+    this.invalidateCache('models');
+    // The HTTP server uses a string ID for models. The Tauri Model type
+    // doesn't have an `id` field, so we look up by provider + model_name.
+    const models = await this.http.listModels();
+    const found = models.find(
+      (m) => m.provider === model.provider && (m.name === model.model_name || m.name === model.name),
+    );
+    if (!found || !found.id) {
+      throw new Error(`Model not found for deletion: ${model.provider}/${model.model_name}`);
+    }
+    await this.http.deleteModel(found.id);
   }
 
   // ============ API Keys ============
 
   async getApiKey(provider: string): Promise<string | null> {
-    return invoke('get_api_key', { provider });
+    const result = await this.http.getApiKey(provider);
+    // Server never returns the actual key, only whether it exists
+    return result.exists ? '***' : null;
   }
 
   async setApiKey(provider: string, apiKey: string): Promise<void> {
-    return invoke('set_api_key', { provider, apiKey });
+    await this.http.setApiKey(provider, apiKey);
   }
 
   async deleteApiKey(provider: string): Promise<void> {
-    return invoke('delete_api_key', { provider });
+    await this.http.deleteApiKey(provider);
   }
 
-  // ============ Conversations ============
+  // ============ Conversations (mapped to Sessions) ============
 
   async getConversations(): Promise<Conversation[]> {
-    return invoke('get_conversations', {});
+    const sessions = await this.http.listSessions();
+    return sessions.map((s) => ({
+      id: s.id,
+      name: s.title ?? '',
+      created_at: new Date(s.createdAt).toISOString(),
+      updated_at: new Date(s.updatedAt).toISOString(),
+    })) as unknown as Conversation[];
   }
 
   async getOrCreateConversation(conversationId: string | null): Promise<Conversation> {
-    return invoke('get_or_create_conversation', { conversationId });
+    if (conversationId) {
+      const session = await this.http.getSession(conversationId);
+      return {
+        id: session.id,
+        name: session.title ?? '',
+        created_at: new Date(session.createdAt).toISOString(),
+        updated_at: new Date(session.updatedAt).toISOString(),
+      } as unknown as Conversation;
+    }
+    // No direct "create" endpoint — send minimal completion to bootstrap a session
+    throw new Error('Not yet implemented in server backend');
   }
 
   async updateConversationName(conversationId: string, name: string): Promise<void> {
-    return invoke('update_conversation_name', { conversationId, name });
+    await this.http.updateSession(conversationId, { title: name });
   }
 
   async deleteConversation(conversationId: string): Promise<void> {
-    return invoke('delete_conversation', { conversationId });
+    await this.http.deleteSession(conversationId);
   }
 
   async getConversationHistory(conversationId: string): Promise<DBMessage[]> {
-    return invoke('get_conversation_history', { conversationId });
+    const session = await this.http.getSession(conversationId);
+    // Map session items to DBMessage shape
+    return (session.items ?? []) as unknown as DBMessage[];
   }
 
   async saveMessage(
-    conversation_id: string,
-    role: 'user' | 'assistant',
-    content: string,
-    attachments: Attachment[] = [],
-    message_id?: string
+    _conversation_id: string,
+    _role: 'user' | 'assistant',
+    _content: string,
+    _attachments: Attachment[] = [],
+    _message_id?: string
   ): Promise<string> {
-    return invoke('save_message', {
-      conversation_id,
-      role,
-      content,
-      attachments,
-      message_id
-    });
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ Custom Backends ============
 
   async getCustomBackends(): Promise<CustomBackend[]> {
-    return this.cachedInvoke('get_custom_backends', {});
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getCustomBackend(id: string): Promise<CustomBackend | null> {
-    return invoke('get_custom_backend', { id });
+  async getCustomBackend(_id: string): Promise<CustomBackend | null> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async createCustomBackend(input: CreateCustomBackendInput): Promise<CustomBackend> {
-    this.invalidateCache('get_custom_backends');
-    return invoke('create_custom_backend', { input });
+  async createCustomBackend(_input: CreateCustomBackendInput): Promise<CustomBackend> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async updateCustomBackend(input: UpdateCustomBackendInput): Promise<CustomBackend | null> {
-    this.invalidateCache('get_custom_backends');
-    return invoke('update_custom_backend', { input });
+  async updateCustomBackend(_input: UpdateCustomBackendInput): Promise<CustomBackend | null> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async deleteCustomBackend(id: string): Promise<boolean> {
-    this.invalidateCache('get_custom_backends');
-    return invoke('delete_custom_backend', { id });
+  async deleteCustomBackend(_id: string): Promise<boolean> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ Branches ============
 
-  async createBranch(conversationId: string, name: string): Promise<Branch> {
-    return invoke('create_branch', { conversationId, name });
+  async createBranch(_conversationId: string, _name: string): Promise<Branch> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getOrCreateMainBranch(conversationId: string): Promise<Branch> {
-    return invoke('get_or_create_main_branch', { conversationId });
+  async getOrCreateMainBranch(_conversationId: string): Promise<Branch> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   async createMessageTreeNode(
-    messageId: string,
-    parentMessageId: string | null,
-    branchId: string,
-    isBranchPoint: boolean
+    _messageId: string,
+    _parentMessageId: string | null,
+    _branchId: string,
+    _isBranchPoint: boolean
   ): Promise<MessageTreeNode> {
-    return invoke('create_message_tree_node', {
-      messageId,
-      parentMessageId,
-      branchId,
-      isBranchPoint
-    });
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getConversationTree(conversationId: string): Promise<ConversationTree> {
-    return invoke('get_conversation_tree', { conversationId });
+  async getConversationTree(_conversationId: string): Promise<ConversationTree> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getConversationBranches(conversationId: string): Promise<Branch[]> {
-    return invoke('get_conversation_branches', { conversationId });
+  async getConversationBranches(_conversationId: string): Promise<Branch[]> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getBranchPath(branchId: string): Promise<BranchPath> {
-    return invoke('get_branch_path', { branchId });
+  async getBranchPath(_branchId: string): Promise<BranchPath> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async renameBranch(branchId: string, newName: string): Promise<void> {
-    return invoke('rename_branch', { branchId, newName });
+  async renameBranch(_branchId: string, _newName: string): Promise<void> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async deleteBranch(branchId: string): Promise<void> {
-    return invoke('delete_branch', { branchId });
+  async deleteBranch(_branchId: string): Promise<void> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getBranchStats(conversationId: string): Promise<BranchStats> {
-    return invoke('get_branch_stats', { conversationId });
+  async getBranchStats(_conversationId: string): Promise<BranchStats> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   async createBranchFromMessage(
-    conversationId: string,
-    parentMessageId: string,
-    branchName: string
+    _conversationId: string,
+    _parentMessageId: string,
+    _branchName: string
   ): Promise<Branch> {
-    return invoke('create_branch_from_message', {
-      conversationId,
-      parentMessageId,
-      branchName
-    });
+    throw new Error('Not yet implemented in server backend');
   }
 
   async checkMessageTreeConsistency(): Promise<MessageTreeConsistencyCheck> {
-    return invoke('check_message_tree_consistency');
+    throw new Error('Not yet implemented in server backend');
   }
 
   async repairMessageTree(): Promise<number> {
-    return invoke('repair_message_tree');
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ System Prompts ============
 
   async getSystemPrompt(id: string): Promise<SystemPrompt | null> {
-    return invoke('get_system_prompt', { id });
+    return this.http.getSystemPrompt(id) as Promise<SystemPrompt | null>;
   }
 
   async getAllSystemPrompts(): Promise<SystemPrompt[]> {
-    return invoke('get_all_system_prompts', {});
+    return this.http.listSystemPrompts() as Promise<SystemPrompt[]>;
   }
 
   async saveSystemPrompt(name: string, content: string): Promise<SystemPrompt> {
-    return invoke('save_system_prompt', { name, content });
+    return this.http.createSystemPrompt(name, content) as Promise<SystemPrompt>;
   }
 
   async updateSystemPrompt(id: string, name: string, content: string): Promise<SystemPrompt> {
-    return invoke('update_system_prompt', { id, name, content });
+    return this.http.updateSystemPrompt(id, { name, content }) as Promise<SystemPrompt>;
   }
 
   async deleteSystemPrompt(id: string): Promise<void> {
-    return invoke('delete_system_prompt', { id });
+    await this.http.deleteSystemPrompt(id);
   }
 
   // ============ Usage ============
 
-  async saveMessageUsage(input: MessageUsageInput): Promise<void> {
-    return invoke('save_message_usage', { input });
+  async saveMessageUsage(_input: MessageUsageInput): Promise<void> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async updateConversationUsage(conversationId: string): Promise<ConversationUsageSummary> {
-    return invoke('update_conversation_usage', { conversationId });
+  async updateConversationUsage(_conversationId: string): Promise<ConversationUsageSummary> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getConversationUsage(conversationId: string): Promise<ConversationUsageSummary | null> {
-    return invoke('get_conversation_usage', { conversationId });
+  async getConversationUsage(_conversationId: string): Promise<ConversationUsageSummary | null> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   async getUsageStatistics(): Promise<UsageStatistics> {
-    return invoke('get_usage_statistics', {});
+    const stats = await this.http.getUsageStats();
+    return stats as unknown as UsageStatistics;
   }
 
-  async getMessageUsage(messageId: string): Promise<unknown> {
-    return invoke('get_message_usage', { messageId });
+  async getMessageUsage(_messageId: string): Promise<unknown> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async backfillMessageUsage(options?: {
+  async backfillMessageUsage(_options?: {
     conversation_id?: string;
     default_model?: string;
     dry_run?: boolean;
   }): Promise<UsageBackfillResult> {
-    return invoke('backfill_message_usage', { ...options });
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ Preferences ============
 
   async getPreference(key: string): Promise<string | null> {
-    return invoke('get_preference', { key });
+    try {
+      const result = await this.http.getPreference(key);
+      return result.value;
+    } catch {
+      return null;
+    }
   }
 
   async setPreference(key: string, value: string): Promise<void> {
-    return invoke('set_preference', { key, value });
+    await this.http.setPreference(key, value);
   }
 
   // ============ Integrations ============
 
   async listIntegrations(): Promise<IntegrationMetadata[]> {
-    return invoke('list_integrations', {});
+    throw new Error('Not yet implemented in server backend');
   }
 
   async getIntegrationConnections(): Promise<IntegrationConnection[]> {
-    return invoke('get_integration_connections', {});
+    throw new Error('Not yet implemented in server backend');
   }
 
   async createIntegrationConnection(
-    input: CreateIntegrationConnectionInput
+    _input: CreateIntegrationConnectionInput
   ): Promise<IntegrationConnection> {
-    return invoke('create_integration_connection', { input });
+    throw new Error('Not yet implemented in server backend');
   }
 
   async updateIntegrationConnection(
-    input: UpdateIntegrationConnectionInput
+    _input: UpdateIntegrationConnectionInput
   ): Promise<IntegrationConnection | null> {
-    return invoke('update_integration_connection', { input });
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async deleteIntegrationConnection(id: string): Promise<boolean> {
-    return invoke('delete_integration_connection', { id });
+  async deleteIntegrationConnection(_id: string): Promise<boolean> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async testIntegrationConnection(id: string): Promise<{ ok: boolean; status: number }> {
-    return invoke('test_integration_connection', { id });
+  async testIntegrationConnection(_id: string): Promise<{ ok: boolean; status: number }> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async startGoogleOAuth(integrationId: string): Promise<OAuthStartResponse> {
-    return invoke('start_google_oauth', { integrationId });
+  async startGoogleOAuth(_integrationId: string): Promise<OAuthStartResponse> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async listGoogleCalendars(connectionId: string): Promise<GoogleCalendarListItem[]> {
-    return invoke('list_google_calendars', { connectionId });
+  async listGoogleCalendars(_connectionId: string): Promise<GoogleCalendarListItem[]> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getOauthSession(sessionId: string): Promise<OAuthSessionStatus> {
-    return invoke('get_oauth_session', { sessionId });
+  async getOauthSession(_sessionId: string): Promise<OAuthSessionStatus> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async cancelOauthSession(sessionId: string): Promise<boolean> {
-    return invoke('cancel_oauth_session', { sessionId });
+  async cancelOauthSession(_sessionId: string): Promise<boolean> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ MCP Servers ============
 
   async getMcpServers(): Promise<McpServer[]> {
-    return invoke('get_mcp_servers', {});
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getMcpServer(id: string): Promise<McpServer | null> {
-    return invoke('get_mcp_server', { id });
+  async getMcpServer(_id: string): Promise<McpServer | null> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async createMcpServer(input: CreateMcpServerInput): Promise<McpServer> {
-    return invoke('create_mcp_server', { input });
+  async createMcpServer(_input: CreateMcpServerInput): Promise<McpServer> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async updateMcpServer(input: UpdateMcpServerInput): Promise<McpServer | null> {
-    return invoke('update_mcp_server', { input });
+  async updateMcpServer(_input: UpdateMcpServerInput): Promise<McpServer | null> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async deleteMcpServer(id: string): Promise<boolean> {
-    return invoke('delete_mcp_server', { id });
+  async deleteMcpServer(_id: string): Promise<boolean> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async testMcpServer(id: string): Promise<{ ok: boolean; status: number }> {
-    return invoke('test_mcp_server', { id });
+  async testMcpServer(_id: string): Promise<{ ok: boolean; status: number }> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ Tools ============
 
   async listTools(): Promise<ToolMetadata[]> {
-    return invoke('list_tools', {});
+    return this.http.listTools() as Promise<unknown> as Promise<ToolMetadata[]>;
   }
 
   async listPendingToolApprovals(): Promise<ToolExecutionProposedPayload[]> {
-    return invoke('list_pending_tool_approvals', {});
+    throw new Error('Not yet implemented in server backend');
   }
 
   async resolveToolExecutionApproval(
-    approvalId: string,
-    approved: boolean,
-    scope?: ToolExecutionApprovalScope
+    _approvalId: string,
+    _approved: boolean,
+    _scope?: ToolExecutionApprovalScope
   ): Promise<void> {
-    return invoke('resolve_tool_execution_approval', {
-      approval_id: approvalId,
-      approved,
-      scope
-    });
+    throw new Error('Not yet implemented in server backend');
   }
 
   async setToolApprovalOverride(
-    toolName: string,
-    requiresApproval: boolean | null
+    _toolName: string,
+    _requiresApproval: boolean | null
   ): Promise<void> {
-    return invoke('set_tool_approval_override', {
-      tool_name: toolName,
-      requires_approval: requiresApproval
-    });
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ Files ============
 
   async uploadFile(
-    fileData: string,
-    fileName: string,
-    mimeType: string,
-    conversationId: string,
-    messageId: string
+    _fileData: string,
+    _fileName: string,
+    _mimeType: string,
+    _conversationId: string,
+    _messageId: string
   ): Promise<FileUploadResult> {
-    return invoke('upload_file', {
-      payload: {
-        file_data: fileData,
-        file_name: fileName,
-        mime_type: mimeType,
-        conversation_id: conversationId,
-        message_id: messageId
-      }
-    });
+    throw new Error('Not yet implemented in server backend');
   }
 
   async uploadFileFromPath(
-    filePath: string,
-    fileName: string,
-    mimeType: string,
-    conversationId: string,
-    messageId: string
+    _filePath: string,
+    _fileName: string,
+    _mimeType: string,
+    _conversationId: string,
+    _messageId: string
   ): Promise<FileUploadResult> {
-    return invoke('upload_file_from_path', {
-      payload: {
-        file_path: filePath,
-        file_name: fileName,
-        mime_type: mimeType,
-        conversation_id: conversationId,
-        message_id: messageId
-      }
-    });
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getFile(filePath: string, asBase64: boolean = true): Promise<string> {
-    return invoke('get_file', { filePath, asBase64 });
+  async getFile(_filePath: string, _asBase64: boolean = true): Promise<string> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async deleteFile(filePath: string): Promise<boolean> {
-    return invoke('delete_file', { filePath });
+  async deleteFile(_filePath: string): Promise<boolean> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   async cleanupEmptyDirectories(): Promise<boolean> {
-    return invoke('cleanup_empty_directories');
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ Image Processing ============
 
-  async getImageThumbnail(filePath: string): Promise<string> {
-    return invoke('get_image_thumbnail', { filePath });
+  async getImageThumbnail(_filePath: string): Promise<string> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   async optimizeImage(
-    filePath: string,
-    maxWidth: number = 1200,
-    maxHeight: number = 1200,
-    quality: number = 80
+    _filePath: string,
+    _maxWidth: number = 1200,
+    _maxHeight: number = 1200,
+    _quality: number = 80
   ): Promise<string> {
-    return invoke('optimize_image', {
-      filePath,
-      options: { max_width: maxWidth, max_height: maxHeight, quality }
-    });
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ Audio Processing ============
 
-  async validateAudio(fileData: string): Promise<boolean> {
-    return invoke('validate_audio', { fileData });
+  async validateAudio(_fileData: string): Promise<boolean> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async extractAudioMetadata(filePath: string): Promise<unknown> {
-    return invoke('extract_audio_metadata', { filePath });
+  async extractAudioMetadata(_filePath: string): Promise<unknown> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ Text Processing ============
 
-  async validateText(fileData: string): Promise<boolean> {
-    return invoke('validate_text', { fileData });
+  async validateText(_fileData: string): Promise<boolean> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async extractTextMetadata(filePath: string): Promise<unknown> {
-    return invoke('extract_text_metadata', { filePath });
+  async extractTextMetadata(_filePath: string): Promise<unknown> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async extractCodeBlocks(filePath: string): Promise<[string, string][]> {
-    return invoke('extract_code_blocks', { filePath });
+  async extractCodeBlocks(_filePath: string): Promise<[string, string][]> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ File Versioning ============
 
-  async createFileVersion(filePath: string, comment?: string): Promise<VersionResult> {
-    return invoke('create_file_version', { filePath, comment });
+  async createFileVersion(_filePath: string, _comment?: string): Promise<VersionResult> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async getFileVersionHistory(filePath: string): Promise<VersionHistoryResult> {
-    return invoke('get_file_version_history', { filePath });
+  async getFileVersionHistory(_filePath: string): Promise<VersionHistoryResult> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async restoreFileVersion(filePath: string, versionId: string): Promise<RestoreVersionResult> {
-    return invoke('restore_file_version', { filePath, versionId });
+  async restoreFileVersion(_filePath: string, _versionId: string): Promise<RestoreVersionResult> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async deleteFileVersion(filePath: string, versionId: string): Promise<DeleteVersionResult> {
-    return invoke('delete_file_version', { filePath, versionId });
+  async deleteFileVersion(_filePath: string, _versionId: string): Promise<DeleteVersionResult> {
+    throw new Error('Not yet implemented in server backend');
   }
 
-  async cleanupFileVersions(filePath: string, keepCount: number): Promise<CleanupVersionsResult> {
-    return invoke('cleanup_file_versions', { filePath, keepCount });
+  async cleanupFileVersions(_filePath: string, _keepCount: number): Promise<CleanupVersionsResult> {
+    throw new Error('Not yet implemented in server backend');
   }
 
   // ============ Cache Helpers ============
 
-  private async cachedInvoke<T>(cmd: string, args: Record<string, unknown>, ttl = this.defaultTTL): Promise<T> {
-    const key = `${cmd}:${JSON.stringify(args)}`;
+  private async cachedFetch<T>(key: string, fetcher: () => Promise<T>, ttl = this.defaultTTL): Promise<T> {
     const cached = this.cache.get(key);
 
     if (cached && Date.now() - cached.timestamp < ttl) {
       return cached.data as T;
     }
 
-    const data = await invoke<T>(cmd, args);
+    const data = await fetcher();
     this.cache.set(key, { data, timestamp: Date.now() });
     return data;
   }

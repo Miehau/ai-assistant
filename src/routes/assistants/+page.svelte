@@ -2,7 +2,6 @@
     import { Textarea } from "$lib/components/ui/textarea";
     import { Button } from "$lib/components/ui/button";
     import { Input } from "$lib/components/ui/input";
-    import { invoke } from "@tauri-apps/api/tauri";
     import { onMount } from "svelte";
     import type { SystemPrompt } from "$lib/types";
     import { Trash2 } from "lucide-svelte";
@@ -14,14 +13,10 @@
     let isLoading = $state(false);
 
     async function loadPrompts() {
-        try {
-            isLoading = true;
-            prompts = await invoke('get_all_system_prompts');
-        } catch (error) {
-            console.error('Error loading prompts:', error);
-        } finally {
-            isLoading = false;
-        }
+        // System prompts not yet implemented in server backend
+        console.warn('[assistants] loadPrompts not yet implemented in server backend');
+        prompts = [];
+        isLoading = false;
     }
 
     async function savePrompt() {
@@ -30,29 +25,8 @@
             return;
         }
 
-        try {
-            isLoading = true;
-            if (selectedPromptId) {
-                await invoke('update_system_prompt', {
-                    id: selectedPromptId,
-                    name: currentName,
-                    content: currentPrompt
-                });
-            } else {
-                await invoke('save_system_prompt', {
-                    name: currentName,
-                    content: currentPrompt
-                });
-            }
-            await loadPrompts();
-            currentPrompt = "";
-            currentName = "";
-            selectedPromptId = null;
-        } catch (error) {
-            console.error('Error saving prompt:', error);
-        } finally {
-            isLoading = false;
-        }
+        // System prompts not yet implemented in server backend
+        throw new Error('Not yet implemented in server backend');
     }
 
     function editPrompt(prompt: SystemPrompt) {
@@ -68,18 +42,8 @@
     }
 
     async function deletePrompt(id: string) {
-        try {
-            isLoading = true;
-            await invoke('delete_system_prompt', { id });
-            await loadPrompts();
-            if (selectedPromptId === id) {
-                cancelEdit();
-            }
-        } catch (error) {
-            console.error('Error deleting prompt:', error);
-        } finally {
-            isLoading = false;
-        }
+        // System prompts not yet implemented in server backend
+        throw new Error('Not yet implemented in server backend');
     }
 
     onMount(loadPrompts);

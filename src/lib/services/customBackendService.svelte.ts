@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/tauri";
 import type { CustomBackend, CreateCustomBackendInput, UpdateCustomBackendInput } from "$lib/types/customBackend";
 
 /**
@@ -14,105 +13,38 @@ export class CustomBackendService {
      * Load all custom backends from storage
      */
     public async loadBackends(): Promise<CustomBackend[]> {
-        this.loading = true;
-        this.error = null;
-
-        try {
-            const backends = await invoke<CustomBackend[]>("get_custom_backends");
-            this.backends = backends;
-            console.log('[CustomBackendService] Loaded backends:', backends.length);
-            return backends;
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            this.error = message;
-            console.error('[CustomBackendService] Error loading backends:', error);
-            return [];
-        } finally {
-            this.loading = false;
-        }
+        // Not yet implemented in server backend
+        console.warn('[customBackendService] loadBackends not yet implemented in server backend');
+        return [];
     }
 
     /**
      * Get a specific backend by ID
      */
     public async getBackend(id: string): Promise<CustomBackend | null> {
-        try {
-            const backend = await invoke<CustomBackend | null>("get_custom_backend", { id });
-            return backend;
-        } catch (error) {
-            console.error(`[CustomBackendService] Error getting backend ${id}:`, error);
-            return null;
-        }
+        console.warn('[customBackendService] getBackend not yet implemented in server backend');
+        return null;
     }
 
     /**
      * Create a new custom backend
      */
     public async createBackend(input: CreateCustomBackendInput): Promise<CustomBackend | null> {
-        this.loading = true;
-        this.error = null;
-
-        try {
-            const backend = await invoke<CustomBackend>("create_custom_backend", { input });
-            this.backends = [...this.backends, backend];
-            console.log('[CustomBackendService] Created backend:', backend.name);
-            return backend;
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            this.error = message;
-            console.error('[CustomBackendService] Error creating backend:', error);
-            return null;
-        } finally {
-            this.loading = false;
-        }
+        throw new Error('Not yet implemented in server backend');
     }
 
     /**
      * Update an existing custom backend
      */
     public async updateBackend(input: UpdateCustomBackendInput): Promise<CustomBackend | null> {
-        this.loading = true;
-        this.error = null;
-
-        try {
-            const backend = await invoke<CustomBackend | null>("update_custom_backend", { input });
-            if (backend) {
-                this.backends = this.backends.map(b => b.id === backend.id ? backend : b);
-                console.log('[CustomBackendService] Updated backend:', backend.name);
-            }
-            return backend;
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            this.error = message;
-            console.error('[CustomBackendService] Error updating backend:', error);
-            return null;
-        } finally {
-            this.loading = false;
-        }
+        throw new Error('Not yet implemented in server backend');
     }
 
     /**
      * Delete a custom backend
      */
     public async deleteBackend(id: string): Promise<boolean> {
-        this.loading = true;
-        this.error = null;
-
-        try {
-            const success = await invoke<boolean>("delete_custom_backend", { id });
-            if (success) {
-                this.backends = this.backends.filter(b => b.id !== id);
-                console.log('[CustomBackendService] Deleted backend:', id);
-            }
-            return success;
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            this.error = message;
-            console.error('[CustomBackendService] Error deleting backend:', error);
-            return false;
-        } finally {
-            this.loading = false;
-        }
+        throw new Error('Not yet implemented in server backend');
     }
 
     /**

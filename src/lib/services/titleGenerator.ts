@@ -1,6 +1,5 @@
 import { config } from "$lib/config";
 import { modelRegistry } from "$lib/models/registry";
-import { invoke } from "@tauri-apps/api/tauri";
 
 /**
  * Service to generate titles for conversations based on their content
@@ -39,32 +38,9 @@ export class TitleGeneratorService {
    * @returns A promise that resolves to the generated title
    */
   async generateTitle(conversationId: string): Promise<string> {
-    try {
-      console.log("Generating title for conversation:", conversationId);
-
-      const selectedModel = this.getTitleGenerationModel();
-      console.log("Using model for title generation:", selectedModel.model);
-
-      const response = await invoke<{ title: string }>("agent_generate_title", {
-        payload: {
-          conversation_id: conversationId,
-          model: selectedModel.model,
-          provider: selectedModel.provider,
-        },
-      });
-
-      const title = response.title.trim().replace(/^["']|["']$/g, "");
-
-      // Ensure the title is not too long
-      const finalTitle =
-        title.length > 50 ? title.substring(0, 47) + "..." : title;
-      console.log("Generated final title:", finalTitle);
-
-      return finalTitle;
-    } catch (error) {
-      console.error("Error generating title:", error);
-      return "New Conversation";
-    }
+    // Title generation not yet implemented in server backend
+    console.warn('[titleGenerator] Not yet implemented in server backend');
+    return "New Conversation";
   }
 
   /**

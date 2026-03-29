@@ -3,7 +3,6 @@
 -->
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { invoke } from '@tauri-apps/api/tauri';
   import FileVersionButton from './FileVersionButton.svelte';
   
   // Props
@@ -66,20 +65,10 @@
         return;
       }
       
-      // If not, try to load it from the backend
+      // Thumbnail loading from backend not yet available in server mode
       const filePath = attachment.path || attachment.file_path;
       if (filePath) {
-        console.log('Loading thumbnail from backend for path:', filePath);
-        const thumbnailData = await invoke('get_image_thumbnail', {
-          filePath
-        });
-        
-        if (thumbnailData) {
-          console.log('Thumbnail loaded successfully');
-          loadedThumbnail = true;
-        } else {
-          console.log('No thumbnail data returned from backend');
-        }
+        console.warn('[FileAttachment] Thumbnail loading not yet implemented in server backend');
       } else {
         console.log('No path available to load thumbnail');
       }
@@ -99,16 +88,9 @@
         return;
       }
       
-      // Otherwise, load from the backend
+      // File loading from backend not yet available in server mode
       if (attachment.path) {
-        const imageData = await invoke('get_file', {
-          filePath: attachment.path
-        });
-        
-        if (imageData) {
-          fullImageSrc = `${imageData}`;
-          loadedImage = true;
-        }
+        console.warn('[FileAttachment] File loading not yet implemented in server backend');
       }
     } catch (error) {
       console.error('Error loading full image:', error);

@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import { writable, get, derived } from 'svelte/store';
 import type {
   Message,
@@ -11,6 +10,7 @@ import type {
   ToolExecutionDbRecord
 } from '$lib/types';
 import { v4 as uuidv4 } from 'uuid';
+import { backend } from '$lib/backend';
 
 export class ConversationService {
   private state = writable<ConversationState>({
@@ -42,18 +42,18 @@ export class ConversationService {
   }
 
   async getOrCreate(conversationId: string | null): Promise<Conversation> {
-    const conversation = await invoke<Conversation>('get_or_create_conversation', { conversationId });
+    const conversation = await backend.getOrCreateConversation(conversationId);
     return conversation;
   }
 
   async getDisplayHistory(conversationId: string): Promise<Message[]> {
-    const history = await invoke<DBMessage[]>('get_conversation_history', { conversationId });
+    const history = await backend.getConversationHistory(conversationId);
 
     return history
-      .sort((a, b) => {
+      .sort((a: DBMessage, b: DBMessage) => {
         return (a.timestamp ?? 0) - (b.timestamp ?? 0);
       })
-      .map(msg => {
+      .map((msg: DBMessage) => {
         let content = msg.content;
         const toolCalls = msg.tool_executions?.map((tool: ToolExecutionDbRecord): ToolCallRecord => ({
           execution_id: tool.id,
@@ -77,13 +77,13 @@ export class ConversationService {
   }
 
   async getAPIHistory(conversationId: string): Promise<APIMessage[]> {
-    const history = await invoke<DBMessage[]>('get_conversation_history', { conversationId });
+    const history = await backend.getConversationHistory(conversationId);
 
     return history
-      .sort((a, b) => {
+      .sort((a: DBMessage, b: DBMessage) => {
         return (a.timestamp ?? 0) - (b.timestamp ?? 0);
       })
-      .map(msg => ({
+      .map((msg: DBMessage) => ({
         role: msg.role,
         content: msg.content
       }));
@@ -103,28 +103,26 @@ export class ConversationService {
       throw new Error('No conversation selected');
     }
 
-    const invokePayload = {
-      conversation_id: targetConversationId,
+    const savedMessageId = await backend.saveMessage(
+      targetConversationId,
       role,
       content,
       attachments,
-      message_id: messageId
-    };
-
-    const savedMessageId = await invoke<string>('save_message', invokePayload);
+      messageId
+    );
 
     return savedMessageId;
   }
 
   async getAllConversations(): Promise<Conversation[]> {
-    return await invoke('get_conversations');
+    return await backend.getConversations();
   }
 
   async updateConversationName(conversationId: string, name: string): Promise<void> {
-    console.log('Calling update_conversation_name with:', { conversationId, name });
+    console.log('Calling updateConversationName with:', { conversationId, name });
     try {
-      await invoke('update_conversation_name', { conversationId, name });
-      console.log('Backend update_conversation_name completed successfully');
+      await backend.updateConversationName(conversationId, name);
+      console.log('Backend updateConversationName completed successfully');
 
       // If this is the current conversation, update the local state
       const currentState = get(this.state);
@@ -148,10 +146,10 @@ export class ConversationService {
   }
 
   async deleteConversation(conversationId: string): Promise<void> {
-    console.log('Calling delete_conversation with:', { conversationId });
+    console.log('Calling deleteConversation with:', { conversationId });
     try {
-      await invoke('delete_conversation', { conversationId });
-      console.log('Backend delete_conversation completed successfully');
+      await backend.deleteConversation(conversationId);
+      console.log('Backend deleteConversation completed successfully');
 
       // If this is the current conversation, clear the current conversation
       const currentState = get(this.state);

@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/tauri';
 import type {
 	Branch,
 	MessageTreeNode,
@@ -9,17 +8,14 @@ import type {
 
 /**
  * Service for managing conversation branches
- * Wraps Tauri commands for branch operations
+ * Wraps backend commands for branch operations
  */
 export class BranchService {
 	/**
 	 * Create a new branch in a conversation
 	 */
 	async createBranch(conversationId: string, name: string): Promise<Branch> {
-		return await invoke<Branch>('create_branch', {
-			conversationId,
-			name
-		});
+		throw new Error('Not yet implemented in server backend');
 	}
 
 	/**
@@ -31,76 +27,57 @@ export class BranchService {
 		branchId: string,
 		isBranchPoint: boolean
 	): Promise<MessageTreeNode> {
-		return await invoke<MessageTreeNode>('create_message_tree_node', {
-			messageId,
-			parentMessageId,
-			branchId,
-			isBranchPoint
-		});
+		throw new Error('Not yet implemented in server backend');
 	}
 
 	/**
 	 * Get all branches for a conversation
 	 */
 	async getConversationBranches(conversationId: string): Promise<Branch[]> {
-		return await invoke<Branch[]>('get_conversation_branches', {
-			conversationId
-		});
+		console.warn('[branchService] getConversationBranches not yet implemented in server backend');
+		return [];
 	}
 
 	/**
 	 * Get the complete conversation tree structure
 	 */
 	async getConversationTree(conversationId: string): Promise<ConversationTree> {
-		return await invoke<ConversationTree>('get_conversation_tree', {
-			conversationId
-		});
+		throw new Error('Not yet implemented in server backend');
 	}
 
 	/**
 	 * Get a specific branch path with its messages
 	 */
 	async getBranchPath(branchId: string): Promise<BranchPath> {
-		return await invoke<BranchPath>('get_branch_path', {
-			branchId
-		});
+		throw new Error('Not yet implemented in server backend');
 	}
 
 	/**
 	 * Rename a branch
 	 */
 	async renameBranch(branchId: string, newName: string): Promise<void> {
-		await invoke('rename_branch', {
-			branchId,
-			newName
-		});
+		throw new Error('Not yet implemented in server backend');
 	}
 
 	/**
 	 * Delete a branch
 	 */
 	async deleteBranch(branchId: string): Promise<void> {
-		await invoke('delete_branch', {
-			branchId
-		});
+		throw new Error('Not yet implemented in server backend');
 	}
 
 	/**
 	 * Get branch statistics for a conversation
 	 */
 	async getBranchStats(conversationId: string): Promise<BranchStats> {
-		return await invoke<BranchStats>('get_branch_stats', {
-			conversationId
-		});
+		throw new Error('Not yet implemented in server backend');
 	}
 
 	/**
 	 * Get or create the main branch for a conversation
 	 */
 	async getOrCreateMainBranch(conversationId: string): Promise<Branch> {
-		return await invoke<Branch>('get_or_create_main_branch', {
-			conversationId
-		});
+		throw new Error('Not yet implemented in server backend');
 	}
 
 	/**
@@ -111,11 +88,7 @@ export class BranchService {
 		parentMessageId: string,
 		branchName: string
 	): Promise<Branch> {
-		return await invoke<Branch>('create_branch_from_message', {
-			conversationId,
-			parentMessageId,
-			branchName
-		});
+		throw new Error('Not yet implemented in server backend');
 	}
 
 	/**
@@ -138,14 +111,15 @@ export class BranchService {
 	 * Check message tree consistency and identify orphaned messages
 	 */
 	async checkMessageTreeConsistency(): Promise<any> {
-		return await invoke('check_message_tree_consistency');
+		console.warn('[branchService] checkMessageTreeConsistency not yet implemented in server backend');
+		return {};
 	}
 
 	/**
 	 * Repair message tree by adding orphaned messages to their conversation's main branch
 	 */
 	async repairMessageTree(): Promise<number> {
-		return await invoke<number>('repair_message_tree');
+		throw new Error('Not yet implemented in server backend');
 	}
 }
 

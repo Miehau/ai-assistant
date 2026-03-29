@@ -2,22 +2,18 @@ import { writable, derived, get } from 'svelte/store';
 import type { Message } from '$lib/types';
 import type { Model } from '$lib/types/models';
 import type { SystemPrompt } from '$lib/types';
-import { invoke } from '@tauri-apps/api/tauri';
 import { conversationService } from '$lib/services/conversation';
 import { titleGeneratorService } from '$lib/services/titleGenerator';
 import { modelService, apiKeyService } from '$lib/models';
 import { customBackendService } from '$lib/services/customBackendService.svelte';
 import { ollamaService } from '$lib/services/ollamaService.svelte';
 import { backend } from '$lib/backend/client';
+import { getHttpBackend } from '$lib/backend/http-client';
 import { v4 as uuidv4 } from 'uuid';
 import { branchStore } from '$lib/stores/branches';
-import { startAgentEventBridge } from '$lib/services/eventBridge';
 import { streamMessageViaHono } from '$lib/services/honoEventBridge';
-import { honoBackend } from '$lib/stores/honoBackend.svelte';
 import { AGENT_EVENT_TYPES } from '$lib/types/events';
 import type { AgentEvent, Attachment, ToolCallRecord, MessageSegment } from '$lib/types';
-import { CustomProviderService } from '$lib/services/customProvider';
-import type { CustomBackend } from '$lib/types/customBackend';
 import type {
   AssistantStreamChunkPayload,
   AssistantStreamCompletedPayload,
@@ -96,7 +92,6 @@ let modelsLoaded = false;
 let modelsLoadingPromise: Promise<void> | null = null;
 let systemPromptsLoaded = false;
 let systemPromptsLoadingPromise: Promise<void> | null = null;
-let stopAgentEventBridge: (() => void) | null = null;
 let honoStreamController: AbortController | null = null;
 let honoAgentId: string | null = null;
 let streamingAssistantMessageId: string | null = null;
@@ -113,6 +108,9 @@ let segmentedTextLength = 0;
 /** Throttle buffer for AGENT_OUTPUT_DELTA — maps execution_id → latest accumulated text */
 const agentOutputBuffer = new Map<string, { messageId: string; text: string }>();
 let agentOutputFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Maps local conversation_id → server session_id */
+const sessionMap = new Map<string, string>();
 
 function appendSegment(messageId: string, segment: MessageSegment) {
   const existing = segmentsByMessageId.get(messageId) ?? [];
@@ -526,7 +524,7 @@ function handleAgentEvent(event: AgentEvent) {
       }
 
       conversationService.applyConversationDeleted(payload.conversation_id);
-      honoBackend.removeSession(payload.conversation_id);
+      sessionMap.delete(payload.conversation_id);
       messages.set([]);
       isFirstMessage.set(true);
       resetStreamingState();
@@ -891,8 +889,6 @@ function handleAgentEvent(event: AgentEvent) {
 }
 
 export async function startAgentEvents() {
-  if (stopAgentEventBridge) return;
-
   try {
     const currentConversation = conversationService.getCurrentConversation();
     const pendingApprovals = await backend.listPendingToolApprovals();
@@ -907,8 +903,6 @@ export async function startAgentEvents() {
   } catch (error) {
     console.error('Failed to load pending tool approvals:', error);
   }
-
-  stopAgentEventBridge = await startAgentEventBridge(handleAgentEvent);
 }
 
 // Actions
@@ -979,26 +973,24 @@ export async function loadModels(options: { force?: boolean } = {}) {
       // Add custom backend models to the list
       combinedModels.push(...customBackendModels);
 
-      // In server (Hono) mode, also load models registered in the server DB
-      if (honoBackend.enabled) {
-        try {
-          const serverModels = await honoBackend.getClient().listModels();
-          for (const sm of serverModels) {
-            const alreadyPresent = combinedModels.some(
-              m => m.model_name === sm.name && m.provider === sm.provider,
-            );
-            if (!alreadyPresent) {
-              combinedModels.push({
-                provider: sm.provider,
-                model_name: sm.name,
-                name: sm.displayName ?? sm.name,
-                enabled: true,
-              });
-            }
+      // Load models registered in the server DB
+      try {
+        const serverModels = await getHttpBackend().listModels();
+        for (const sm of serverModels) {
+          const alreadyPresent = combinedModels.some(
+            m => m.model_name === sm.name && m.provider === sm.provider,
+          );
+          if (!alreadyPresent) {
+            combinedModels.push({
+              provider: sm.provider,
+              model_name: sm.name,
+              name: sm.displayName ?? sm.name,
+              enabled: true,
+            });
           }
-        } catch (e) {
-          console.warn('[ChatStore] Failed to load server models:', e);
         }
+      } catch (e) {
+        console.warn('[ChatStore] Failed to load server models:', e);
       }
 
       console.log('[ChatStore] Combined models count:', combinedModels.length);
@@ -1079,7 +1071,7 @@ function mergeOllamaModels(models: OllamaModel[], lastUsedModel?: string | null)
 // Get the last used model from preferences
 async function getLastUsedModel(): Promise<string | null> {
   try {
-    const result = await invoke<string | null>('get_preference', { key: PREF_LAST_USED_MODEL });
+    const result = await backend.getPreference(PREF_LAST_USED_MODEL);
     return result;
   } catch (error) {
     console.error('[ChatStore] Failed to get last used model:', error);
@@ -1090,7 +1082,7 @@ async function getLastUsedModel(): Promise<string | null> {
 // Save the last used model to preferences
 export async function saveLastUsedModel(modelName: string): Promise<void> {
   try {
-    await invoke('set_preference', { key: PREF_LAST_USED_MODEL, value: modelName });
+    await backend.setPreference(PREF_LAST_USED_MODEL, modelName);
     console.log('[ChatStore] Saved last used model:', modelName);
   } catch (error) {
     console.error('[ChatStore] Failed to save last used model:', error);
@@ -1107,7 +1099,7 @@ export async function loadSystemPrompts(options: { force?: boolean } = {}) {
 
   const loader = (async () => {
     try {
-      const prompts = await invoke<SystemPrompt[]>('get_all_system_prompts');
+      const prompts = await backend.getAllSystemPrompts();
       systemPrompts.set(prompts);
 
       if (prompts.length > 0) {
@@ -1237,16 +1229,12 @@ export async function loadConversationHistory(conversationId: string) {
   try {
     let loadedMessages: Message[];
 
-    if (honoBackend.enabled) {
-      const sessionId = honoBackend.getSessionId(conversationId);
-      if (sessionId) {
-        const session = await honoBackend.getClient().getSession(sessionId);
-        loadedMessages = honoItemsToMessages(session.items ?? [], session.agents ?? []);
-      } else {
-        loadedMessages = [];
-      }
+    const sessionId = sessionMap.get(conversationId);
+    if (sessionId) {
+      const session = await getHttpBackend().getSession(sessionId);
+      loadedMessages = honoItemsToMessages(session.items ?? [], session.agents ?? []);
     } else {
-      loadedMessages = await conversationService.getDisplayHistory(conversationId);
+      loadedMessages = [];
     }
 
     // Sync toolCallsByMessageId with the loaded history so that any future
@@ -1283,186 +1271,6 @@ function generateMessageId(): string {
   return uuidv4();
 }
 
-function handleTsServerEvent(
-  event: { type: string; [key: string]: unknown },
-  assistantMessageId: string,
-) {
-  const now = Date.now();
-
-  switch (event.type) {
-    case 'tool:started': {
-      const callId = String(event.callId ?? '');
-      const toolName = String(event.name ?? 'unknown');
-      const parentId = event.parentId as string | null;
-
-      ensureAssistantMessageForToolExecution(assistantMessageId, now);
-      upsertToolCall(assistantMessageId, callId, {
-        tool_name: toolName,
-        args: (event.args as Record<string, unknown>) ?? {},
-        started_at: now,
-        session_id: String(event.agentId ?? ''),
-        parent_session_id: parentId,
-        is_sub_agent: parentId != null,
-      });
-
-      toolActivity.update(entries => {
-        const nextEntry: ToolActivityEntry = {
-          execution_id: callId,
-          tool_name: toolName,
-          status: 'running',
-          started_at: now,
-        };
-        return [nextEntry, ...entries].slice(0, TOOL_ACTIVITY_LIMIT);
-      });
-      break;
-    }
-
-    case 'tool:completed': {
-      const callId = String(event.callId ?? '');
-      const toolName = String(event.name ?? 'unknown');
-      const ok = event.ok as boolean;
-      const parentId = event.parentId as string | null;
-      const durationMs = (event.durationMs as number) ?? 0;
-
-      upsertToolCall(assistantMessageId, callId, {
-        tool_name: toolName,
-        success: ok,
-        completed_at: now,
-        duration_ms: durationMs,
-        session_id: String(event.agentId ?? ''),
-        parent_session_id: parentId,
-        is_sub_agent: parentId != null,
-      });
-
-      toolActivity.update(entries => {
-        const status = ok ? 'completed' : 'failed';
-        let updated = false;
-        const next = entries.map(entry => {
-          if (entry.execution_id !== callId) return entry;
-          updated = true;
-          return {
-            ...entry,
-            status: status as ToolActivityEntry['status'],
-            completed_at: now,
-            duration_ms: durationMs,
-          };
-        });
-        if (!updated) {
-          next.unshift({
-            execution_id: callId,
-            tool_name: toolName,
-            status: status as ToolActivityEntry['status'],
-            started_at: now,
-            completed_at: now,
-            duration_ms: durationMs,
-          });
-        }
-        return next.slice(0, TOOL_ACTIVITY_LIMIT);
-      });
-      break;
-    }
-
-    case 'tool:proposed': {
-      console.log('[TS Server] Tool proposed:', event);
-      break;
-    }
-
-    case 'agent:started': {
-      console.log('[TS Server] Agent started:', event.agentId, 'depth:', event.depth);
-      break;
-    }
-
-    case 'agent:completed':
-    case 'agent:failed': {
-      console.log('[TS Server] Agent done:', event.type, event.agentId);
-      break;
-    }
-  }
-}
-
-async function sendMessageViaCustomBackend(
-  content: string,
-  systemPrompt: string,
-  customBackend: CustomBackend,
-  modelName: string,
-  assistantMessageId: string,
-  userMessageId: string,
-) {
-  const customService = CustomProviderService.fromBackend(customBackend);
-
-  // Add user message to the store
-  const userMessage: Message = {
-    id: userMessageId,
-    type: 'sent',
-    content,
-    timestamp: Date.now(),
-  };
-  messages.update(msgs => [...msgs, userMessage]);
-
-  // Set up streaming state
-  streamingAssistantMessageId = assistantMessageId;
-  isStreaming.set(true);
-  streamingMessage.set('');
-
-  // Build conversation history in OpenAI format
-  const existingMessages = get(messages);
-  const formattedMessages = [
-    { role: 'system' as const, content: systemPrompt },
-    ...existingMessages
-      .filter(m => m.id !== userMessageId)
-      .map(m => ({
-        role: m.type === 'sent' ? 'user' as const : 'assistant' as const,
-        content: m.content,
-      })),
-    { role: 'user' as const, content },
-  ];
-
-  try {
-    const result = await customService.createChatCompletion(
-      modelName,
-      customBackend.url,
-      formattedMessages,
-      true, // stream
-      (chunk: string) => {
-        streamingChunkBuffer += chunk;
-        if (!streamingFlushPending) {
-          streamingFlushPending = true;
-          if (typeof window !== 'undefined' && 'requestAnimationFrame' in window) {
-            window.requestAnimationFrame(() => flushStreamingChunks());
-          } else {
-            flushStreamingChunks();
-          }
-        }
-      },
-      AbortSignal.timeout(180_000),
-      (event: { type: string; [key: string]: unknown }) => {
-        handleTsServerEvent(event, assistantMessageId);
-      },
-    );
-
-    // Finalize the message
-    const finalContent = get(streamingMessage) || result.content;
-    messages.update(msgs => {
-      const existing = msgs.findIndex(m => m.id === assistantMessageId);
-      const newMsg: Message = {
-        id: assistantMessageId,
-        type: 'received',
-        content: finalContent,
-        timestamp: Date.now(),
-        tool_calls: getToolCallsForMessage(assistantMessageId),
-      };
-      if (existing !== -1) {
-        const next = [...msgs];
-        next[existing] = newMsg;
-        return next;
-      }
-      return [...msgs, newMsg];
-    });
-  } finally {
-    resetStreamingState();
-  }
-}
-
 export async function sendMessage() {
   if (get(isLoading)) return;
 
@@ -1472,7 +1280,6 @@ export async function sendMessage() {
   const selectedModelValue = get(selectedModel);
   const selectedSystemPromptValue = get(selectedSystemPrompt);
   const isFirstMessageValue = get(isFirstMessage);
-  const streamingEnabledValue = get(streamingEnabled);
 
   if (!currentMessageValue.trim() && attachmentsValue.length === 0) return;
 
@@ -1527,82 +1334,48 @@ export async function sendMessage() {
     startRequestWatchdog(assistantMessageId);
 
     // Check if Hono server backend is enabled
-    if (honoBackend.enabled) {
-      const sessionId = honoBackend.getSessionId(currentConversation.id);
+    const sessionId = sessionMap.get(currentConversation.id);
 
-      // Add user message directly (Hono doesn't emit message.saved for it)
-      messages.update((msgs) => [
-        ...msgs,
-        {
-          id: userMessageId,
-          type: 'sent' as const,
-          content: currentMessageValue,
-          attachments: attachmentsValue.length ? attachmentsValue : undefined,
-          timestamp: Date.now(),
-        },
-      ]);
+    // Add user message directly (server doesn't emit message.saved for it)
+    messages.update((msgs) => [
+      ...msgs,
+      {
+        id: userMessageId,
+        type: 'sent' as const,
+        content: currentMessageValue,
+        attachments: attachmentsValue.length ? attachmentsValue : undefined,
+        timestamp: Date.now(),
+      },
+    ]);
 
-      honoStreamController = new AbortController();
-      try {
-        const result = await streamMessageViaHono(
-          currentMessageValue,
-          {
-            conversationId: currentConversation.id,
-            messageId: assistantMessageId,
-            sessionId,
-            model: selectedModelObject && selectedModelValue
-              ? `${selectedModelObject.provider}:${selectedModelValue}`
-              : selectedModelValue || undefined,
-            agent: 'planner',
-            systemPrompt: systemPromptContent,
-            // Persist session ID eagerly — if the stream is aborted before `done`,
-            // the next follow-up message still has the correct session to resume.
-            onSessionId: (sid) => honoBackend.setSessionId(currentConversation.id, sid),
-          },
-          handleAgentEvent,
-          honoStreamController.signal,
-        );
-        if (result.sessionId) {
-          honoBackend.setSessionId(currentConversation.id, result.sessionId);
-        }
-        if (result.agentId) {
-          honoAgentId = result.agentId;
-        }
-      } finally {
-        honoStreamController = null;
-      }
-    // Check if this is a custom backend — call it directly instead of via Tauri
-    } else if (selectedModelObject?.provider === 'custom' && selectedModelObject?.custom_backend_id) {
-      const customBe = await invoke<CustomBackend | null>('get_custom_backend', {
-        id: selectedModelObject.custom_backend_id,
-      });
-      if (!customBe) {
-        throw new Error(`Custom backend not found: ${selectedModelObject.custom_backend_id}`);
-      }
-
-      await sendMessageViaCustomBackend(
+    honoStreamController = new AbortController();
+    try {
+      const result = await streamMessageViaHono(
         currentMessageValue,
-        systemPromptContent,
-        customBe,
-        selectedModelValue,
-        assistantMessageId,
-        userMessageId,
+        {
+          conversationId: currentConversation.id,
+          messageId: assistantMessageId,
+          sessionId,
+          model: selectedModelObject && selectedModelValue
+            ? `${selectedModelObject.provider}:${selectedModelValue}`
+            : selectedModelValue || undefined,
+          agent: 'planner',
+          systemPrompt: systemPromptContent,
+          // Persist session ID eagerly — if the stream is aborted before `done`,
+          // the next follow-up message still has the correct session to resume.
+          onSessionId: (sid) => sessionMap.set(currentConversation.id, sid),
+        },
+        handleAgentEvent,
+        honoStreamController.signal,
       );
-    } else {
-      await invoke('agent_send_message', {
-        payload: {
-          conversation_id: currentConversation?.id,
-          model: selectedModelValue,
-          provider: selectedModelObject?.provider || 'openai',
-          system_prompt: systemPromptContent,
-          content: currentMessageValue,
-          attachments: attachmentsValue,
-          user_message_id: userMessageId,
-          assistant_message_id: assistantMessageId,
-          custom_backend_id: selectedModelObject?.custom_backend_id || null,
-          stream: streamingEnabledValue,
-        }
-      });
+      if (result.sessionId) {
+        sessionMap.set(currentConversation.id, result.sessionId);
+      }
+      if (result.agentId) {
+        honoAgentId = result.agentId;
+      }
+    } finally {
+      honoStreamController = null;
     }
 
     // Generate a title for the conversation if this is the first message
@@ -1644,7 +1417,7 @@ export async function cancelCurrentAgentRequest() {
   if (honoAgentId) {
     const agentId = honoAgentId;
     try {
-      await honoBackend.getClient().cancelAgent(agentId);
+      await getHttpBackend().cancelAgent(agentId);
     } catch {
       // best-effort
     }
@@ -1677,7 +1450,7 @@ export async function resolveToolApproval(
   approved: boolean,
   scope?: ToolExecutionApprovalScope
 ) {
-  if (honoBackend.enabled) {
+  {
     const approvals = get(pendingToolApprovals);
     const approval = approvals.find((a) => a.approval_id === approvalId);
     const agentId = approval?.agent_id;
@@ -1689,7 +1462,7 @@ export async function resolveToolApproval(
       // Subscribe to the event stream BEFORE sending the approval so we receive
       // events emitted during the resumed agent run (tool activity, text deltas).
       const eventAbort = new AbortController();
-      const client = honoBackend.getClient();
+      const client = getHttpBackend();
       const eventPromise = (async () => {
         let streamStarted = false;
         try {
@@ -1919,18 +1692,12 @@ export async function resolveToolApproval(
         }
       } catch (error) {
         eventAbort.abort();
-        console.error('Failed to resolve Hono tool approval:', error);
+        console.error('Failed to resolve tool approval:', error);
       } finally {
         isLoading.set(false);
       }
       return;
     }
-  }
-
-  try {
-    await backend.resolveToolExecutionApproval(approvalId, approved, scope);
-  } catch (error) {
-    console.error('Failed to resolve tool approval:', error);
   }
 }
 

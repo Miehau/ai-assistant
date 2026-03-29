@@ -1,5 +1,4 @@
 import { writable, derived } from 'svelte/store';
-import { invoke } from '@tauri-apps/api/tauri';
 import type { ConversationUsageSummary } from '$lib/types';
 import { formatCost } from '$lib/utils/costCalculator';
 
@@ -20,16 +19,9 @@ export const formattedCost = derived(
  * @param conversationId - The conversation ID to load usage for
  */
 export async function loadConversationUsage(conversationId: string): Promise<void> {
-  try {
-    const usage = await invoke<ConversationUsageSummary | null>(
-      'get_conversation_usage',
-      { conversationId }
-    );
-    currentConversationUsage.set(usage);
-  } catch (error) {
-    console.warn('Failed to load conversation usage:', error);
-    currentConversationUsage.set(null);
-  }
+  // Not yet implemented in server backend
+  console.warn('[tokenUsage] loadConversationUsage not yet implemented in server backend');
+  currentConversationUsage.set(null);
 }
 
 /**

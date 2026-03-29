@@ -4,9 +4,8 @@
     import * as Card from "$lib/components/ui/card";
     import { onMount } from "svelte";
     import { Trash2, Plus, Check, X } from "lucide-svelte";
-    import { honoBackend } from "$lib/stores/honoBackend.svelte";
+    import { getHttpBackend, type ModelInfo } from "$lib/backend/http-client";
     import { loadModels } from "$lib/stores/chat";
-    import type { ModelInfo } from "$lib/backend/http-client";
 
     const PROVIDERS = [
         { value: "openrouter", label: "OpenRouter" },
@@ -43,7 +42,7 @@
 
     async function fetchModels() {
         try {
-            models = await honoBackend.getClient().listModels();
+            models = await getHttpBackend().listModels();
         } catch (e) {
             console.error("[ServerModels] Failed to fetch models:", e);
         }
@@ -53,7 +52,7 @@
         if (!newModelName.trim()) return;
         isLoading = true;
         try {
-            await honoBackend.getClient().addModel(
+            await getHttpBackend().addModel(
                 newProvider,
                 newModelName.trim(),
                 newDisplayName.trim() || undefined,
@@ -73,7 +72,7 @@
     async function deleteModel(id: string) {
         isLoading = true;
         try {
-            await honoBackend.getClient().deleteModel(id);
+            await getHttpBackend().deleteModel(id);
             await fetchModels();
             await loadModels({ force: true });
         } catch (e) {

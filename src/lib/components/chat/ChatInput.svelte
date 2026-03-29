@@ -4,11 +4,9 @@
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Paperclip, Send, Square } from "lucide-svelte";
   import { cancelCurrentAgentRequest } from "$lib/stores/chat";
-  import { fileService } from "$lib/services/fileService";
-  import type { Attachment, FileMetadata, Message } from "$lib/types";
+  import type { Attachment, Message } from "$lib/types";
   import { get } from "svelte/store";
   import { currentConversation } from "$lib/services/conversation";
-  import { open } from '@tauri-apps/api/dialog';
   import CostEstimator from "./CostEstimator.svelte";
   import type { Snippet } from "svelte";
 
@@ -113,48 +111,29 @@
             uploadProgress[file.name] = 50;
             uploadProgress = {...uploadProgress};
 
-            // Get the file path using Tauri's native dialog API
-            const filePath = await open({
-              multiple: false,
-              directory: false
-            });
-
-            if (!filePath || typeof filePath !== 'string') {
-              throw new Error('No file path selected');
-            }
-
-            // Let Rust handle the file operations directly from the temp path
-            const result = await fileService.uploadFileFromPath(
-              filePath,
-              file.name,
-              file.type || "application/octet-stream",
-              conversationId,
-              tempMessageId
-            );
-
-            // Update progress
-            uploadProgress[file.name] = 95;
-            uploadProgress = {...uploadProgress};
-
-            // Complete progress
-            uploadProgress[file.name] = 100;
-            uploadProgress = {...uploadProgress};
-
-            // Clear interval
+            // Read the file directly in the browser
             clearInterval(progressInterval);
 
-            // Create an attachment with file metadata
-            const attachment: Attachment = {
-              name: file.name,
-              attachment_type: attachmentType.startsWith('image/') ? 'image' :
-                              attachmentType.startsWith('audio/') ? 'audio' :
-                              'text',
-              file_path: result.metadata.path,
-              mime_type: file.type || "application/octet-stream",
-              file_metadata: result.metadata as FileMetadata
-            };
-
-            return attachment;
+            if (file.type.startsWith('text/') || file.name.match(/\.(txt|md|json|js|ts|py|rs|svelte)$/)) {
+              const text = await file.text();
+              uploadProgress[file.name] = 100;
+              uploadProgress = {...uploadProgress};
+              return {
+                attachment_type: "text" as const,
+                name: file.name,
+                data: text
+              } satisfies Attachment;
+            } else {
+              const base64Data = await fileToBase64(file);
+              uploadProgress[file.name] = 100;
+              uploadProgress = {...uploadProgress};
+              const type = file.type.startsWith('audio/') ? 'audio' as const : 'image' as const;
+              return {
+                attachment_type: type,
+                name: file.name,
+                data: base64Data
+              } satisfies Attachment;
+            }
           } catch (error) {
             console.error("Error uploading file:", error);
 

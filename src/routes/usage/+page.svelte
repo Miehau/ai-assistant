@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/tauri';
   import type { UsageStatistics, UsageBackfillResult } from '$lib/types';
   import { Button } from '$lib/components/ui/button';
   import { Download, TrendingUp, DollarSign, Zap, Wrench } from 'lucide-svelte';
@@ -20,21 +19,9 @@
     error = null;
 
     try {
-      let startDate: number | undefined;
-      const endDate = Math.floor(Date.now() / 1000); // Current time in seconds
-
-      if (range === '7d') {
-        startDate = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
-      } else if (range === '30d') {
-        startDate = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
-      }
-
-      const stats = await invoke<UsageStatistics>('get_usage_statistics', {
-        startDate,
-        endDate
-      });
-
-      statistics = stats;
+      // Usage statistics not yet implemented in server backend
+      console.warn('[usage] loadStatistics not yet implemented in server backend');
+      statistics = null;
     } catch (e) {
       console.error('Failed to load usage statistics:', e);
       error = e instanceof Error ? e.message : 'Failed to load statistics';
@@ -85,9 +72,9 @@
     backfillResult = null;
 
     try {
-      const result = await invoke<UsageBackfillResult>('backfill_message_usage', {});
-      backfillResult = result;
-      await loadStatistics(dateRange);
+      // Backfill not yet implemented in server backend
+      console.warn('[usage] backfillUsage not yet implemented in server backend');
+      backfillError = 'Not yet implemented in server backend';
     } catch (e) {
       console.error('Failed to backfill usage:', e);
       backfillError = e instanceof Error ? e.message : 'Failed to backfill usage';
@@ -182,7 +169,7 @@
           disabled={backfilling}
         >
           <Wrench class="size-4 mr-2" />
-          {backfilling ? 'Backfilling…' : 'Backfill Usage'}
+          {backfilling ? 'Backfilling...' : 'Backfill Usage'}
         </Button>
         <Button variant="outline" size="sm" class="border-white/10 hover:bg-white/5" onclick={() => exportData('json')}>
           <Download class="size-4 mr-2" />
@@ -203,7 +190,7 @@
     {:else if error}
       <div class="surface-card p-6 border-destructive">
         <p class="text-destructive">Error: {error}</p>
-        <Button onclick={loadStatistics} class="mt-4" variant="outline">Retry</Button>
+        <Button onclick={() => loadStatistics()} class="mt-4" variant="outline">Retry</Button>
       </div>
     {:else if statistics}
       {#if backfillError}

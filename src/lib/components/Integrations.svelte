@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { backend } from "$lib/backend";
-  import { open as openExternal } from "@tauri-apps/api/shell";
+  // Open external URL in a new browser tab (replaces Tauri shell.open)
+  function openExternal(url: string) {
+    window.open(url, '_blank');
+  }
   import * as Card from "$lib/components/ui/card";
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";

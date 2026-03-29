@@ -508,6 +508,127 @@ export class HttpBackendClient {
   }
 
   // ========================================================================
+  // API Keys
+  // ========================================================================
+
+  async getApiKey(
+    provider: string,
+    signal?: AbortSignal,
+  ): Promise<{ provider: string; exists: boolean; updatedAt: string | null }> {
+    return this.request('GET', `/api/keys/${provider}`, undefined, signal);
+  }
+
+  async setApiKey(
+    provider: string,
+    apiKey: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    provider: string;
+    exists: boolean;
+    registered: boolean;
+    updatedAt: string | null;
+  }> {
+    return this.request('PUT', `/api/keys/${provider}`, { apiKey }, signal);
+  }
+
+  async deleteApiKey(
+    provider: string,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean }> {
+    return this.request('DELETE', `/api/keys/${provider}`, undefined, signal);
+  }
+
+  async listApiKeys(
+    signal?: AbortSignal,
+  ): Promise<{
+    providers: Array<{
+      provider: string;
+      hasKey: boolean;
+      isActive: boolean;
+      updatedAt: string | null;
+    }>;
+  }> {
+    return this.request('GET', '/api/keys', undefined, signal);
+  }
+
+  // ========================================================================
+  // System Prompts
+  // ========================================================================
+
+  async listSystemPrompts(signal?: AbortSignal): Promise<unknown[]> {
+    return this.request<unknown[]>('GET', '/api/system-prompts', undefined, signal);
+  }
+
+  async getSystemPrompt(id: string, signal?: AbortSignal): Promise<unknown> {
+    return this.request('GET', `/api/system-prompts/${id}`, undefined, signal);
+  }
+
+  async createSystemPrompt(
+    name: string,
+    content: string,
+    isDefault?: boolean,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.request('POST', '/api/system-prompts', { name, content, isDefault }, signal);
+  }
+
+  async updateSystemPrompt(
+    id: string,
+    updates: { name?: string; content?: string; isDefault?: boolean },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.request('PATCH', `/api/system-prompts/${id}`, updates, signal);
+  }
+
+  async deleteSystemPrompt(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean }> {
+    return this.request('DELETE', `/api/system-prompts/${id}`, undefined, signal);
+  }
+
+  // ========================================================================
+  // Preferences
+  // ========================================================================
+
+  async getPreference(
+    key: string,
+    signal?: AbortSignal,
+  ): Promise<{ key: string; value: string | null }> {
+    return this.request('GET', `/api/preferences/${key}`, undefined, signal);
+  }
+
+  async setPreference(
+    key: string,
+    value: string,
+    signal?: AbortSignal,
+  ): Promise<{ key: string; value: string }> {
+    return this.request('PUT', `/api/preferences/${key}`, { value }, signal);
+  }
+
+  // ========================================================================
+  // Usage
+  // ========================================================================
+
+  async getUsageStats(
+    signal?: AbortSignal,
+  ): Promise<{ totalSessions: number; totalAgents: number; totalItems: number }> {
+    return this.request('GET', '/api/usage', undefined, signal);
+  }
+
+  // ========================================================================
+  // Models (additional)
+  // ========================================================================
+
+  async updateModel(
+    id: string,
+    updates: { displayName?: string; maxTokens?: number; contextWindow?: number },
+    signal?: AbortSignal,
+  ): Promise<ModelInfo> {
+    return this.request<ModelInfo>('PATCH', `/api/models/${id}`, updates, signal);
+  }
+
+  // ========================================================================
   // SSE parsing
   // ========================================================================
 
