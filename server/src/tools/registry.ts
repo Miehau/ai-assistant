@@ -32,7 +32,10 @@ export class ToolRegistryImpl implements ToolExecutor {
 
     const validation = this.validateArgs(name, args)
     if (!validation.valid) {
-      return { ok: false, error: `Validation failed: ${validation.errors!.join(', ')}` }
+      return {
+        ok: false,
+        error: `Validation failed: ${validation.errors!.join(', ')}.\n\nExpected parameters for "${name}":\n${formatParameterHint(handler.metadata.parameters)}`,
+      }
     }
 
     try {
@@ -130,4 +133,21 @@ export class ToolRegistryImpl implements ToolExecutor {
     if (!handler?.preview) return undefined
     return handler.preview(args, ctx)
   }
+}
+
+/** Build a concise parameter hint from a JSON Schema for inclusion in error messages. */
+function formatParameterHint(schema: Record<string, unknown>): string {
+  const properties = schema.properties as Record<string, Record<string, unknown>> | undefined
+  const required = new Set((schema.required as string[]) ?? [])
+
+  if (!properties) return '  (no parameters defined)'
+
+  const lines: string[] = []
+  for (const [key, prop] of Object.entries(properties)) {
+    const type = prop.type as string ?? 'any'
+    const desc = prop.description as string ?? ''
+    const req = required.has(key) ? ' (required)' : ''
+    lines.push(`  - ${key}: ${type}${req}${desc ? ` — ${desc}` : ''}`)
+  }
+  return lines.join('\n')
 }

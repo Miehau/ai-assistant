@@ -20,6 +20,8 @@ Available actions:
 - guardrail_stop: Stop if the request is inappropriate, provide "reason"
 - ask_user: Ask the user a clarifying question, provide "question"
 
+Prefer direct tool use for simple operations (a single API call, a web fetch, a file read). Use delegation for multi-step research, searches that produce large outputs, or independent subtasks that would pollute your context.
+
 Always respond with JSON between =====JSON_START===== and =====JSON_END===== markers.
 
 Example:
@@ -41,6 +43,8 @@ Call the appropriate tool to take the next step, or respond with text to:
 - Ask the user a clarifying question
 - Stop if the request is inappropriate
 
+Prefer direct tool use for simple operations (a single API call, a web fetch, a file read). Use delegation for multi-step research, searches that produce large outputs, or independent subtasks that would pollute your context.
+
 Be precise and efficient. Execute tools when needed, respond when the task is done.`
 
 // ---------------------------------------------------------------------------
@@ -56,6 +60,8 @@ Call the appropriate tool to take the next step, or respond with text to:
 - Complete the task (provide a final message to the user)
 - Ask the user a clarifying question
 - Stop if the request is inappropriate
+
+Prefer direct tool use for simple operations (a single API call, a web fetch, a file read). Use delegation for multi-step research, searches that produce large outputs, or independent subtasks that would pollute your context.
 
 Be precise and efficient. Execute tools when needed, respond when the task is done.`
 

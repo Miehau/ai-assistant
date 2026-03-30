@@ -165,7 +165,7 @@ export class HttpBackendClient {
       /\/$/,
       '',
     );
-    this.token = config.token ?? null;
+    this.token = config.token ?? 'dev-key';
   }
 
   // ---- Config helpers -----------------------------------------------------

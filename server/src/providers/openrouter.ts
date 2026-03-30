@@ -38,6 +38,7 @@ export class OpenRouterProvider implements LLMProvider {
     const body = buildRequestBody(request)
 
     logger.debug({ provider: 'openrouter', model: request.model, messages: body.messages }, 'LLM request messages')
+    logger.debug('LLM request tools:\n%s', JSON.stringify(body.tools, null, 2))
 
     const res = await fetch(BASE_URL, {
       method: 'POST',

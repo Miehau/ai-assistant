@@ -1229,11 +1229,15 @@ export async function loadConversationHistory(conversationId: string) {
   try {
     let loadedMessages: Message[];
 
-    const sessionId = sessionMap.get(conversationId);
-    if (sessionId) {
+    // After the Hono migration, conversation IDs from the sidebar ARE session IDs
+    // (getConversations maps session.id → conversation.id directly).
+    // sessionMap only has entries for conversations created in this browser session.
+    const sessionId = sessionMap.get(conversationId) ?? conversationId;
+    try {
       const session = await getHttpBackend().getSession(sessionId);
       loadedMessages = honoItemsToMessages(session.items ?? [], session.agents ?? []);
-    } else {
+    } catch {
+      // Session doesn't exist on server (e.g. local placeholder ID)
       loadedMessages = [];
     }
 

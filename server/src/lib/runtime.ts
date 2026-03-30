@@ -22,6 +22,7 @@ import { AgentDefinitionRegistryImpl } from '../agents/registry.js'
 import type { AgentDefinitionRegistry } from '../agents/registry.js'
 import { registerVerifyTools } from '../tools/verify.js'
 import { registerTaskTools } from '../tools/tasks.js'
+import { registerThinkTool } from '../tools/think.js'
 import { logger } from './logger.js'
 import type { AppConfig } from './config.js'
 import type { ProviderRegistry } from '../providers/types.js'
@@ -100,6 +101,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   registerPreferenceTools(tools, repos.preferences)
   registerDelegateTools(tools, agentDefinitions)
   registerVerifyTools(tools)
+  registerThinkTool(tools)
 
   // Task management tools — files stored in data/tasks/, outputs in data/workspace/
   const tasksDir = path.isAbsolute(config.tasksDir)
