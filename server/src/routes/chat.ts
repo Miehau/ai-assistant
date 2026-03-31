@@ -78,7 +78,7 @@ export function chatRoutes(runtime: RuntimeContext) {
         return c.json({ error: `Unknown agent: "${body.agent}". Available: ${available}` }, 400)
       }
 
-      const model = agentDef?.model ?? body.model ?? runtime.config.defaultModel
+      const model = body.model ?? agentDef?.model ?? runtime.config.defaultModel
       const userId = c.get('userId') as string
 
       // 1. Get or create session
