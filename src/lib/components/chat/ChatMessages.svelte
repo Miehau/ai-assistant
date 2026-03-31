@@ -333,6 +333,7 @@
 
   {#each visibleMessages as msg, i (msg.id || `${msg.type}-${i}`)}
     {@const animated = i >= visibleMessages.length - ANIMATED_MESSAGE_LIMIT}
+    {@const toolsSettled = !isLoading && !$isStreaming && (msg.tool_calls ?? []).length > 0 && (msg.tool_calls ?? []).every(c => c.success !== undefined)}
     {#if msg.segments && msg.segments.length > 0}
       <!-- Interleaved rendering: text and tool calls in streaming order.
            computeDisplayItems batches consecutive non-subagent tool anchors so they
@@ -390,11 +391,11 @@
               in:fly={{ y: 10, duration: 150, easing: backOut }}
               class="w-full message-container"
             >
-              <ToolCallGroup calls={item.calls} />
+              <ToolCallGroup calls={item.calls} settled={toolsSettled} />
             </div>
           {:else}
             <div class="w-full message-container">
-              <ToolCallGroup calls={item.calls} />
+              <ToolCallGroup calls={item.calls} settled={toolsSettled} />
             </div>
           {/if}
         {:else if item.kind === 'subagent'}
@@ -426,11 +427,11 @@
               in:fly={{ y: 10, duration: 150, easing: backOut }}
               class="w-full message-container"
             >
-              <ToolCallGroup calls={mainCalls} />
+              <ToolCallGroup calls={mainCalls} settled={toolsSettled} />
             </div>
           {:else}
             <div class="w-full message-container">
-              <ToolCallGroup calls={mainCalls} />
+              <ToolCallGroup calls={mainCalls} settled={toolsSettled} />
             </div>
           {/if}
         {/if}

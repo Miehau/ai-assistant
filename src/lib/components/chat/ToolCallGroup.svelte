@@ -2,10 +2,24 @@
   import type { ToolCallRecord } from "$lib/types";
   import ToolCallBubble from "./ToolCallBubble.svelte";
 
-  let { calls }: { calls: ToolCallRecord[] } = $props();
+  let { calls, settled = false }: { calls: ToolCallRecord[]; settled?: boolean } = $props();
 
-  // Auto-expand small groups; collapse large ones by default
-  let open = $state(calls.length <= 3);
+  // Track whether user has manually toggled so we don't override their choice
+  let userToggled = $state(false);
+
+  // Auto-expand small groups; collapse large ones by default.
+  // When settled (all done + user's turn), auto-collapse unless user manually expanded.
+  let open = $derived.by(() => {
+    if (userToggled) return openManual;
+    if (settled) return false;
+    return calls.length <= 3;
+  });
+  let openManual = $state(calls.length <= 3);
+
+  function toggle() {
+    userToggled = true;
+    openManual = !openManual;
+  }
 
   let succeeded = $derived(calls.filter((c) => c.success === true).length);
   let failed = $derived(calls.filter((c) => c.success === false && !c.error?.toLowerCase().includes('denied')).length);
@@ -51,14 +65,32 @@
   );
 </script>
 
-{#if calls.length === 1}
+{#if calls.length === 1 && !settled}
   <ToolCallBubble call={calls[0]} />
+{:else if calls.length === 1 && settled}
+  <!-- Single call, settled: compact inline view with expand -->
+  <div class="w-full min-w-0 rounded-xl border border-border/30 overflow-hidden">
+    <button
+      class={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors ${headerClass}`}
+      onclick={toggle}
+    >
+      <span class="text-[10px] text-muted-foreground/60 shrink-0">{open ? '▾' : '▸'}</span>
+      <span class={`w-1.5 h-1.5 rounded-full shrink-0 ${callDotClass(calls[0])}`}></span>
+      <span class="text-xs font-mono text-foreground/80 truncate">{calls[0].tool_name}</span>
+      <span class="text-[10px] text-muted-foreground/60 ml-auto">{summary()}</span>
+    </button>
+    {#if open}
+      <div class="p-1.5 bg-background/20">
+        <ToolCallBubble call={calls[0]} />
+      </div>
+    {/if}
+  </div>
 {:else}
   <div class="w-full min-w-0 rounded-xl border border-border/30 overflow-hidden">
     <!-- Group header -->
     <button
       class={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors border-b border-border/20 ${headerClass}`}
-      onclick={() => (open = !open)}
+      onclick={toggle}
     >
       <span class="text-[10px] text-muted-foreground/60 shrink-0">{open ? '▾' : '▸'}</span>
       <span class="text-xs font-medium text-foreground/80">{calls.length} tool calls</span>
