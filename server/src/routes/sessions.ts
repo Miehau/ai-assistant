@@ -8,7 +8,7 @@ export function sessionRoutes(runtime: RuntimeContext): Hono {
   // GET / — List user's sessions
   app.get('/', async (c) => {
     try {
-      const userId = 'dev' // TODO: extract from auth middleware
+      const userId = c.get('userId') as string
       const sessions = await runtime.repositories.sessions.listByUser(userId)
       return c.json(sessions)
     } catch (err) {
