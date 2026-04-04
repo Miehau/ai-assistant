@@ -1,5 +1,7 @@
 <script lang="ts">
-  import Settings from "$lib/components/Settings.svelte";
+  import { ChevronLeft } from "lucide-svelte";
+  import { Button } from "$lib/components/ui/button";
+  import Assistants from "$lib/components/Assistants.svelte";
 
   export let isOpen = false;
   export let onBack: (() => void) | undefined = undefined;
@@ -24,7 +26,15 @@
   class:drawer-panel-open={isOpen}
   aria-hidden={!isOpen}
 >
-  {#if isOpen}
-    <Settings showClose={true} onClose={closeDrawer} />
-  {/if}
+  <div class="flex items-center justify-between border-b border-white/10 px-5 py-4 shrink-0">
+    <span class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Assistants</span>
+    <Button variant="ghost" size="icon" class="rounded-lg" onclick={closeDrawer} aria-label="Back">
+      <ChevronLeft class="size-4" />
+    </Button>
+  </div>
+  <div class="flex-1 overflow-y-auto">
+    {#if isOpen}
+      <Assistants />
+    {/if}
+  </div>
 </div>
