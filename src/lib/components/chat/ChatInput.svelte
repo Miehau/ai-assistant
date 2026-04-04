@@ -491,11 +491,14 @@
     <Button
       type="button"
       size="icon"
-      variant={isLoading ? "destructive" : "ghost"}
+      variant={isLoading ? "ghost" : "ghost"}
       onclick={isLoading ? () => cancelCurrentAgentRequest() : handleSendMessage}
+      class={isLoading
+        ? "bg-red-500/10 border border-red-400/20 backdrop-blur-md hover:bg-red-500/20 hover:border-red-400/40 hover:shadow-[0_0_12px_rgba(239,68,68,0.25)] transition-all duration-300 rounded-xl"
+        : ""}
     >
       {#if isLoading}
-        <Square class="size-4" />
+        <Square class="size-4 text-red-400" />
       {:else}
         <Send class="size-4" />
       {/if}
