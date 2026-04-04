@@ -1368,6 +1368,9 @@ export async function sendMessage() {
           // Persist session ID eagerly — if the stream is aborted before `done`,
           // the next follow-up message still has the correct session to resume.
           onSessionId: (sid) => sessionMap.set(currentConversation.id, sid),
+          // Persist agent ID eagerly so cancel works even if the stream throws
+          // (e.g. on max-turn failure) before the `done` event returns it.
+          onAgentId: (id) => { honoAgentId = id; },
         },
         handleAgentEvent,
         honoStreamController.signal,

@@ -25,6 +25,9 @@ export interface HonoStreamOptions {
   /** Called as soon as the server's session ID is known (first SSE event).
    *  Persist it immediately so follow-up messages don't lose context on abort. */
   onSessionId?: (sessionId: string) => void;
+  /** Called as soon as the root agent ID is known — persist eagerly so cancel
+   *  works even if the stream is aborted before the `done` event. */
+  onAgentId?: (agentId: string) => void;
 }
 
 export interface HonoStreamResult {
@@ -107,6 +110,7 @@ export async function streamMessageViaHono(
       // Track root agent from first text event
       if (!rootAgentId && !parentId && agentId) {
         rootAgentId = agentId;
+        options.onAgentId?.(agentId);
       }
 
       // Sub-agent text: do NOT emit as ASSISTANT_STREAM_CHUNK (would corrupt parent message).
@@ -218,6 +222,7 @@ export async function streamMessageViaHono(
       const parentId = data.parentId as string | null | undefined;
       if (!rootAgentId && !parentId) {
         rootAgentId = agentId;
+        options.onAgentId?.(agentId);
       }
     } else if (event === 'subagent_done' || event === 'subagent_error') {
       // Sub-agent lifecycle — no separate client event needed.

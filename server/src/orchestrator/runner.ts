@@ -11,7 +11,7 @@ import type {
 import type { WaitingFor } from '../domain/types.js'
 import type { LLMProvider, LLMRequest, LLMToolDefinition, LLMResponse } from '../providers/types.js'
 import type { ToolCall } from '../tools/types.js'
-import { startAgent, completeAgent, failAgent, waitForMany } from '../domain/agent.js'
+import { startAgent, completeAgent, failAgent, cancelAgent, waitForMany } from '../domain/agent.js'
 import {
   parseControllerAction,
   mapToolCallsToAction,
@@ -262,6 +262,24 @@ export async function runAgent(
       if (refreshed) ctx.agent = refreshed
     }
 
+    // Loop exited — either max turns exceeded or agent was cancelled externally
+    if (ctx.agent.status === 'cancelled') {
+      deps.events.emit({
+        type: EVENT_TYPES.AGENT_FAILED,
+        agent_id: agentId,
+        session_id: ctx.agent.sessionId,
+        payload: { error: 'Agent cancelled', parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+        timestamp: Date.now(),
+      })
+
+      return {
+        agentId,
+        status: 'cancelled',
+        error: 'Agent cancelled',
+        turnCount: ctx.turnNumber,
+      }
+    }
+
     // Max turns exceeded
     const errorMsg = `Agent reached maximum turn limit (${maxTurns})`
     const failed = failAgent(ctx.agent, errorMsg)
@@ -287,6 +305,35 @@ export async function runAgent(
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
+
+    // Agent may have been cancelled externally while a tool/LLM call was in flight.
+    // Don't try to transition cancelled → failed — just acknowledge the cancellation.
+    if (ctx.agent.status === 'cancelled' || errorMsg === 'Agent run aborted') {
+      const refreshed = await ctx.agents.getById(agentId)
+      if (refreshed && refreshed.status !== 'cancelled') {
+        const cancelled = cancelAgent(refreshed)
+        await ctx.agents.update(agentId, {
+          status: 'cancelled',
+          completedAt: cancelled.completedAt,
+        })
+      }
+
+      deps.events.emit({
+        type: EVENT_TYPES.AGENT_FAILED,
+        agent_id: agentId,
+        session_id: ctx.agent.sessionId,
+        payload: { error: 'Agent cancelled', parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+        timestamp: Date.now(),
+      })
+
+      return {
+        agentId,
+        status: 'cancelled',
+        error: 'Agent cancelled',
+        turnCount: ctx.turnNumber,
+      }
+    }
+
     const failed = failAgent(ctx.agent, errorMsg)
     await ctx.agents.update(agentId, {
       status: 'failed',

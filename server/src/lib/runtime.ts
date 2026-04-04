@@ -60,6 +60,8 @@ export interface RuntimeContext {
   agentDefinitions: AgentDefinitionRegistry
   /** AbortController for graceful shutdown — aborts all in-flight agent runs. */
   shutdownController: AbortController
+  /** Per-agent AbortControllers — keyed by agent ID, used to cancel individual runs. */
+  agentAbortControllers: Map<string, AbortController>
 }
 
 export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
@@ -88,7 +90,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     ? config.agentsDir
     : path.resolve(SERVER_ROOT, config.agentsDir)
   const agentDefs = await loadAgentDefinitions(agentsDir)
-  const agentDefinitions = new AgentDefinitionRegistryImpl(agentDefs)
+  const agentDefinitions = new AgentDefinitionRegistryImpl(agentsDir, agentDefs)
   logger.info({ count: agentDefs.length, dir: agentsDir }, 'Agent definitions loaded')
 
   // 6. Create tool registry and register all tools
@@ -170,6 +172,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     db,
     agentDefinitions,
     shutdownController: new AbortController(),
+    agentAbortControllers: new Map(),
   }
 }
 
@@ -177,6 +180,10 @@ export async function shutdownRuntime(runtime: RuntimeContext): Promise<void> {
   logger.info('Shutting down runtime — aborting in-flight agents')
 
   // Signal all in-flight agent runs to abort
+  for (const controller of runtime.agentAbortControllers.values()) {
+    controller.abort()
+  }
+  runtime.agentAbortControllers.clear()
   runtime.shutdownController.abort()
 
   // Mark any running/waiting agents as failed so they don't appear stuck on restart

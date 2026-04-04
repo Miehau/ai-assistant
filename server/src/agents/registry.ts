@@ -1,14 +1,19 @@
 import type { AgentDefinition } from './types.js'
+import { loadAgentDefinitions } from './loader.js'
 
 export interface AgentDefinitionRegistry {
   get(name: string): AgentDefinition | undefined
   list(): AgentDefinition[]
+  /** Re-read agent definitions from disk. */
+  reload(): Promise<void>
 }
 
 export class AgentDefinitionRegistryImpl implements AgentDefinitionRegistry {
-  private readonly definitions: Map<string, AgentDefinition>
+  private definitions: Map<string, AgentDefinition>
+  private readonly dir: string
 
-  constructor(definitions: AgentDefinition[] = []) {
+  constructor(dir: string, definitions: AgentDefinition[] = []) {
+    this.dir = dir
     this.definitions = new Map(definitions.map((d) => [d.name, d]))
   }
 
@@ -18,5 +23,10 @@ export class AgentDefinitionRegistryImpl implements AgentDefinitionRegistry {
 
   list(): AgentDefinition[] {
     return [...this.definitions.values()]
+  }
+
+  async reload(): Promise<void> {
+    const defs = await loadAgentDefinitions(this.dir)
+    this.definitions = new Map(defs.map((d) => [d.name, d]))
   }
 }

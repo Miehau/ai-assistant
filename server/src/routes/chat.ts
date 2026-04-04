@@ -68,6 +68,9 @@ export function chatRoutes(runtime: RuntimeContext) {
         maxTokens?: number
       }>()
 
+      // Reload agent definitions from disk so new .md files are picked up
+      await runtime.agentDefinitions.reload()
+
       // Resolve agent definition if specified — its model/prompt/tools take effect
       const agentDef = body.agent
         ? runtime.agentDefinitions.get(body.agent)
@@ -193,9 +196,14 @@ export function chatRoutes(runtime: RuntimeContext) {
             session_id: sessionId,
           })
 
+          // Per-agent abort controller — cancel route aborts this to kill the run
+          const agentAbort = new AbortController()
+          runtime.agentAbortControllers.set(agent!.id, agentAbort)
+
           const signal = AbortSignal.any([
             c.req.raw.signal,
             runtime.shutdownController.signal,
+            agentAbort.signal,
           ])
 
           const resultPromise = runAgent(agent!.id, deps, { stream: true, signal }).catch((err) => ({
@@ -283,6 +291,8 @@ export function chatRoutes(runtime: RuntimeContext) {
 
           // Send final result
           const result = await resultPromise
+          runtime.agentAbortControllers.delete(agent!.id)
+
           await stream.writeSSE({
             event: 'done',
             data: JSON.stringify({
@@ -302,9 +312,12 @@ export function chatRoutes(runtime: RuntimeContext) {
       }
 
       // 6. Non-streaming: run agent synchronously
+      const agentAbort = new AbortController()
+      runtime.agentAbortControllers.set(agent.id, agentAbort)
       const result = await runAgent(agent.id, deps, {
-        signal: AbortSignal.any([c.req.raw.signal, runtime.shutdownController.signal]),
+        signal: AbortSignal.any([c.req.raw.signal, runtime.shutdownController.signal, agentAbort.signal]),
       })
+      runtime.agentAbortControllers.delete(agent.id)
 
       // 7. Get output items
       const items = await runtime.repositories.items.listByAgent(agent.id)
@@ -486,6 +499,13 @@ export function chatRoutes(runtime: RuntimeContext) {
 
       if (agent.status === 'cancelled' || agent.status === 'completed') {
         return c.json({ id: agentId, status: agent.status })
+      }
+
+      // Abort the in-flight agent run so it stops immediately
+      const abortController = runtime.agentAbortControllers.get(agentId)
+      if (abortController) {
+        abortController.abort()
+        runtime.agentAbortControllers.delete(agentId)
       }
 
       const updated = cancelAgent(agent)
