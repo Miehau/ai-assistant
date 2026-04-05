@@ -34,6 +34,7 @@ function buildDeps(runtime: RuntimeContext, model: string): OrchestratorDeps {
     tools: runtime.tools,
     events: runtime.events,
     agentDefinitions: runtime.agentDefinitions,
+    interceptHandlers: runtime.interceptHandlers,
   }
 }
 

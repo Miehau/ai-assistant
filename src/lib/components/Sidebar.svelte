@@ -1,7 +1,6 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
-  import { slide } from "svelte/transition";
   import Icon from "@iconify/svelte";
   import { settingsDrawerOpen } from "$lib/stores/drawers";
 
@@ -23,7 +22,7 @@
   }
 </script>
 
-<nav class:open={sidebarOpen} transition:slide={{ duration: 300 }}>
+<nav class:open={sidebarOpen}>
   <ul>
     <li class:active={$page.url.pathname === "/"}>
       <a href="/" onclick={(event) => handleNavigate(event, "/")}>

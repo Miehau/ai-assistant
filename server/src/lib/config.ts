@@ -14,6 +14,7 @@ const configSchema = z.object({
   agentsDir: z.string().default('./agents'),
   tasksDir: z.string().default('./data/tasks'),
   workspaceDir: z.string().default('./data/workspace'),
+  workflowsDir: z.string().default('./workflows'),
 })
 
 export type AppConfig = z.infer<typeof configSchema>
@@ -33,5 +34,6 @@ export function loadConfig(): AppConfig {
     agentsDir: process.env.AGENTS_DIR,
     tasksDir: process.env.TASKS_DIR,
     workspaceDir: process.env.WORKSPACE_DIR,
+    workflowsDir: process.env.WORKFLOWS_DIR,
   })
 }

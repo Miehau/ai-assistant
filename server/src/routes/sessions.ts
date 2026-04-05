@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { logger } from '../lib/logger.js'
+import { splitModelId } from '../lib/model.js'
 import type { RuntimeContext } from '../lib/runtime.js'
 
 export function sessionRoutes(runtime: RuntimeContext): Hono {
@@ -29,8 +30,11 @@ export function sessionRoutes(runtime: RuntimeContext): Hono {
 
       const items = await runtime.repositories.items.listBySession(id)
       const agents = await runtime.repositories.agents.listBySession(id)
+      const workflowRuns = runtime.workflows
+        ? await runtime.workflows.repository.listBySession(id)
+        : []
 
-      return c.json({ ...session, items, agents })
+      return c.json({ ...session, items, agents, workflowRuns })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, 500)
@@ -91,8 +95,7 @@ export function sessionRoutes(runtime: RuntimeContext): Hono {
       const model = runtime.config.defaultModel
       const provider = runtime.providers.resolve(model)
 
-      // Extract the model name (after "provider:")
-      const modelName = model.includes(':') ? model.slice(model.indexOf(':') + 1) : model
+      const { model: modelName } = splitModelId(model)
 
       const response = await provider.generate({
         model: modelName,

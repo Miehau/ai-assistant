@@ -343,35 +343,37 @@
 
     <!-- Right section: Token counter and utility buttons -->
     <div class="flex items-center gap-2 shrink-0">
-        <Tooltip.Root>
-            <Tooltip.Trigger asChild>
-                {#snippet child({ props })}
-                    <Button
-                        {...props}
-                        variant="ghost"
-                        size="icon"
-                        onclick={removeMessages}
-                        class="shrink-0"
-                    >
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
+        <Tooltip.Provider>
+            <Tooltip.Root openDelay={300}>
+                <Tooltip.Trigger asChild>
+                    {#snippet child({ props })}
+                        <Button
+                            {...props}
+                            variant="ghost"
+                            size="icon"
+                            onclick={removeMessages}
+                            class="shrink-0"
                         >
-                            <path d="M5 12h14" />
-                            <path d="M12 5v14" />
-                        </svg>
-                        <span class="sr-only">New Conversation</span>
-                    </Button>
-                {/snippet}
-            </Tooltip.Trigger>
-            <Tooltip.Content side="top">Start New Conversation</Tooltip.Content>
-        </Tooltip.Root>
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path d="M5 12h14" />
+                                <path d="M12 5v14" />
+                            </svg>
+                            <span class="sr-only">New Conversation</span>
+                        </Button>
+                    {/snippet}
+                </Tooltip.Trigger>
+                <Tooltip.Content side="top">Start New Conversation</Tooltip.Content>
+            </Tooltip.Root>
+        </Tooltip.Provider>
     </div>
 </div>

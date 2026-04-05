@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fade, fly } from "svelte/transition";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import SquareTerminal from "lucide-svelte/icons/square-terminal";
   import CodeXML from "lucide-svelte/icons/code-xml";
   import Settings2 from "lucide-svelte/icons/settings-2";
@@ -17,7 +17,10 @@
   import BranchDrawer from "$lib/components/branch/BranchDrawer.svelte";
   import SettingsDrawer from "$lib/components/SettingsDrawer.svelte";
   import { currentConversation } from "$lib/services/conversation";
-  import { settingsDrawerOpen } from "$lib/stores/drawers";
+  import { settingsDrawerOpen, assistantsDrawerOpen, modelsDrawerOpen, usageDrawerOpen } from "$lib/stores/drawers";
+  import AssistantsDrawer from "$lib/components/AssistantsDrawer.svelte";
+  import ModelsDrawer from "$lib/components/ModelsDrawer.svelte";
+  import UsageDrawer from "$lib/components/UsageDrawer.svelte";
 
   $: currentPath = $page.url.pathname;
   $: hasConversation = Boolean($currentConversation?.id);
@@ -25,8 +28,10 @@
   let isConversationDrawerOpen = false;
   let isBranchDrawerOpen = false;
   let isNavOpen = false;
+  let skipNavTransition = false;
   $: isAnyDrawerOpen =
-    isConversationDrawerOpen || isBranchDrawerOpen || $settingsDrawerOpen;
+    isConversationDrawerOpen || isBranchDrawerOpen || $settingsDrawerOpen ||
+    $assistantsDrawerOpen || $modelsDrawerOpen || $usageDrawerOpen;
 
   function toggleNav() {
     const next = !isNavOpen;
@@ -35,6 +40,9 @@
       isConversationDrawerOpen = false;
       $settingsDrawerOpen = false;
       isBranchDrawerOpen = false;
+      $assistantsDrawerOpen = false;
+      $modelsDrawerOpen = false;
+      $usageDrawerOpen = false;
     }
   }
 
@@ -56,6 +64,30 @@
   function toggleSettingsDrawer() {
     $settingsDrawerOpen = !$settingsDrawerOpen;
     closeNav();
+  }
+
+  function toggleAssistantsDrawer() {
+    $assistantsDrawerOpen = !$assistantsDrawerOpen;
+    closeNav();
+  }
+
+  function toggleModelsDrawer() {
+    $modelsDrawerOpen = !$modelsDrawerOpen;
+    closeNav();
+  }
+
+  function toggleUsageDrawer() {
+    $usageDrawerOpen = !$usageDrawerOpen;
+    closeNav();
+  }
+
+  async function openNavAfterClose() {
+    skipNavTransition = true;
+    isNavOpen = true;
+    await tick();
+    requestAnimationFrame(() => {
+      skipNavTransition = false;
+    });
   }
 
   function handleBranchDrawerClose() {
@@ -125,8 +157,9 @@
 {/if}
 
   <div
-    class="fixed inset-0 z-30 bg-black/45 backdrop-blur-sm nav-overlay"
+    class="fixed inset-0 z-30 bg-black/45 nav-overlay"
     class:nav-overlay-open={isNavOpen}
+    class:nav-no-transition={skipNavTransition}
     onclick={closeNav}
     role="button"
     tabindex={isNavOpen ? 0 : -1}
@@ -139,6 +172,7 @@
   <aside
     class="fixed left-0 top-8 bottom-0 z-40 w-[260px] nav-drawer nav-panel rounded-r-2xl overflow-hidden"
     class:nav-panel-open={isNavOpen}
+    class:nav-no-transition={skipNavTransition}
     aria-hidden={!isNavOpen}
     onclick={(event) => event.stopPropagation()}
   >
@@ -171,24 +205,22 @@
               <SquareTerminal class="size-4" />
               <span>Chat</span>
             </a>
-            <a
-              href="/assistants"
-              class={navItemClasses(currentPath === "/assistants")}
-              aria-current={currentPath === "/assistants" ? "page" : undefined}
-              onclick={(event) => handleNavigate(event, "/assistants")}
+            <button
+              type="button"
+              class={navItemClasses($assistantsDrawerOpen)}
+              onclick={toggleAssistantsDrawer}
             >
               <Users class="size-4" />
               <span>Assistants</span>
-            </a>
-            <a
-              href="/models"
-              class={navItemClasses(currentPath === "/models")}
-              aria-current={currentPath === "/models" ? "page" : undefined}
-              onclick={(event) => handleNavigate(event, "/models")}
+            </button>
+            <button
+              type="button"
+              class={navItemClasses($modelsDrawerOpen)}
+              onclick={toggleModelsDrawer}
             >
               <CodeXML class="size-4" />
               <span>Models</span>
-            </a>
+            </button>
           </div>
         </div>
 
@@ -218,15 +250,14 @@
         <div class="space-y-2">
           <p class="nav-section-label">Insights</p>
           <div class="grid gap-1">
-            <a
-              href="/usage"
-              class={navItemClasses(currentPath === "/usage")}
-              aria-current={currentPath === "/usage" ? "page" : undefined}
-              onclick={(event) => handleNavigate(event, "/usage")}
+            <button
+              type="button"
+              class={navItemClasses($usageDrawerOpen)}
+              onclick={toggleUsageDrawer}
             >
               <TrendingUp class="size-4" />
               <span>Usage</span>
-            </a>
+            </button>
           </div>
         </div>
 
@@ -247,8 +278,11 @@
     </div>
   </aside>
 
-<ConversationDrawer bind:isOpen={isConversationDrawerOpen} />
-<SettingsDrawer bind:isOpen={$settingsDrawerOpen} />
+<ConversationDrawer bind:isOpen={isConversationDrawerOpen} onBack={openNavAfterClose} />
+<SettingsDrawer bind:isOpen={$settingsDrawerOpen} onBack={openNavAfterClose} />
+<AssistantsDrawer bind:isOpen={$assistantsDrawerOpen} onBack={openNavAfterClose} />
+<ModelsDrawer bind:isOpen={$modelsDrawerOpen} onBack={openNavAfterClose} />
+<UsageDrawer bind:isOpen={$usageDrawerOpen} onBack={openNavAfterClose} />
 {#if $currentConversation?.id}
   <BranchDrawer
     conversationId={$currentConversation.id}

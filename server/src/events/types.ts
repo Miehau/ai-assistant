@@ -30,6 +30,10 @@ export type AgentEvent =
   | StepCompletedEvent
   | CompanionTextEvent
   | TextDeltaEvent
+  | WorkflowStartedEvent
+  | WorkflowCompletedEvent
+  | WorkflowFailedEvent
+  | WorkflowProgressEvent
 
 interface BaseEvent {
   agent_id: string
@@ -117,6 +121,28 @@ export interface TextDeltaEvent extends BaseEvent {
   payload: { text: string; parentId: string | null; depth: number }
 }
 
+// --- Workflow events ---
+
+export interface WorkflowStartedEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.WORKFLOW_STARTED
+  payload: { runId: string; workflowName: string; input: unknown }
+}
+
+export interface WorkflowCompletedEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.WORKFLOW_COMPLETED
+  payload: { runId: string; workflowName: string; output: unknown }
+}
+
+export interface WorkflowFailedEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.WORKFLOW_FAILED
+  payload: { runId: string; workflowName: string; error: string }
+}
+
+export interface WorkflowProgressEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.WORKFLOW_PROGRESS
+  payload: { runId: string; workflowName: string; event: string; data: unknown }
+}
+
 // ---------------------------------------------------------------------------
 // Event filter
 // ---------------------------------------------------------------------------
@@ -145,4 +171,8 @@ export const EVENT_TYPES = {
   PHASE_CHANGED: 'phase:changed',
   COMPANION_TEXT: 'companion:text',
   TEXT_DELTA: 'text:delta',
+  WORKFLOW_STARTED: 'workflow:started',
+  WORKFLOW_COMPLETED: 'workflow:completed',
+  WORKFLOW_FAILED: 'workflow:failed',
+  WORKFLOW_PROGRESS: 'workflow:progress',
 } as const

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   ControllerAction,
+  InterceptHandler,
   OrchestratorDeps,
   RunContext,
   RunOptions,
@@ -12,6 +13,7 @@ import type { WaitingFor } from '../domain/types.js'
 import type { LLMProvider, LLMRequest, LLMToolDefinition, LLMResponse } from '../providers/types.js'
 import type { ToolCall } from '../tools/types.js'
 import { startAgent, completeAgent, failAgent, cancelAgent, waitForMany } from '../domain/agent.js'
+import { splitModelId } from '../lib/model.js'
 import {
   parseControllerAction,
   mapToolCallsToAction,
@@ -82,6 +84,7 @@ export async function runAgent(
     tools: deps.tools,
     events: deps.events,
     agentDefinitions: deps.agentDefinitions,
+    interceptHandlers: deps.interceptHandlers,
     agent,
     turnNumber: 0,
     signal,
@@ -145,9 +148,7 @@ export async function runAgent(
         : undefined
 
       // Strip provider prefix ("anthropic:claude-3" → "claude-3")
-      const modelName = ctx.agent.config.model.includes(':')
-        ? ctx.agent.config.model.slice(ctx.agent.config.model.indexOf(':') + 1)
-        : ctx.agent.config.model
+      const { model: modelName } = splitModelId(ctx.agent.config.model)
 
       const llmRequest: LLMRequest = {
         model: modelName,
@@ -675,9 +676,14 @@ async function executeTool(
   callId: string,
   save?: boolean,
 ): Promise<StepExecutionOutcome> {
-  // Intercept orchestrator tools (e.g. delegate) — handled by the runner, not the registry
+  // Intercept orchestrator tools (e.g. delegate, workflow.run) — handled by
+  // pluggable handlers registered in deps.interceptHandlers, not the tool registry.
   const meta = ctx.tools.getMetadata(name)
   if (meta?.orchestrator_intercept) {
+    const handler = ctx.interceptHandlers?.get(name)
+    if (!handler) {
+      throw new Error(`No intercept handler registered for tool: ${name}`)
+    }
     await ctx.items.create({
       agentId: ctx.agent.id,
       type: 'function_call',
@@ -693,18 +699,9 @@ async function executeTool(
       payload: { callId, name, args, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
       timestamp: Date.now(),
     })
-    const delegateStartMs = Date.now()
-    const deps: OrchestratorDeps = {
-      agents: ctx.agents,
-      items: ctx.items,
-      toolOutputs: ctx.toolOutputs,
-      preferences: ctx.preferences,
-      provider: ctx.provider,
-      tools: ctx.tools,
-      events: ctx.events,
-      agentDefinitions: ctx.agentDefinitions,
-    }
-    return handleDelegation(callId, args, ctx, deps, delegateStartMs)
+    const startMs = Date.now()
+    const deps: OrchestratorDeps = buildDepsFromContext(ctx)
+    return handler(callId, args, ctx, deps, startMs)
   }
 
   // Hydrate args (auto-populate tool_outputs.* fields)
@@ -864,19 +861,14 @@ async function executeToolBatch(
     })
   }
 
-  // Execute orchestrator-intercepted tools sequentially (e.g. delegate spawns child agents)
+  // Execute orchestrator-intercepted tools sequentially (e.g. delegate, workflow.run)
   if (interceptedSpecs.length > 0) {
-    const deps: OrchestratorDeps = {
-      agents: ctx.agents,
-      items: ctx.items,
-      toolOutputs: ctx.toolOutputs,
-      preferences: ctx.preferences,
-      provider: ctx.provider,
-      tools: ctx.tools,
-      events: ctx.events,
-      agentDefinitions: ctx.agentDefinitions,
-    }
+    const deps: OrchestratorDeps = buildDepsFromContext(ctx)
     for (const spec of interceptedSpecs) {
+      const handler = ctx.interceptHandlers?.get(spec.tool)
+      if (!handler) {
+        throw new Error(`No intercept handler registered for tool: ${spec.tool}`)
+      }
       ctx.events.emit({
         type: EVENT_TYPES.TOOL_STARTED,
         agent_id: ctx.agent.id,
@@ -885,7 +877,7 @@ async function executeToolBatch(
         timestamp: Date.now(),
       })
       const interceptStartMs = Date.now()
-      const outcome = await handleDelegation(spec.callId, spec.args, ctx, deps, interceptStartMs)
+      const outcome = await handler(spec.callId, spec.args, ctx, deps, interceptStartMs)
       if (outcome.type === 'waiting') {
         return outcome
       }
@@ -1037,7 +1029,11 @@ async function executeAskUser(
 // Delegation — spawn and run a child agent
 // ---------------------------------------------------------------------------
 
-async function handleDelegation(
+/**
+ * Intercept handler for the `delegate` tool — spawns a child agent.
+ * Registered in the interceptHandlers map; called by the generic dispatch.
+ */
+export async function handleDelegation(
   callId: string,
   args: Record<string, unknown>,
   ctx: RunContext,
@@ -1213,6 +1209,20 @@ async function handleDelegation(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function buildDepsFromContext(ctx: RunContext): OrchestratorDeps {
+  return {
+    agents: ctx.agents,
+    items: ctx.items,
+    toolOutputs: ctx.toolOutputs,
+    preferences: ctx.preferences,
+    provider: ctx.provider,
+    tools: ctx.tools,
+    events: ctx.events,
+    agentDefinitions: ctx.agentDefinitions,
+    interceptHandlers: ctx.interceptHandlers,
+  }
+}
 
 function isToolOutputsTool(name: string): boolean {
   return name.startsWith('tool_outputs.')

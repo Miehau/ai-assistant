@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { X } from "lucide-svelte";
+  import { ChevronLeft } from "lucide-svelte";
   import { backend } from "$lib/backend";
   import type { ToolMetadata } from "$lib/types/tools";
   import { Input } from "$lib/components/ui/input";
@@ -240,7 +240,7 @@
     </div>
     {#if showClose}
       <Button variant="ghost" size="icon" class="rounded-lg" onclick={closePanel}>
-        <X class="h-4 w-4" />
+        <ChevronLeft class="h-4 w-4" />
       </Button>
     {/if}
   </div>

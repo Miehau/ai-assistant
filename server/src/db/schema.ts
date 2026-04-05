@@ -107,3 +107,27 @@ export const preferences = sqliteTable('preferences', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
 })
+
+export const workflowRuns = sqliteTable(
+  'workflow_runs',
+  {
+    id: text('id').primaryKey(),
+    workflowName: text('workflow_name').notNull(),
+    sessionId: text('session_id').references(() => sessions.id).notNull(),
+    triggerAgentId: text('trigger_agent_id').references(() => agents.id),
+    triggerCallId: text('trigger_call_id'),
+    status: text('status').default('pending').notNull(),
+    input: text('input'),
+    output: text('output'),
+    steps: text('steps'),
+    error: text('error'),
+    startedAt: integer('started_at'),
+    completedAt: integer('completed_at'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('workflow_runs_session_id_idx').on(table.sessionId),
+    index('workflow_runs_status_idx').on(table.status),
+  ]
+)

@@ -28,6 +28,13 @@ import type { AppConfig } from './config.js'
 import type { ProviderRegistry } from '../providers/types.js'
 import type { ToolExecutor } from '../tools/types.js'
 import type { EventSink, EventSource } from '../events/types.js'
+import type { InterceptHandler } from '../orchestrator/types.js'
+import type { WorkflowRegistry } from '../workflows/types.js'
+import type { WorkflowRunRepository } from '../repositories/types.js'
+import { WorkflowRegistryImpl } from '../workflows/registry.js'
+import { WorkflowExecutor } from '../workflows/executor.js'
+import { registerWorkflowTools } from '../workflows/tool.js'
+import { loadWorkflowDefinitions } from '../workflows/loader.js'
 import type {
   UserRepository,
   SessionRepository,
@@ -58,6 +65,14 @@ export interface RuntimeContext {
   config: AppConfig
   db: DrizzleInstance
   agentDefinitions: AgentDefinitionRegistry
+  /** Pluggable intercept handlers for orchestrator_intercept tools. */
+  interceptHandlers: Map<string, InterceptHandler>
+  /** Workflow subsystem — null if no workflows are registered. */
+  workflows: {
+    registry: WorkflowRegistry
+    executor: WorkflowExecutor
+    repository: WorkflowRunRepository
+  } | null
   /** AbortController for graceful shutdown — aborts all in-flight agent runs. */
   shutdownController: AbortController
   /** Per-agent AbortControllers — keyed by agent ID, used to cancel individual runs. */
@@ -101,7 +116,6 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   registerSearchTools(tools)
   registerToolOutputTools(tools, repos.toolOutputs)
   registerPreferenceTools(tools, repos.preferences)
-  registerDelegateTools(tools, agentDefinitions)
   registerVerifyTools(tools)
   registerThinkTool(tools)
 
@@ -113,6 +127,10 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     ? config.workspaceDir
     : path.resolve(SERVER_ROOT, config.workspaceDir)
   registerTaskTools(tools, tasksDir, workspaceDir)
+
+  // Intercept handlers — populated by register*Tools functions that provide orchestrator_intercept tools
+  const interceptHandlers = new Map<string, InterceptHandler>()
+  registerDelegateTools(tools, agentDefinitions, interceptHandlers)
 
   const toolCount = tools.listMetadata().length
   logger.info({ toolCount }, 'Tool registry initialized')
@@ -152,7 +170,37 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     logger.warn('No LLM providers configured. Set keys via .env or PUT /api/keys/:provider')
   }
 
-  // 7. Return RuntimeContext
+  // 7. Build workflow subsystem (two-phase: registry first, executor after providers)
+  const workflowsDir = path.isAbsolute(config.workflowsDir)
+    ? config.workflowsDir
+    : path.resolve(SERVER_ROOT, config.workflowsDir)
+  const workflowDefs = await loadWorkflowDefinitions(workflowsDir)
+  const workflowRegistry = new WorkflowRegistryImpl()
+  for (const def of workflowDefs) {
+    workflowRegistry.register(def)
+  }
+
+  let workflows: RuntimeContext['workflows'] = null
+  if (workflowDefs.length > 0) {
+    const executor = new WorkflowExecutor({
+      workflowRuns: repos.workflowRuns,
+      events,
+      tools,
+      providers,
+      agents: repos.agents,
+      items: repos.items,
+      toolOutputs: repos.toolOutputs,
+      preferences: repos.preferences,
+      agentDefinitions,
+      interceptHandlers,
+      defaultModel: config.defaultModel,
+    })
+    registerWorkflowTools(tools, workflowRegistry, executor, interceptHandlers)
+    workflows = { registry: workflowRegistry, executor, repository: repos.workflowRuns }
+    logger.info({ count: workflowDefs.length }, 'Workflow subsystem initialized')
+  }
+
+  // 8. Return RuntimeContext
   return {
     repositories: {
       users: repos.users,
@@ -171,6 +219,8 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     config,
     db,
     agentDefinitions,
+    interceptHandlers,
+    workflows,
     shutdownController: new AbortController(),
     agentAbortControllers: new Map(),
   }
@@ -178,6 +228,9 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
 
 export async function shutdownRuntime(runtime: RuntimeContext): Promise<void> {
   logger.info('Shutting down runtime — aborting in-flight agents')
+
+  // Abort in-flight workflow runs
+  runtime.workflows?.executor.abortAll()
 
   // Signal all in-flight agent runs to abort
   for (const controller of runtime.agentAbortControllers.values()) {

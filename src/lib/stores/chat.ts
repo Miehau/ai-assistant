@@ -208,6 +208,7 @@ function upsertToolCall(
     session_id: payload.session_id ?? existing?.session_id,
     parent_session_id: payload.parent_session_id ?? existing?.parent_session_id,
     is_sub_agent: payload.is_sub_agent ?? existing?.is_sub_agent,
+    workflowProgress: payload.workflowProgress ?? existing?.workflowProgress,
   };
 
   entries.set(executionId, next);
@@ -400,7 +401,12 @@ function resetStreamingState() {
     clearTimeout(agentOutputFlushTimer);
     agentOutputFlushTimer = null;
     for (const [execId, entry] of agentOutputBuffer) {
-      upsertToolCall(entry.messageId, execId, { result: entry.text });
+      const existing = toolCallsByMessageId.get(entry.messageId)?.get(execId);
+      if (existing?.tool_name === 'workflow.run') {
+        upsertToolCall(entry.messageId, execId, { workflowProgress: entry.text });
+      } else {
+        upsertToolCall(entry.messageId, execId, { result: entry.text });
+      }
     }
   }
   agentOutputBuffer.clear();
@@ -783,7 +789,14 @@ function handleAgentEvent(event: AgentEvent) {
           agentOutputFlushTimer = setTimeout(() => {
             agentOutputFlushTimer = null;
             for (const [execId, entry] of agentOutputBuffer) {
-              upsertToolCall(entry.messageId, execId, { result: entry.text });
+              // For workflow.run calls, store progress separately so it survives
+              // the result overwrite when TOOL_EXECUTION_COMPLETED arrives.
+              const existing = toolCallsByMessageId.get(entry.messageId)?.get(execId);
+              if (existing?.tool_name === 'workflow.run') {
+                upsertToolCall(entry.messageId, execId, { workflowProgress: entry.text });
+              } else {
+                upsertToolCall(entry.messageId, execId, { result: entry.text });
+              }
             }
           }, 150);
         }
@@ -1125,7 +1138,13 @@ export async function loadSystemPrompts(options: { force?: boolean } = {}) {
 function honoItemsToMessages(
   items: import('$lib/backend/http-client').SessionItem[],
   agents: import('$lib/backend/http-client').AgentStatusResponse[] = [],
+  workflowRuns: import('$lib/backend/http-client').WorkflowRunResponse[] = [],
 ): Message[] {
+  // Index workflow runs by their triggerCallId so we can hydrate workflow.run tool calls
+  const workflowRunByCallId = new Map<string, import('$lib/backend/http-client').WorkflowRunResponse>();
+  for (const wr of workflowRuns) {
+    if (wr.triggerCallId) workflowRunByCallId.set(wr.triggerCallId, wr);
+  }
   // Build agent map for hierarchy lookups
   const agentMap = new Map<string, import('$lib/backend/http-client').AgentStatusResponse>();
   for (const a of agents) agentMap.set(a.id, a);
@@ -1185,7 +1204,7 @@ function honoItemsToMessages(
       try { args = item.arguments ? JSON.parse(item.arguments) : {}; } catch { /* ignore */ }
       const out = item.callId ? outputByCallId.get(item.callId) : undefined;
 
-      pendingToolCalls.push({
+      const toolCall: ToolCallRecord = {
         execution_id: item.callId ?? item.id,
         tool_name: item.name ?? 'unknown',
         args,
@@ -1195,7 +1214,28 @@ function honoItemsToMessages(
         duration_ms: item.durationMs ?? undefined,
         session_id: item.agentId ?? undefined,
         is_sub_agent: false,
-      });
+      };
+
+      // Hydrate workflow.run calls with persisted step data
+      if (item.name === 'workflow.run' && item.callId) {
+        const wr = workflowRunByCallId.get(item.callId);
+        if (wr && wr.steps.length > 0) {
+          toolCall.workflowProgress = wr.steps
+            .map((s) => {
+              const data: Record<string, unknown> = {
+                phase: s.name,
+                status: s.error ? 'failed' : 'done',
+              };
+              if (s.output !== undefined) data.output = s.output;
+              if (s.error) data.error = s.error;
+              if (s.completedAt && s.startedAt) data.durationMs = s.completedAt - s.startedAt;
+              return `[${s.name}] ${JSON.stringify(data)}`;
+            })
+            .join('\n');
+        }
+      }
+
+      pendingToolCalls.push(toolCall);
 
       // Splice subagent tool calls right after the agent.spawn that spawned them
       if (item.callId && item.name === 'agent.spawn') {
@@ -1235,7 +1275,7 @@ export async function loadConversationHistory(conversationId: string) {
     const sessionId = sessionMap.get(conversationId) ?? conversationId;
     try {
       const session = await getHttpBackend().getSession(sessionId);
-      loadedMessages = honoItemsToMessages(session.items ?? [], session.agents ?? []);
+      loadedMessages = honoItemsToMessages(session.items ?? [], session.agents ?? [], session.workflowRuns ?? []);
     } catch {
       // Session doesn't exist on server (e.g. local placeholder ID)
       loadedMessages = [];

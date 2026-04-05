@@ -16,6 +16,7 @@ import { systemPromptRoutes } from './routes/system-prompts.js'
 import { preferenceRoutes } from './routes/preferences.js'
 import { toolRoutes } from './routes/tools.js'
 import { usageRoutes } from './routes/usage.js'
+import { workflowRoutes } from './routes/workflows.js'
 import { openaiCompatRoutes } from './routes/openai-compat.js'
 import { authMiddleware } from './middleware/auth.js'
 
@@ -66,6 +67,7 @@ async function main() {
   app.route('/api/preferences', preferenceRoutes(runtime))
   app.route('/api/tools', toolRoutes(runtime))
   app.route('/api/usage', usageRoutes(runtime))
+  app.route('/api/workflows', workflowRoutes(runtime))
 
   // OpenAI-compatible endpoint — lets the frontend use this server as a "custom backend"
   // Register in the UI as Custom Backend with URL: http://localhost:3001/v1/chat/completions

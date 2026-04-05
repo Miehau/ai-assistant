@@ -3,14 +3,46 @@
 
   let { call }: { call: ToolCallRecord } = $props();
 
+  /** Strip noisy fields (e.g. HTTP headers) and pretty-print JSON */
   function formatToolPayload(payload: unknown): string {
     if (payload === undefined || payload === null) return "";
-    if (typeof payload === 'string') return payload;
+    if (typeof payload === 'string') {
+      // Try to parse JSON strings for pretty-printing
+      try {
+        const parsed = JSON.parse(payload);
+        return JSON.stringify(stripNoise(parsed), null, 2);
+      } catch {
+        return payload;
+      }
+    }
     try {
-      return JSON.stringify(payload, null, 2);
+      return JSON.stringify(stripNoise(payload), null, 2);
     } catch {
       return String(payload);
     }
+  }
+
+  /** Remove noisy fields like HTTP headers from API responses */
+  function stripNoise(val: unknown): unknown {
+    if (typeof val !== 'object' || val === null || Array.isArray(val)) return val;
+    const obj = val as Record<string, unknown>;
+    if ('headers' in obj) {
+      const { headers: _, ...rest } = obj;
+      return rest;
+    }
+    return obj;
+  }
+
+  let copiedField: 'input' | 'output' | null = $state(null);
+
+  async function copyPayload(field: 'input' | 'output') {
+    const text = field === 'input'
+      ? formatToolPayload(call.args)
+      : formatToolPayload(call.success === false ? call.error : call.result);
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    copiedField = field;
+    setTimeout(() => { copiedField = null; }, 1500);
   }
 
   function formatToolDuration(duration?: number): string {
@@ -64,15 +96,31 @@
 
     <div class="mt-2 grid gap-2 md:grid-cols-2">
       <div class="min-w-0">
-        <p class="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Input</p>
+        <div class="flex items-center justify-between mb-1">
+          <p class="text-[10px] uppercase tracking-wide text-muted-foreground">Input</p>
+          {#if formatToolPayload(call.args)}
+            <button
+              onclick={() => copyPayload('input')}
+              class="text-[9px] text-muted-foreground/50 hover:text-muted-foreground transition-colors px-1"
+            >{copiedField === 'input' ? 'copied' : 'copy'}</button>
+          {/if}
+        </div>
         <pre class="max-h-40 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/60 p-2 text-[11px] font-mono text-foreground">
 {formatToolPayload(call.args)}
         </pre>
       </div>
       <div class="min-w-0">
-        <p class="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
-          {call.success === false ? "Error" : "Output"}
-        </p>
+        <div class="flex items-center justify-between mb-1">
+          <p class="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {call.success === false ? "Error" : "Output"}
+          </p>
+          {#if formatToolPayload(call.success === false ? call.error : call.result)}
+            <button
+              onclick={() => copyPayload('output')}
+              class="text-[9px] text-muted-foreground/50 hover:text-muted-foreground transition-colors px-1"
+            >{copiedField === 'output' ? 'copied' : 'copy'}</button>
+          {/if}
+        </div>
         <pre class="max-h-40 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/60 p-2 text-[11px] font-mono text-foreground">
 {formatToolPayload(call.success === false ? call.error : call.result)}
         </pre>

@@ -9,6 +9,7 @@
   import ToolApprovalQueue from "./ToolApprovalQueue.svelte";
   import ToolCallGroup from "./ToolCallGroup.svelte";
   import SubagentExecutionGroup from "./SubagentExecutionGroup.svelte";
+  import WorkflowExecutionGroup from "./WorkflowExecutionGroup.svelte";
   import type { ToolExecutionProposedPayload } from "$lib/types/events";
   import { getPhaseLabel } from "$lib/types/agent";
   import type { AgentPlan, AgentPlanStep, PhaseKind } from "$lib/types/agent";
@@ -411,6 +412,19 @@
               <SubagentExecutionGroup calls={item.group.calls} sessionId={item.group.sessionId} spawnCall={item.group.spawnCall} />
             </div>
           {/if}
+        {:else if item.kind === 'workflow'}
+          {#if animated}
+            <div
+              in:fly={{ y: 10, duration: 150, easing: backOut }}
+              class="w-full message-container"
+            >
+              <WorkflowExecutionGroup call={item.call} />
+            </div>
+          {:else}
+            <div class="w-full message-container">
+              <WorkflowExecutionGroup call={item.call} />
+            </div>
+          {/if}
         {/if}
       {/each}
     {:else}
@@ -419,8 +433,15 @@
       {#if msg.type === "received" && msg.tool_calls && msg.tool_calls.length > 0}
         {@const toolGroups = groupToolCallsBySession(msg.tool_calls)}
         {@const subagentSpawnExecIds = new Set(toolGroups.filter(g => g.isSubAgent && g.spawnCall).map(g => g.spawnCall!.execution_id))}
-        {@const mainCalls = toolGroups.filter(g => !g.isSubAgent && !subagentSpawnExecIds.has(g.calls[0]?.execution_id)).flatMap(g => g.calls)}
+        {@const allMainCalls = toolGroups.filter(g => !g.isSubAgent && !subagentSpawnExecIds.has(g.calls[0]?.execution_id)).flatMap(g => g.calls)}
+        {@const mainCalls = allMainCalls.filter(c => c.tool_name !== 'workflow.run')}
+        {@const workflowCalls = allMainCalls.filter(c => c.tool_name === 'workflow.run')}
         {@const subagentGroups = toolGroups.filter(g => g.isSubAgent)}
+        {#each workflowCalls as wfCall (wfCall.execution_id)}
+          <div class="w-full message-container">
+            <WorkflowExecutionGroup call={wfCall} />
+          </div>
+        {/each}
         {#if mainCalls.length > 0}
           {#if animated}
             <div

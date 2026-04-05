@@ -97,6 +97,30 @@ export interface SessionItem {
   createdAt: number;
 }
 
+export interface WorkflowRunResponse {
+  id: string;
+  workflowName: string;
+  sessionId: string;
+  triggerAgentId: string | null;
+  triggerCallId: string | null;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  input: unknown;
+  output: unknown | null;
+  steps: Array<{
+    callId: string;
+    name: string;
+    startedAt: number;
+    completedAt?: number;
+    output?: unknown;
+    error?: string;
+  }>;
+  error: string | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface Session {
   id: string;
   userId: string;
@@ -108,6 +132,7 @@ export interface Session {
   updatedAt: number;
   items?: SessionItem[];
   agents?: AgentStatusResponse[];
+  workflowRuns?: WorkflowRunResponse[];
 }
 
 export interface ToolMetadata {

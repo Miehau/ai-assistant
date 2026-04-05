@@ -7,7 +7,8 @@ import type { MessageSegment, ToolCallRecord } from '$lib/types';
 export type DisplayItem =
   | { kind: 'text'; content: string }
   | { kind: 'tool-batch'; calls: ToolCallRecord[] }
-  | { kind: 'subagent'; group: ToolCallGroup };
+  | { kind: 'subagent'; group: ToolCallGroup }
+  | { kind: 'workflow'; call: ToolCallRecord };
 
 export interface ToolCallGroup {
   sessionId: string | undefined;
@@ -104,6 +105,9 @@ export function computeDisplayItems(
       if (group.isSubAgent) {
         flushBatch();
         items.push({ kind: 'subagent', group });
+      } else if (group.calls.length === 1 && group.calls[0].tool_name === 'workflow.run') {
+        flushBatch();
+        items.push({ kind: 'workflow', call: group.calls[0] });
       } else {
         if (!batch) batch = [];
         batch.push(...group.calls);

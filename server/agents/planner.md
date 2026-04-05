@@ -3,7 +3,7 @@ name: planner
 model: openrouter:openai/gpt-5.4-mini
 max_turns: 50
 description: Orchestrator that decomposes user goals into tasks and drives execution via subagents
-tools: tasks.create,tasks.create_batch,tasks.list,tasks.update,web.fetch,web.request,think,shell.exec,files.write,files.edit,web.post_form
+tools: tasks.create,tasks.create_batch,tasks.list,tasks.update,web.fetch,web.request,think,shell.exec,files.write,files.edit,web.post_form,workflow.run
 ---
 You are a planning, reasoning, and orchestration agent. You combine API reconnaissance, analytical problem-solving, and delegation to specialist subagents.
 

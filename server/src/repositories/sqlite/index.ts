@@ -16,6 +16,7 @@ import type {
   ApiKeyRepository,
   SystemPromptRepository,
   PreferenceRepository,
+  WorkflowRunRepository,
   CreateAgentInput,
   UpdateAgentInput,
   CreateSessionInput,
@@ -25,6 +26,8 @@ import type {
   SaveToolOutputInput,
   CreateModelInput,
   UpdateModelInput,
+  CreateWorkflowRunInput,
+  UpdateWorkflowRunInput,
   ModelRecord,
   ApiKeyRecord,
   SystemPromptRecord,
@@ -46,6 +49,7 @@ import type {
   User,
   WaitingFor,
 } from '../../domain/types.js'
+import type { WorkflowRun, WorkflowRunStatus } from '../../workflows/types.js'
 
 export type DrizzleInstance = BetterSQLite3Database<typeof schema>
 
@@ -268,6 +272,7 @@ function createSessionRepo(db: DrizzleInstance): SessionRepository {
         }
 
         tx.delete(schema.agents).where(eq(schema.agents.sessionId, id)).run()
+        tx.delete(schema.workflowRuns).where(eq(schema.workflowRuns.sessionId, id)).run()
         tx.delete(schema.sessions).where(eq(schema.sessions.id, id)).run()
       })
     },
@@ -698,6 +703,84 @@ function createPreferenceRepo(db: DrizzleInstance): PreferenceRepository {
   }
 }
 
+function toWorkflowRun(row: typeof schema.workflowRuns.$inferSelect): WorkflowRun {
+  return {
+    id: row.id,
+    workflowName: row.workflowName,
+    sessionId: row.sessionId,
+    triggerAgentId: row.triggerAgentId ?? null,
+    triggerCallId: row.triggerCallId ?? null,
+    status: (row.status ?? 'pending') as WorkflowRunStatus,
+    input: row.input ? JSON.parse(row.input) : null,
+    output: row.output ? JSON.parse(row.output) : null,
+    steps: row.steps ? JSON.parse(row.steps) : [],
+    error: row.error ?? null,
+    startedAt: row.startedAt ?? null,
+    completedAt: row.completedAt ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
+function createWorkflowRunRepo(db: DrizzleInstance): WorkflowRunRepository {
+  return {
+    async create(input: CreateWorkflowRunInput): Promise<WorkflowRun> {
+      const now = Date.now()
+      const id = uuid()
+      const row = {
+        id,
+        workflowName: input.workflowName,
+        sessionId: input.sessionId,
+        triggerAgentId: input.triggerAgentId ?? null,
+        triggerCallId: input.triggerCallId ?? null,
+        status: 'pending' as const,
+        input: JSON.stringify(input.input),
+        output: null,
+        steps: '[]',
+        error: null,
+        startedAt: null,
+        completedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      }
+      db.insert(schema.workflowRuns).values(row).run()
+      return toWorkflowRun(row)
+    },
+
+    async getById(id: string): Promise<WorkflowRun | null> {
+      const rows = db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, id)).limit(1).all()
+      return rows.length > 0 ? toWorkflowRun(rows[0]) : null
+    },
+
+    async update(id: string, input: UpdateWorkflowRunInput): Promise<WorkflowRun> {
+      const now = Date.now()
+      const updates: Record<string, unknown> = { updatedAt: now }
+      if (input.status !== undefined) updates.status = input.status
+      if (input.output !== undefined) updates.output = input.output != null ? JSON.stringify(input.output) : null
+      if (input.steps !== undefined) updates.steps = JSON.stringify(input.steps)
+      if (input.error !== undefined) updates.error = input.error
+      if (input.startedAt !== undefined) updates.startedAt = input.startedAt
+      if (input.completedAt !== undefined) updates.completedAt = input.completedAt
+
+      db.update(schema.workflowRuns).set(updates).where(eq(schema.workflowRuns.id, id)).run()
+
+      const rows = db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, id)).limit(1).all()
+      if (rows.length === 0) throw new Error(`WorkflowRun not found: ${id}`)
+      return toWorkflowRun(rows[0])
+    },
+
+    async listBySession(sessionId: string): Promise<WorkflowRun[]> {
+      const rows = db
+        .select()
+        .from(schema.workflowRuns)
+        .where(eq(schema.workflowRuns.sessionId, sessionId))
+        .orderBy(desc(schema.workflowRuns.createdAt))
+        .all()
+      return rows.map(toWorkflowRun)
+    },
+  }
+}
+
 // --- Public API ---
 
 export function createDatabase(url: string): DrizzleInstance {
@@ -791,14 +874,32 @@ export function createDatabase(url: string): DrizzleInstance {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY,
+      workflow_name TEXT NOT NULL,
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      trigger_agent_id TEXT REFERENCES agents(id),
+      trigger_call_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      input TEXT,
+      output TEXT,
+      error TEXT,
+      started_at INTEGER,
+      completed_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS agents_session_id_idx ON agents(session_id);
     CREATE INDEX IF NOT EXISTS agents_status_idx ON agents(status);
     CREATE INDEX IF NOT EXISTS items_agent_id_sequence_idx ON items(agent_id, sequence);
     CREATE INDEX IF NOT EXISTS items_call_id_idx ON items(call_id);
+    CREATE INDEX IF NOT EXISTS workflow_runs_session_id_idx ON workflow_runs(session_id);
+    CREATE INDEX IF NOT EXISTS workflow_runs_status_idx ON workflow_runs(status);
   `)
 
   // Incremental migrations — ADD COLUMN IF NOT EXISTS (SQLite has no such syntax, so try/catch)
   try { sqlite.exec(`ALTER TABLE items ADD COLUMN content_blocks TEXT;`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE workflow_runs ADD COLUMN steps TEXT;`) } catch { /* already exists */ }
 
   return drizzle(sqlite, { schema })
 }
@@ -813,6 +914,7 @@ export class SQLiteRepositories {
   apiKeys: ApiKeyRepository
   systemPrompts: SystemPromptRepository
   preferences: PreferenceRepository
+  workflowRuns: WorkflowRunRepository
 
   constructor(db: DrizzleInstance, encryptionKey?: string) {
     const encKey = encryptionKey ? deriveKey(encryptionKey) : null
@@ -825,6 +927,7 @@ export class SQLiteRepositories {
     this.apiKeys = createApiKeyRepo(db, encKey)
     this.systemPrompts = createSystemPromptRepo(db)
     this.preferences = createPreferenceRepo(db)
+    this.workflowRuns = createWorkflowRunRepo(db)
   }
 }
 

@@ -4,7 +4,8 @@
   import { lastNonSettingsPath } from "$lib/stores/navigation";
 
   $: isChatRoute = $page.url.pathname === "/";
-  $: if ($page.url.pathname !== "/settings") {
+  const drawerRoutes = ["/settings", "/assistants", "/models", "/usage"];
+  $: if (!drawerRoutes.includes($page.url.pathname)) {
     lastNonSettingsPath.set(
       `${$page.url.pathname}${$page.url.search}${$page.url.hash}`
     );

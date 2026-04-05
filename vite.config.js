@@ -6,8 +6,9 @@ const fixSvelteStylePlugin = {
   name: 'fix-svelte-style',
   enforce: 'pre',
   load(id) {
-    // Return empty CSS for incorrectly identified CSS modules from bits-ui
-    if (id.includes('node_modules/bits-ui') && id.includes('?svelte&type=style&lang.css')) {
+    // Return empty CSS for any node_modules svelte component whose script block is
+    // misidentified as CSS by vite-plugin-svelte (common with pre-bundled packages)
+    if (id.includes('node_modules') && id.includes('?svelte&type=style&lang.css')) {
       return '';
     }
   },
@@ -23,11 +24,11 @@ export default defineConfig(async () => ({
   },
 
   optimizeDeps: {
-    exclude: ["bits-ui"],
+    exclude: ["bits-ui", "layerchart", "@humanspeak/svelte-virtual-list"],
   },
 
   ssr: {
-    noExternal: ["bits-ui"],
+    noExternal: ["bits-ui", "layerchart", "@humanspeak/svelte-virtual-list"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

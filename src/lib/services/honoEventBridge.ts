@@ -76,6 +76,8 @@ export async function streamMessageViaHono(
   const delegateCallByParent = new Map<string, { callId: string; depth: number }>();
   // Accumulated child-agent text per delegate callId.
   const delegateChildText = new Map<string, string>();
+  // Track workflow.run tool calls so we can route workflow progress into the tool bubble
+  const workflowToolCalls = new Map<string, string>(); // callId → accumulated progress text
 
   /** Check if an agentId belongs to a sub-agent (not the root). */
   function isSubAgent(agentId: string | undefined, parentId: string | null | undefined): boolean {
@@ -154,6 +156,11 @@ export async function streamMessageViaHono(
       const parentId = data.parentId as string | null | undefined;
       toolStartTimes.set(callId, Date.now());
 
+      // Track workflow.run tool calls so we can route progress into the tool bubble
+      if ((data.name as string) === 'workflow.run') {
+        workflowToolCalls.set(callId, '');
+      }
+
       // Track delegate tool calls so we can route child text into them
       if ((data.name as string) === 'delegate') {
         const callerAgentId = data.agentId as string;
@@ -184,6 +191,11 @@ export async function streamMessageViaHono(
       const parentId = data.parentId as string | null | undefined;
       const agentId = data.agentId as string | undefined;
       console.log('[honoEventBridge] tool_end:', data.name, callId, { success, agentId, parentId });
+
+      // Clean up workflow tracking when the workflow.run tool completes
+      if ((data.name as string) === 'workflow.run') {
+        workflowToolCalls.delete(callId);
+      }
 
       // Clean up delegate tracking when the delegate tool completes
       if ((data.name as string) === 'delegate' && agentId) {
@@ -296,6 +308,38 @@ export async function streamMessageViaHono(
         },
         timestamp_ms: ts(),
       });
+    } else if (event === 'workflow:progress') {
+      // Route workflow progress into the workflow.run tool call bubble as live output.
+      // Find the workflow.run tool call by matching the runId from the payload to an
+      // active workflow tool call. Since workflows run synchronously within the agent,
+      // there's typically only one active workflow.run call at a time.
+      const progressEvent = data.event as string | undefined;
+      const progressData = data.data as unknown;
+      const progressText = progressEvent
+        ? `[${progressEvent}] ${typeof progressData === 'string' ? progressData : JSON.stringify(progressData)}`
+        : JSON.stringify(progressData);
+
+      // Find the matching workflow.run tool call and update its accumulated text
+      for (const [callId, accumulated] of workflowToolCalls.entries()) {
+        const updated = accumulated ? `${accumulated}\n${progressText}` : progressText;
+        workflowToolCalls.set(callId, updated);
+        onEvent({
+          event_type: AGENT_EVENT_TYPES.AGENT_OUTPUT_DELTA,
+          payload: {
+            parent_execution_id: callId,
+            text: updated,
+            depth: 1,
+            message_id: messageId,
+            conversation_id: conversationId,
+            timestamp_ms: ts(),
+          },
+          timestamp_ms: ts(),
+        });
+        break; // only one active workflow at a time
+      }
+    } else if (event === 'workflow:started' || event === 'workflow:completed' || event === 'workflow:failed') {
+      // Lifecycle events — no separate client event needed.
+      // workflow:started maps to tool_start, workflow:completed/failed map to tool_end.
     } else if (event === 'agent_status') {
       // AGENT_WAITING payload has `waitingFor` (not `status`) — handle both paths.
       const waitingFor = data.waitingFor as Array<{

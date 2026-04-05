@@ -22,6 +22,22 @@ export type StepExecutionOutcome =
   | { type: 'complete'; response: string }
   | { type: 'waiting'; waiting_for: WaitingFor[] }
 
+/**
+ * Intercept handler — a plugin function that the runner calls instead of
+ * the tool registry for tools marked `orchestrator_intercept: true`.
+ *
+ * Registered by name in `OrchestratorDeps.interceptHandlers`.
+ * The runner dispatches to the matching handler; it has no knowledge of
+ * what the handler does (delegation, workflow, etc.).
+ */
+export type InterceptHandler = (
+  callId: string,
+  args: Record<string, unknown>,
+  ctx: RunContext,
+  deps: OrchestratorDeps,
+  startMs: number,
+) => Promise<StepExecutionOutcome>
+
 export interface OrchestratorDeps {
   agents: AgentRepository
   items: ItemRepository
@@ -33,6 +49,8 @@ export interface OrchestratorDeps {
   tools: ToolExecutor
   events: EventSink
   agentDefinitions: AgentDefinitionRegistry
+  /** Pluggable intercept handlers — keyed by tool name (e.g. 'delegate', 'workflow.run'). */
+  interceptHandlers?: Map<string, InterceptHandler>
 }
 
 export interface RunContext {
@@ -44,6 +62,7 @@ export interface RunContext {
   readonly tools: ToolExecutor
   readonly events: EventSink
   readonly agentDefinitions: AgentDefinitionRegistry
+  readonly interceptHandlers?: Map<string, InterceptHandler>
   agent: Agent
   turnNumber: number
   signal: AbortSignal

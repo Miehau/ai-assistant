@@ -13,6 +13,7 @@ import type {
   User,
   WaitingFor,
 } from '../domain/types.js'
+import type { WorkflowRun, WorkflowRunStatus } from '../workflows/types.js'
 
 // --- Input types (omit auto-generated fields) ---
 
@@ -195,4 +196,30 @@ export interface PreferenceRepository {
   get(key: string): Promise<string | null>
   set(key: string, value: string): Promise<void>
   delete(key: string): Promise<void>
+}
+
+// --- Workflow runs ---
+
+export interface CreateWorkflowRunInput {
+  workflowName: string
+  sessionId: string
+  triggerAgentId?: string | null
+  triggerCallId?: string | null
+  input: unknown
+}
+
+export interface UpdateWorkflowRunInput {
+  status?: WorkflowRunStatus
+  output?: unknown | null
+  steps?: import('../workflows/types.js').WorkflowStep[]
+  error?: string | null
+  startedAt?: number | null
+  completedAt?: number | null
+}
+
+export interface WorkflowRunRepository {
+  create(input: CreateWorkflowRunInput): Promise<WorkflowRun>
+  getById(id: string): Promise<WorkflowRun | null>
+  update(id: string, input: UpdateWorkflowRunInput): Promise<WorkflowRun>
+  listBySession(sessionId: string): Promise<WorkflowRun[]>
 }

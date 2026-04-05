@@ -1,11 +1,13 @@
 import type { ToolHandler } from './types.js'
 import type { AgentDefinitionRegistry } from '../agents/registry.js'
+import type { InterceptHandler } from '../orchestrator/types.js'
+import { handleDelegation } from '../orchestrator/runner.js'
 
 /**
  * Delegate tool — spawns a child agent to handle a subtask.
  *
  * Marked `orchestrator_intercept: true` — the runner intercepts this tool
- * and runs handleDelegation() instead of calling handle(). The handle()
+ * and calls the registered InterceptHandler instead of handle(). The handle()
  * method exists only as a safety net if interception is bypassed.
  *
  * Named agents defined in server/agents/*.md are listed in the tool
@@ -14,6 +16,7 @@ import type { AgentDefinitionRegistry } from '../agents/registry.js'
 export function registerDelegateTools(
   registry: { register: (h: ToolHandler) => void },
   agentDefs: AgentDefinitionRegistry,
+  interceptHandlers?: Map<string, InterceptHandler>,
 ): void {
   const named = agentDefs.list().filter((d) => d.name !== 'default')
 
@@ -57,4 +60,7 @@ export function registerDelegateTools(
       return { ok: false, error: 'delegate must be intercepted by the orchestrator — this is a bug' }
     },
   })
+
+  // Self-register the intercept handler
+  interceptHandlers?.set('delegate', handleDelegation)
 }

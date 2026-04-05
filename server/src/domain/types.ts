@@ -1,6 +1,6 @@
 export type CallId = string
 export type AgentStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
-export type WaitType = 'tool' | 'approval' | 'agent' | 'human'
+export type WaitType = 'tool' | 'approval' | 'agent' | 'human' | 'workflow'
 export type ItemType = 'message' | 'function_call' | 'function_call_output' | 'reasoning'
 export type ItemRole = 'system' | 'user' | 'assistant'
 export type SessionStatus = 'active' | 'archived'

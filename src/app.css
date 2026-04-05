@@ -288,6 +288,7 @@
   .nav-overlay-open {
     opacity: 1;
     pointer-events: auto;
+    backdrop-filter: blur(4px);
   }
 
   .nav-panel {
@@ -318,6 +319,7 @@
   .drawer-overlay-open {
     opacity: 1;
     pointer-events: auto;
+    backdrop-filter: blur(4px);
   }
 
   .drawer-panel {
