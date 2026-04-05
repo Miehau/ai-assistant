@@ -309,7 +309,10 @@ export async function runAgent(
 
     // Agent may have been cancelled externally while a tool/LLM call was in flight.
     // Don't try to transition cancelled → failed — just acknowledge the cancellation.
-    if (ctx.agent.status === 'cancelled' || errorMsg === 'Agent run aborted') {
+    // Check signal.aborted as the canonical source: AbortError messages vary by runtime
+    // ("The operation was aborted." in Bun/Node) and ctx.agent is an in-memory snapshot
+    // that won't reflect the DB update made by the cancel route.
+    if (ctx.agent.status === 'cancelled' || signal.aborted || errorMsg === 'Agent run aborted') {
       const refreshed = await ctx.agents.getById(agentId)
       if (refreshed && refreshed.status !== 'cancelled') {
         const cancelled = cancelAgent(refreshed)
