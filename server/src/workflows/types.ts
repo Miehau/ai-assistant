@@ -4,7 +4,7 @@ import type { z } from 'zod'
 // Workflow run — persisted entity
 // ---------------------------------------------------------------------------
 
-export type WorkflowRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type WorkflowRunStatus = 'pending' | 'running' | 'awaiting_input' | 'completed' | 'failed' | 'cancelled'
 
 export interface WorkflowStep {
   callId: string
@@ -82,6 +82,13 @@ export interface WorkflowContext<TInput = unknown> {
 
   /** Emit a progress event visible on the SSE stream (ephemeral, not persisted). */
   emit(event: string, data: unknown): void
+
+  /**
+   * Suspend the workflow and open a discussion with the LLM in the main chat.
+   * The workflow parks until the LLM calls conclude({ decision }) after chatting
+   * with the user. Returns the decision string.
+   */
+  discuss(prompt: string): Promise<string>
 }
 
 // ---------------------------------------------------------------------------

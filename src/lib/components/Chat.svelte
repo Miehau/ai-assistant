@@ -21,7 +21,8 @@
     agentPhase,
     agentPlan,
     agentPlanSteps,
-    toolActivity
+    toolActivity,
+    pendingDiscussion
   } from "$lib/stores/chat";
   import ChatMessages from "./chat/ChatMessages.svelte";
   import ChatInput from "./chat/ChatInput.svelte";
@@ -110,6 +111,7 @@
       messages={$messages}
       systemPrompt={$selectedSystemPrompt?.content || ''}
       onSendMessage={handleSendMessage}
+      discussionPrompt={$pendingDiscussion}
     >
       {#snippet controls()}
         <ChatControls

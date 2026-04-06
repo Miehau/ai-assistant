@@ -35,6 +35,8 @@ export interface ContextDeps {
   triggerCallId?: string
   /** Turn number on the trigger agent — used for item ordering. */
   turnNumber?: number
+  /** Called by ctx.discuss() to park the workflow and signal the intercept handler to unblock the agent. */
+  registerDiscussionResolver?: (resolver: { resolve: (decision: string) => void; reject: (err: Error) => void }) => void
 }
 
 export function buildWorkflowContext<TInput>(deps: ContextDeps): WorkflowContext<TInput> {
@@ -241,6 +243,32 @@ export function buildWorkflowContext<TInput>(deps: ContextDeps): WorkflowContext
         payload: { runId: deps.runId, workflowName: deps.workflowName, event, data },
         timestamp: Date.now(),
       })
+    },
+
+    async discuss(prompt: string): Promise<string> {
+      if (!deps.registerDiscussionResolver) {
+        throw new Error('ctx.discuss() is not available in this execution context')
+      }
+
+      // Show the workflow's question in the chat — the agent will discuss with the user
+      // and call the globally-registered `conclude` tool when ready to proceed.
+      deps.events.emit({
+        type: EVENT_TYPES.WORKFLOW_DISCUSSION_STARTED,
+        agent_id: deps.runId,
+        session_id: deps.sessionId,
+        payload: { runId: deps.runId, workflowName: deps.workflowName, prompt, timestamp_ms: Date.now() },
+        timestamp: Date.now(),
+      })
+
+      await deps.workflowRuns.update(deps.runId, { status: 'awaiting_input' })
+
+      // Park until the `conclude` tool resolves this promise
+      const decision = await new Promise<string>((resolve, reject) => {
+        deps.registerDiscussionResolver!({ resolve, reject })
+      })
+
+      await deps.workflowRuns.update(deps.runId, { status: 'running' })
+      return decision
     },
   }
 }

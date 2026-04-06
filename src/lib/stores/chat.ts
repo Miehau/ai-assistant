@@ -32,6 +32,7 @@ import type {
   ToolExecutionDecisionPayload,
   ToolExecutionProposedPayload,
   UsageUpdatedPayload,
+  WorkflowDiscussionStartedPayload,
 } from '$lib/types/events';
 import type { AgentPlan, AgentPlanStep, PhaseKind } from '$lib/types/agent';
 import { currentConversationUsage } from '$lib/stores/tokenUsage';
@@ -54,6 +55,8 @@ export const attachments = writable<any[]>([]);
 export const currentMessage = writable<string>('');
 export const isFirstMessage = writable<boolean>(true);
 export const pendingToolApprovals = writable<ToolExecutionProposedPayload[]>([]);
+/** Non-null while a workflow is parked at ctx.discuss() — holds the prompt to show in chat. */
+export const pendingDiscussion = writable<string | null>(null);
 export const toolActivity = writable<ToolActivityEntry[]>([]);
 export const agentPhase = writable<PhaseKind | null>(null);
 export const agentPlan = writable<AgentPlan | null>(null);
@@ -410,6 +413,7 @@ function resetStreamingState() {
     }
   }
   agentOutputBuffer.clear();
+  pendingDiscussion.set(null);
 }
 
 function handleAgentEvent(event: AgentEvent) {
@@ -773,6 +777,16 @@ function handleAgentEvent(event: AgentEvent) {
       });
 
       updateToolCallByExecutionId(payload.execution_id, completionUpdate);
+
+      // Clear pending discussion once the conclude tool completes
+      if (payload.tool_name === 'conclude') {
+        pendingDiscussion.set(null);
+      }
+    }
+
+    if (event.event_type === AGENT_EVENT_TYPES.WORKFLOW_DISCUSSION_STARTED) {
+      const payload = event.payload as WorkflowDiscussionStartedPayload;
+      pendingDiscussion.set(payload.prompt);
     }
 
     // Child agent streaming text → update the delegate tool call's result as live preview.
@@ -1284,6 +1298,7 @@ export async function loadConversationHistory(conversationId: string) {
     // Sync toolCallsByMessageId with the loaded history so that any future
     // upsertToolCall calls do not overwrite the correct completed/failed state
     // with undefined (which happens when the map has no entry for a message ID).
+    pendingDiscussion.set(null);
     toolCallsByMessageId.clear();
     for (const msg of loadedMessages) {
       if (msg.tool_calls && msg.tool_calls.length > 0) {

@@ -17,6 +17,8 @@
     modelId?: string;
     messages?: Message[];
     systemPrompt?: string;
+    /** When set, shows a banner above the input prompting the user about a paused workflow discussion. */
+    discussionPrompt?: string | null;
     onSendMessage?: (data: { message: string; attachments: Attachment[] }) => void;
     controls?: Snippet;
   }
@@ -28,6 +30,7 @@
     modelId = "",
     messages = [],
     systemPrompt = "",
+    discussionPrompt = null,
     onSendMessage,
     controls
   }: Props = $props();
@@ -454,6 +457,12 @@
           </Tooltip.Content>
         </Tooltip.Root>
       {/each}
+    </div>
+  {/if}
+  {#if discussionPrompt}
+    <div class="mx-3 mt-2 mb-1 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-400/20 text-xs text-amber-300/90 flex items-start gap-2">
+      <span class="shrink-0 mt-0.5">⏸</span>
+      <span><strong class="font-medium">Workflow paused:</strong> {discussionPrompt}</span>
     </div>
   {/if}
   <Label for="message" class="sr-only">Message</Label>

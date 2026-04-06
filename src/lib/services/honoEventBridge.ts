@@ -337,6 +337,17 @@ export async function streamMessageViaHono(
         });
         break; // only one active workflow at a time
       }
+    } else if (event === 'workflow:discussion_started') {
+      onEvent({
+        event_type: AGENT_EVENT_TYPES.WORKFLOW_DISCUSSION_STARTED,
+        payload: {
+          runId: data.runId as string,
+          workflowName: data.workflowName as string,
+          prompt: data.prompt as string,
+          timestamp_ms: (data.timestamp_ms as number | undefined) ?? ts(),
+        },
+        timestamp_ms: ts(),
+      });
     } else if (event === 'workflow:started' || event === 'workflow:completed' || event === 'workflow:failed') {
       // Lifecycle events — no separate client event needed.
       // workflow:started maps to tool_start, workflow:completed/failed map to tool_end.

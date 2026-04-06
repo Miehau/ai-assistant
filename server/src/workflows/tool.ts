@@ -1,4 +1,4 @@
-import type { ToolHandler } from '../tools/types.js'
+import type { ToolHandler, ToolContext } from '../tools/types.js'
 import type { InterceptHandler, RunContext, OrchestratorDeps, StepExecutionOutcome } from '../orchestrator/types.js'
 import type { WorkflowRegistry, WorkflowDefinition } from './types.js'
 import type { WorkflowExecutor } from './executor.js'
@@ -52,6 +52,48 @@ export function registerWorkflowTools(
     },
     async handle() {
       return { ok: false, error: 'workflow.run must be intercepted by the orchestrator — this is a bug' }
+    },
+  })
+
+  // Register the `conclude` tool so the LLM can resume a parked ctx.discuss()
+  registry.register({
+    metadata: {
+      name: 'conclude',
+      description:
+        'Resume a workflow that is awaiting your decision after ctx.discuss(). ' +
+        'Call this once you have discussed with the user and are ready to proceed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          decision: {
+            type: 'string',
+            description: 'Your decision or summary to pass back to the workflow.',
+          },
+        },
+        required: ['decision'],
+      },
+      requires_approval: false,
+    },
+    async handle(args: Record<string, unknown>, ctx: ToolContext) {
+      const decision = args.decision as string
+      if (!decision) {
+        return { ok: false as const, error: 'conclude requires "decision"' }
+      }
+
+      const execution = executor.resolveDiscussionBySession(ctx.session_id, decision)
+      if (!execution) {
+        return { ok: false as const, error: 'No workflow is currently awaiting a decision in this session. Do not retry — only call conclude when a workflow has paused for discussion.' }
+      }
+
+      try {
+        const completedRun = await execution
+        const output = completedRun.status !== 'completed'
+          ? `Workflow ${completedRun.status}: ${completedRun.error ?? 'unknown'}`
+          : JSON.stringify(completedRun.output ?? '(workflow completed with no output)')
+        return { ok: true as const, output }
+      } catch (err) {
+        return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
+      }
     },
   })
 
@@ -161,27 +203,35 @@ function createWorkflowInterceptHandler(
       return { type: 'continue' }
     }
 
-    // Execute workflow synchronously — await completion so the agent loop
-    // (and its SSE stream) stays alive throughout the workflow run.
-    const { execution } = await executor.start(definition, parsed.data, {
+    // Start the workflow. `ready` resolves as soon as the workflow either
+    // completes normally OR parks at ctx.discuss(). `execution` resolves only
+    // after the full workflow finishes (including after a discuss/conclude cycle).
+    const { execution, ready } = await executor.start(definition, parsed.data, {
       sessionId: ctx.agent.sessionId,
       signal: ctx.signal,
       triggerAgentId: ctx.agent.id,
       triggerCallId: callId,
     })
 
+    // Prevent unhandled-rejection warnings if conclude is never called
+    execution.catch(() => {})
+
+    const readyResult = await ready
+
     let output: string
     let isError: boolean
 
-    try {
-      const completedRun = await execution
+    if (readyResult.kind === 'awaiting_input') {
+      // Workflow parked at ctx.discuss() — unblock the agent so it can chat
+      // with the user. The `conclude` tool will resume the workflow.
+      output = `Workflow "${workflowName}" has paused for discussion. Chat with the user and call \`conclude\` with your decision when ready to proceed.`
+      isError = false
+    } else {
+      const completedRun = readyResult.run
       isError = completedRun.status !== 'completed'
       output = isError
         ? `Workflow ${completedRun.status}: ${completedRun.error ?? 'unknown'}`
         : JSON.stringify(completedRun.output ?? '(workflow completed with no output)')
-    } catch (err) {
-      isError = true
-      output = `Workflow error: ${err instanceof Error ? err.message : String(err)}`
     }
 
     // Emit tool_end so the client closes the tool bubble

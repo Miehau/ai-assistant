@@ -34,6 +34,8 @@ export type AgentEvent =
   | WorkflowCompletedEvent
   | WorkflowFailedEvent
   | WorkflowProgressEvent
+  | WorkflowDiscussionStartedEvent
+  | WorkflowDiscussionTurnEvent
 
 interface BaseEvent {
   agent_id: string
@@ -143,6 +145,16 @@ export interface WorkflowProgressEvent extends BaseEvent {
   payload: { runId: string; workflowName: string; event: string; data: unknown }
 }
 
+export interface WorkflowDiscussionStartedEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.WORKFLOW_DISCUSSION_STARTED
+  payload: { runId: string; workflowName: string; prompt: string; timestamp_ms: number }
+}
+
+export interface WorkflowDiscussionTurnEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.WORKFLOW_DISCUSSION_TURN
+  payload: { runId: string; workflowName: string; role: 'user' | 'assistant'; content: string }
+}
+
 // ---------------------------------------------------------------------------
 // Event filter
 // ---------------------------------------------------------------------------
@@ -175,4 +187,6 @@ export const EVENT_TYPES = {
   WORKFLOW_COMPLETED: 'workflow:completed',
   WORKFLOW_FAILED: 'workflow:failed',
   WORKFLOW_PROGRESS: 'workflow:progress',
+  WORKFLOW_DISCUSSION_STARTED: 'workflow:discussion_started',
+  WORKFLOW_DISCUSSION_TURN: 'workflow:discussion_turn',
 } as const

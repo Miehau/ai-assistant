@@ -20,6 +20,7 @@ export const AGENT_EVENT_TYPES = {
   AGENT_STEP_COMPLETED: 'agent.step.completed',
   AGENT_COMPLETED: 'agent.completed',
   AGENT_OUTPUT_DELTA: 'agent.output.delta',
+  WORKFLOW_DISCUSSION_STARTED: 'workflow.discussion.started',
 } as const;
 
 export type AgentEventType = typeof AGENT_EVENT_TYPES[keyof typeof AGENT_EVENT_TYPES];
@@ -69,6 +70,7 @@ export type AgentEventPayloadMap = {
   'agent.step.completed': AgentStepCompletedPayload;
   'agent.completed': AgentCompletedPayload;
   'agent.output.delta': AgentOutputDeltaPayload;
+  'workflow.discussion.started': WorkflowDiscussionStartedPayload;
 };
 
 export interface EventAttachment {
@@ -233,6 +235,13 @@ export interface AgentOutputDeltaPayload {
   depth: number;
   message_id: string;
   conversation_id: string;
+  timestamp_ms: number;
+}
+
+export interface WorkflowDiscussionStartedPayload {
+  runId: string;
+  workflowName: string;
+  prompt: string;
   timestamp_ms: number;
 }
 
