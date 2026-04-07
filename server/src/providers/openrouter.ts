@@ -25,7 +25,7 @@ function restoreToolName(name: string): string {
 
 /**
  * OpenRouter provider — raw fetch against the OpenAI-compatible
- * /api/v1/chat/completions endpoint. Non-streaming only for simplicity.
+ * /api/v1/chat/completions endpoint with real SSE streaming support.
  */
 export class OpenRouterProvider implements LLMProvider {
   private apiKey: string
@@ -65,15 +65,189 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-    const response = await this.generate(request)
-
-    if (response.content) {
-      yield { type: 'text_delta', text: typeof response.content === 'string' ? response.content : String(response.content) }
-      yield { type: 'text_done', text: typeof response.content === 'string' ? response.content : String(response.content) }
+    const body = {
+      ...buildRequestBody(request),
+      stream: true,
+      stream_options: { include_usage: true },
     }
+
+    const res = await fetch(BASE_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://ai-frontend.app',
+        'X-Title': 'AI Frontend',
+      },
+      body: JSON.stringify(body),
+      signal: request.signal,
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`OpenRouter ${res.status}: ${err}`)
+    }
+
+    if (!res.body) {
+      throw new Error('OpenRouter stream body is null')
+    }
+
+    let fullText = ''
+    const toolCallBuffers: Record<number, { call_id: string; name: string; args: string }> = {}
+    let finishReason = ''
+    let completionTokens = 0
+    let promptTokens = 0
+
+    for await (const chunk of parseOpenRouterSSE(res.body)) {
+      if (chunk.usage) {
+        promptTokens = chunk.usage.prompt_tokens ?? promptTokens
+        completionTokens = chunk.usage.completion_tokens ?? completionTokens
+      }
+
+      const choice = chunk.choices?.[0]
+      if (!choice) continue
+
+      if (choice.finish_reason) {
+        finishReason = choice.finish_reason
+      }
+
+      const delta = choice.delta
+      if (!delta) continue
+
+      if (typeof delta.content === 'string' && delta.content.length > 0) {
+        fullText += delta.content
+        yield { type: 'text_delta', text: delta.content }
+      }
+
+      const reasoningChunk = delta.reasoning_content
+      if (typeof reasoningChunk === 'string' && reasoningChunk.length > 0) {
+        fullText += reasoningChunk
+        yield { type: 'text_delta', text: reasoningChunk }
+      }
+
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0
+
+          if (tc.id) {
+            const restoredName = restoreToolName(tc.function?.name ?? '')
+            toolCallBuffers[idx] = {
+              call_id: tc.id,
+              name: restoredName,
+              args: tc.function?.arguments ?? '',
+            }
+            yield {
+              type: 'tool_call_delta',
+              call_id: tc.id,
+              name: restoredName || undefined,
+              arguments_delta: tc.function?.arguments ?? '',
+            }
+            continue
+          }
+
+          const existing = toolCallBuffers[idx]
+          if (!existing) continue
+
+          if (tc.function?.name) {
+            existing.name = restoreToolName(tc.function.name)
+          }
+          if (tc.function?.arguments) {
+            existing.args += tc.function.arguments
+            yield {
+              type: 'tool_call_delta',
+              call_id: existing.call_id,
+              arguments_delta: tc.function.arguments,
+            }
+          }
+        }
+      }
+
+      if (choice.finish_reason) {
+        for (const buf of Object.values(toolCallBuffers)) {
+          yield {
+            type: 'tool_call_done',
+            call_id: buf.call_id,
+            name: buf.name,
+            arguments: buf.args,
+          }
+        }
+      }
+    }
+
+    if (fullText) {
+      yield { type: 'text_done', text: fullText }
+    }
+
+    const toolCalls: LLMToolCall[] = Object.values(toolCallBuffers).map((buf) => ({
+      call_id: buf.call_id,
+      name: buf.name,
+      arguments: buf.args ? JSON.parse(buf.args) : {},
+    }))
+
+    const response: LLMResponse = {
+      content: fullText,
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      companion_text: toolCalls.length > 0 && fullText ? fullText : undefined,
+      usage: {
+        input_tokens: promptTokens,
+        output_tokens: completionTokens,
+      },
+      finish_reason: finishReason || 'stop',
+    }
+
+    logger.debug({ provider: 'openrouter', model: request.model, raw: response }, 'Raw LLM response (stream)')
 
     yield { type: 'done', response }
   }
+}
+
+async function* parseOpenRouterSSE(body: ReadableStream<Uint8Array>): AsyncIterable<ChatCompletionChunk> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const blocks = buffer.split(/\r?\n\r?\n/)
+      buffer = blocks.pop() ?? ''
+
+      for (const block of blocks) {
+        const chunk = parseOpenRouterSSEBlock(block)
+        if (!chunk) continue
+        if (chunk === '[DONE]') return
+        yield chunk
+      }
+    }
+
+    if (buffer.trim()) {
+      const chunk = parseOpenRouterSSEBlock(buffer)
+      if (chunk && chunk !== '[DONE]') {
+        yield chunk
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+function parseOpenRouterSSEBlock(block: string): ChatCompletionChunk | '[DONE]' | null {
+  const lines = block.split(/\r?\n/)
+  let data = ''
+
+  for (const line of lines) {
+    if (line.startsWith('data:')) {
+      data += line.slice(5).trim()
+    }
+  }
+
+  if (!data) return null
+  if (data === '[DONE]') return '[DONE]'
+
+  return JSON.parse(data) as ChatCompletionChunk
 }
 
 // ---------------------------------------------------------------------------
@@ -275,4 +449,25 @@ interface ChatCompletionResponse {
     finish_reason: string | null
   }>
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+}
+
+interface ChatCompletionChunk {
+  choices?: Array<{
+    index: number
+    delta?: {
+      content?: string | null
+      reasoning_content?: string
+      tool_calls?: Array<{
+        index?: number
+        id?: string
+        type?: string
+        function?: {
+          name?: string
+          arguments?: string
+        }
+      }>
+    }
+    finish_reason?: string | null
+  }>
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
 }

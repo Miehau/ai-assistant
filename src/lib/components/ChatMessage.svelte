@@ -3,13 +3,11 @@
 
 <script lang="ts">
   import { onMount } from "svelte";
-  import { renderMarkdown } from "$lib/utils/markdownRenderer";
   import type { Attachment } from "$lib/types";
   import type { AgentTraceEntry } from "$lib/types/agent";
   import { fileService } from "$lib/services/fileService";
   import { getAgentTrace } from "$lib/services/agentTrace";
-  import { onDestroy } from "svelte";
-  import { getCachedParse, setCachedParse } from "$lib/utils/markdownCache";
+  import StreamingMarkdown from "./StreamingMarkdown.svelte";
 
   export let type: "sent" | "received";
   export let content: string;
@@ -106,71 +104,6 @@
           loadFileData(attachment, index);
         }
       });
-    }
-  });
-
-  function escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
-  // Progressive rendering: show raw text immediately, parse in background
-  let htmlContent = '';
-  let parseTimeout: number | null = null;
-  let lastContent = '';
-
-  // Parse markdown with caching to prevent redundant parsing on remount
-  function parseMarkdown(text: string) {
-    if (!isStreaming) {
-      const cached = getCachedParse(text);
-      if (cached) {
-        return cached;
-      }
-    }
-
-    try {
-      const result = renderMarkdown(text, { enableHighlight: !isStreaming });
-      if (!isStreaming) {
-        setCachedParse(text, result);
-      }
-      return result;
-    } catch (error) {
-      console.error('Markdown parsing error:', error);
-      return escapeHtml(text);
-    }
-  }
-
-  // Non-streaming: parse immediately so there is no blank-flash between the
-  // streaming div disappearing and the segment-based ChatMessage appearing.
-  // Streaming: throttle at 60 ms to avoid parsing on every incoming chunk.
-  $: {
-    if (content !== lastContent) {
-      lastContent = content;
-
-      if (!isStreaming) {
-        if (parseTimeout !== null) {
-          clearTimeout(parseTimeout);
-          parseTimeout = null;
-        }
-        htmlContent = parseMarkdown(content);
-      } else if (parseTimeout === null) {
-        // Throttle for streaming updates (do not reset on every chunk)
-        parseTimeout = window.setTimeout(() => {
-          htmlContent = parseMarkdown(content);
-          parseTimeout = null;
-        }, 60) as unknown as number;
-      }
-    }
-  }
-
-  onDestroy(() => {
-    // Clean up timeout on component destruction
-    if (parseTimeout !== null) {
-      clearTimeout(parseTimeout);
     }
   });
 
@@ -305,11 +238,7 @@
         role="textbox"
         tabindex="0"
       >
-        {#if htmlContent}
-          {@html htmlContent}
-        {:else}
-          <div style="white-space: pre-wrap;">{content}</div>
-        {/if}
+        <StreamingMarkdown {content} {isStreaming} />
       </div>
       {#if attachments && attachments.length > 0}
         <div class="mt-2 space-y-2">

@@ -56,7 +56,6 @@
 
   let lastScrollHeight = 0;
   let lastScrollTop = 0;
-  let scrollTimeout: NodeJS.Timeout | null = null;
   let lastMessageCount = 0;
   let scrollThrottleTimeout: number | null = null;
   let resizeThrottleTimeout: number | null = null;
@@ -66,6 +65,15 @@
   let hasMoreMessages = false;
   let loadingMore = false;
   let lastTotalCount = 0;
+  const BOTTOM_FOLLOW_THRESHOLD = 24;
+  let preservingPrependedHistory = false;
+
+  function isNearBottom(): boolean {
+    if (!chatContainer) return true;
+    const distanceFromBottom =
+      chatContainer.scrollHeight - (chatContainer.scrollTop + chatContainer.clientHeight);
+    return distanceFromBottom <= BOTTOM_FOLLOW_THRESHOLD;
+  }
 
   function preserveScrollFromBottom() {
     if (!chatContainer) return;
@@ -100,26 +108,9 @@
 
   function handleScroll() {
     if (!chatContainer) return;
-
-    // Clear existing timeout
-    if (scrollTimeout) {
-      clearTimeout(scrollTimeout);
-    }
-
-    const isScrolledToBottom =
-      Math.abs((chatContainer.scrollHeight - chatContainer.scrollTop) - chatContainer.clientHeight) < 10;
-
-    // If user scrolls up, disable auto-scroll
-    if (!isScrolledToBottom) {
-      autoScroll = false;
-    }
-
-    // If user scrolls to bottom, enable auto-scroll after a delay
-    if (isScrolledToBottom) {
-      scrollTimeout = setTimeout(() => {
-        autoScroll = true;
-      }, 150); // 150ms delay before re-enabling auto-scroll
-    }
+    autoScroll = isNearBottom();
+    lastScrollHeight = chatContainer.scrollHeight;
+    lastScrollTop = chatContainer.scrollTop;
 
     if (
       chatContainer.scrollTop <= LOAD_MORE_THRESHOLD &&
@@ -139,9 +130,17 @@
 
     // Setup resize observer
     resizeObserver = new ResizeObserver(() => {
-      throttledPreserveScroll();
+      if (autoScroll) {
+        throttledScrollToBottom();
+      } else if (preservingPrependedHistory) {
+        throttledPreserveScroll();
+      }
     });
     resizeObserver.observe(chatContainer);
+
+    lastScrollHeight = chatContainer.scrollHeight;
+    lastScrollTop = chatContainer.scrollTop;
+    autoScroll = isNearBottom();
   }
 
   // Cleanup function
@@ -152,10 +151,6 @@
     if (resizeObserver) {
       resizeObserver.disconnect();
       resizeObserver = null;
-    }
-    if (scrollTimeout) {
-      clearTimeout(scrollTimeout);
-      scrollTimeout = null;
     }
     if (scrollThrottleTimeout !== null) {
       clearTimeout(scrollThrottleTimeout);
@@ -204,6 +199,7 @@
   function loadMoreMessages() {
     if (!chatContainer || loadingMore) return;
     loadingMore = true;
+    preservingPrependedHistory = true;
 
     const prevScrollHeight = chatContainer.scrollHeight;
     const prevScrollTop = chatContainer.scrollTop;
@@ -220,6 +216,7 @@
       lastScrollHeight = chatContainer.scrollHeight;
       lastScrollTop = chatContainer.scrollTop;
       loadingMore = false;
+      preservingPrependedHistory = false;
     });
   }
 
@@ -280,36 +277,37 @@
     hasMoreMessages = startIndex > 0;
   }
 
-  // Re-enable auto-scroll whenever a new stream starts
-  $: if ($isStreaming) {
-    autoScroll = true;
-  }
-
   // Only scroll when messages actually change or streaming updates
   $: if (messages.length !== lastMessageCount || ($streamingMessage && $streamingMessage.length !== lastStreamingLength)) {
     lastMessageCount = messages.length;
     lastStreamingLength = $streamingMessage.length;
     requestAnimationFrame(() => {
-      scrollToBottom();
+      if (autoScroll) {
+        throttledScrollToBottom();
+      }
     });
   }
 
   // Handle visibility changes - scroll to bottom when page becomes visible
   // This ensures proper scroll position after deferred markdown parsing completes
-  $: if ($pageVisible && messages.length > 0) {
+  $: if ($pageVisible && messages.length > 0 && autoScroll) {
     // Scroll immediately for instant feedback
     requestAnimationFrame(() => {
-      scrollToBottom();
+      throttledScrollToBottom();
 
       // Then wait for deferred content to render and scroll again
       // This catches any height changes from requestIdleCallback parsing in ChatMessage
       if ('requestIdleCallback' in window) {
         requestIdleCallback(() => {
-          scrollToBottom();
+          if (autoScroll) {
+            throttledScrollToBottom();
+          }
         });
       } else {
         setTimeout(() => {
-          scrollToBottom();
+          if (autoScroll) {
+            throttledScrollToBottom();
+          }
         }, 100);
       }
     });
@@ -555,8 +553,6 @@
   /* Add to existing styles */
   :global(.message-container) {
     transform-origin: center;
-    perspective: 1000px;
-    transition: all 0.3s ease-out;
   }
 
   @keyframes dustAway {
