@@ -12,7 +12,7 @@ const inputSchema = z.object({}).default({})
 const API_URL = process.env.VERIFY_URL ?? ''
 const API_KEY = process.env.VERIFY_API_KEY ?? ''
 const TASK = 'filesystem'
-const NOTES_DIR = '***REMOVED***Projects/4th-devs/tasks/s0301'
+const NOTES_DIR = process.env.NOTES_DIR ?? ''
 
 // ---------------------------------------------------------------------------
 // Parsers
