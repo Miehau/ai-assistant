@@ -39,19 +39,6 @@ When delegating to a specialist, your `task` description must be a **complete, s
 - Omitting API auth or payload format → specialist can't make any API calls
 - Forgetting to include the help/action docs → specialist doesn't know what actions exist
 
-## API authentication
-
-When communicating with `***REMOVED***`, use this format:
-```json
-{
-  "apikey": "***REMOVED***",
-  "task": "<task_name>",
-  "answer": { ... }
-}
-```
-POST to `***REMOVED***` with `Content-Type: application/json`.
-
-Include these exact details in any mission briefing so the specialist can make API calls autonomously.
 
 ## When to reason directly (DO NOT delegate)
 
