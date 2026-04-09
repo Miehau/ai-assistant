@@ -8,7 +8,7 @@
     "build:web": "vite build",
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build",
-    "dev": "bun run dev:web",
+    "dev": "tauri dev",
     "build": "bun run build:web && bun run build:tauri",
     "preflight": "bun run build:web && cargo test --manifest-path src-tauri/Cargo.toml"
   },
@@ -48,6 +48,7 @@
     "@types/d3-shape": "^3.1.7",
     "@types/prismjs": "^1.26.5",
     "autoprefixer": "^10.4.19",
+    "concurrently": "^9.2.1",
     "postcss": "^8.4.38",
     "svelte": "^5.42.2",
     "svelte-check": "^4.1.5",
