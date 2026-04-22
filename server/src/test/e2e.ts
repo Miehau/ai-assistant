@@ -3,8 +3,11 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 
+import { eq } from 'drizzle-orm'
+import * as schema from '../db/schema.js'
 import { loadConfig } from '../lib/config.js'
 import { initRuntime, type RuntimeContext } from '../lib/runtime.js'
+import { TelegramService } from '../services/telegram.js'
 
 async function main() {
   console.log('=== E2E Test Suite ===\n')
@@ -25,6 +28,7 @@ async function main() {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'e2e-test-'))
   const dbPath = path.join(tmpDir, 'test.db')
   process.env.DATABASE_URL = dbPath
+  process.env.ENCRYPTION_KEY = 'test-encryption-key'
 
   // Clear provider keys so none are registered
   delete process.env.ANTHROPIC_API_KEY
@@ -33,6 +37,7 @@ async function main() {
   delete process.env.OPENROUTER_API_KEY
 
   let runtime: RuntimeContext
+  const originalFetch = globalThis.fetch
 
   try {
     // ──────────────────────────────────────────
@@ -376,9 +381,241 @@ async function main() {
     assert(filterTimeout, 'Event emitter filters by agent_id correctly')
 
     // ──────────────────────────────────────────
-    // 14. Cleanup — delete test session (cascades agents, items, tool outputs)
+    // 14. Telegram integration
     // ──────────────────────────────────────────
-    console.log('\n14. Cleanup')
+    console.log('\n14. Telegram integration')
+    providers.register('stub', {
+      async generate() {
+        return {
+          content: { action: 'complete', message: 'Stubbed Telegram reply' },
+          usage: { input_tokens: 1, output_tokens: 1 },
+          finish_reason: 'stop',
+        }
+      },
+      async *stream() {
+        yield {
+          type: 'done' as const,
+          response: {
+            content: { action: 'complete', message: 'Stubbed Telegram reply' },
+            usage: { input_tokens: 1, output_tokens: 1 },
+            finish_reason: 'stop',
+          },
+        }
+      },
+    })
+
+    let sentMessageId = 1000
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      const method = url.split('/').pop() ?? ''
+
+      if (method === 'sendChatAction') {
+        return new Response(JSON.stringify({ ok: true, result: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      if (method === 'sendMessage') {
+        sentMessageId += 1
+        return new Response(JSON.stringify({
+          ok: true,
+          result: {
+            message_id: sentMessageId,
+          },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      if (method === 'getMe') {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: {
+            id: 123,
+            is_bot: true,
+            username: 'test_bot',
+          },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      if (method === 'getWebhookInfo') {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: {
+            url: 'https://example.test/telegram/webhook',
+            has_custom_certificate: false,
+            pending_update_count: 0,
+          },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      if (method === 'setWebhook' || method === 'deleteWebhook') {
+        return new Response(JSON.stringify({ ok: true, result: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      throw new Error(`Unexpected fetch call in Telegram test: ${url} ${JSON.stringify(init ?? {})}`)
+    }) as typeof fetch
+
+    const telegram = new TelegramService(runtime)
+    const telegramConn = await telegram.createConnection(devUser!.id, {
+      botToken: 'telegram-token',
+      allowedTelegramUserId: '42',
+      webhookUrl: 'https://example.test/telegram/webhook/connection',
+    })
+    const telegramConnRow = runtime.db
+      .select()
+      .from(schema.telegramConnections)
+      .where(eq(schema.telegramConnections.id, telegramConn.id))
+      .limit(1)
+      .all()[0]
+    assert(telegramConnRow.botToken !== 'telegram-token', 'Telegram bot token is stored encrypted or obfuscated')
+
+    const testConnection = await telegram.testConnection(telegramConn.id, devUser!.id)
+    assert(testConnection.ok, 'Telegram testConnection succeeds with mocked getMe')
+
+    const sessionCountBeforeTelegram = (await repos.sessions.listByUser(devUser!.id)).length
+
+    const invalidHeader = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      'wrong-secret',
+      {
+        update_id: 1,
+        message: {
+          message_id: 10,
+          text: 'hello',
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+        },
+      },
+    )
+    assert(invalidHeader.status === 'rejected', 'Telegram webhook rejects invalid header secret')
+
+    const first = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 2,
+        message: {
+          message_id: 10,
+          text: 'first thread',
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+        },
+      },
+    )
+    assert(first.status === 'processed' && first.sessionId != null, 'Telegram free message starts a session')
+
+    const firstSessionId = first.sessionId!
+    const firstSession = await repos.sessions.getById(firstSessionId)
+    assert(firstSession?.source === 'telegram', 'Telegram-created session is marked with telegram source')
+
+    const duplicate = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 2,
+        message: {
+          message_id: 10,
+          text: 'first thread',
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+        },
+      },
+    )
+    assert(duplicate.status === 'ignored' && duplicate.reason === 'duplicate_update', 'Telegram dedupes repeated update ids')
+
+    const headAfterFirst = runtime.db
+      .select()
+      .from(schema.telegramMessageLinks)
+      .where(eq(schema.telegramMessageLinks.sessionId, firstSessionId))
+      .all()
+      .sort((a, b) => a.createdAt - b.createdAt)
+    const firstBotReplyId = headAfterFirst[headAfterFirst.length - 1]?.telegramMessageId
+    assert(typeof firstBotReplyId === 'number', 'Telegram stores outbound bot message link for first session')
+
+    const second = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 3,
+        message: {
+          message_id: 11,
+          text: 'continue same thread',
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+          reply_to_message: { message_id: firstBotReplyId! },
+        },
+      },
+    )
+    assert(second.sessionId === firstSessionId && !second.forked, 'Replying to current head continues the same Telegram session')
+
+    const secondSessionLinks = runtime.db
+      .select()
+      .from(schema.telegramMessageLinks)
+      .where(eq(schema.telegramMessageLinks.sessionId, firstSessionId))
+      .all()
+      .sort((a, b) => a.createdAt - b.createdAt)
+    const secondBotReplyId = secondSessionLinks[secondSessionLinks.length - 1]?.telegramMessageId
+
+    const forked = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 4,
+        message: {
+          message_id: 12,
+          text: 'branch from earlier point',
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+          reply_to_message: { message_id: firstBotReplyId! },
+        },
+      },
+    )
+    assert(forked.status === 'processed' && forked.forked === true, 'Replying to older Telegram message forks a new session')
+    assert(forked.sessionId != null && forked.sessionId !== firstSessionId, 'Telegram fork creates a distinct session')
+
+    const forkedSession = await repos.sessions.getById(forked.sessionId!)
+    assert(forkedSession?.parentSessionId === firstSessionId, 'Forked Telegram session links back to its parent session')
+    assert(forkedSession?.forkedFromItemId != null, 'Forked Telegram session records the anchor item')
+
+    const forkedRootAgent = await repos.agents.findRootAgent(forked.sessionId!)
+    const forkedItems = await repos.items.listByAgent(forkedRootAgent!.id)
+    const forkedMessages = forkedItems
+      .filter((item) => item.type === 'message')
+      .map((item) => `${item.role}:${item.content}`)
+    assert(forkedMessages.includes('user:first thread'), 'Forked Telegram session copies transcript up to the anchor point')
+    assert(forkedMessages.includes('assistant:Stubbed Telegram reply'), 'Forked Telegram session includes the anchored assistant reply')
+    assert(!forkedMessages.includes('user:continue same thread'), 'Forked Telegram session excludes messages after the fork point')
+    assert(forkedMessages.includes('user:branch from earlier point'), 'Forked Telegram session appends the new branch message')
+
+    const sessionCountAfterTelegram = (await repos.sessions.listByUser(devUser!.id)).length
+    assert(sessionCountAfterTelegram === sessionCountBeforeTelegram + 2, 'Telegram tests created one new session and one forked session')
+    assert(secondBotReplyId !== firstBotReplyId, 'Continuing the Telegram thread advances the head message id')
+
+    // ──────────────────────────────────────────
+    // 15. Cleanup — delete test session (cascades agents, items, tool outputs)
+    // ──────────────────────────────────────────
+    console.log('\n15. Cleanup')
     await repos.sessions.delete(session.id)
     const cleanedSession = await repos.sessions.getById(session.id)
     assert(cleanedSession === null, 'Test session cleaned up')
@@ -396,6 +633,7 @@ async function main() {
     console.error('\nFATAL ERROR:', err)
     failed++
   } finally {
+    globalThis.fetch = originalFetch
     // Remove temp database
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }

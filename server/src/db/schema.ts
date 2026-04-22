@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, index, primaryKey } from 'drizzle-orm/sqlite-core'
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -12,6 +12,9 @@ export const sessions = sqliteTable('sessions', {
   id: text('id').primaryKey(),
   userId: text('user_id').references(() => users.id),
   rootAgentId: text('root_agent_id'),
+  parentSessionId: text('parent_session_id').references((): any => sessions.id),
+  forkedFromItemId: text('forked_from_item_id').references((): any => items.id),
+  source: text('source'),
   title: text('title'),
   summary: text('summary'),
   status: text('status').default('active'),
@@ -172,5 +175,61 @@ export const mcpTools = sqliteTable(
   (table) => [
     index('mcp_tools_server_id_idx').on(table.serverId),
     index('mcp_tools_registered_name_idx').on(table.registeredName),
+  ]
+)
+
+export const telegramConnections = sqliteTable(
+  'telegram_connections',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id').references(() => users.id).notNull(),
+    botToken: text('bot_token').notNull(),
+    botUsername: text('bot_username'),
+    allowedTelegramUserId: text('allowed_telegram_user_id').notNull(),
+    webhookPathSecret: text('webhook_path_secret').notNull(),
+    webhookHeaderSecret: text('webhook_header_secret').notNull(),
+    webhookUrl: text('webhook_url'),
+    status: text('status').default('disconnected').notNull(),
+    lastError: text('last_error'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('telegram_connections_user_id_idx').on(table.userId),
+    index('telegram_connections_status_idx').on(table.status),
+  ]
+)
+
+export const telegramMessageLinks = sqliteTable(
+  'telegram_message_links',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id').references(() => telegramConnections.id).notNull(),
+    telegramChatId: text('telegram_chat_id').notNull(),
+    telegramMessageId: integer('telegram_message_id').notNull(),
+    sessionId: text('session_id').references(() => sessions.id).notNull(),
+    itemId: text('item_id').references(() => items.id),
+    senderType: text('sender_type').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('telegram_message_links_session_id_idx').on(table.sessionId),
+    index('telegram_message_links_connection_chat_message_idx').on(
+      table.connectionId,
+      table.telegramChatId,
+      table.telegramMessageId,
+    ),
+  ]
+)
+
+export const telegramUpdateDedupe = sqliteTable(
+  'telegram_update_dedupe',
+  {
+    connectionId: text('connection_id').references(() => telegramConnections.id).notNull(),
+    telegramUpdateId: integer('telegram_update_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.connectionId, table.telegramUpdateId] }),
   ]
 )

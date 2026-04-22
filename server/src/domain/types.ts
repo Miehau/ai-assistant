@@ -56,6 +56,9 @@ export interface Session {
   id: string
   userId: string
   rootAgentId: string | null
+  parentSessionId: string | null
+  forkedFromItemId: string | null
+  source: string | null
   title: string | null
   summary: string | null
   status: SessionStatus

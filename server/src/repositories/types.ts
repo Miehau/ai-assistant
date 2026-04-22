@@ -39,6 +39,9 @@ export interface UpdateAgentInput {
 export interface CreateSessionInput {
   userId: string
   title?: string | null
+  parentSessionId?: string | null
+  forkedFromItemId?: string | null
+  source?: string | null
 }
 
 export interface UpdateSessionInput {
@@ -46,6 +49,9 @@ export interface UpdateSessionInput {
   title?: string | null
   summary?: string | null
   status?: SessionStatus
+  parentSessionId?: string | null
+  forkedFromItemId?: string | null
+  source?: string | null
 }
 
 export interface CreateUserInput {
@@ -144,6 +150,7 @@ export interface AgentRepository {
 
 export interface ItemRepository {
   create(input: CreateItemInput): Promise<Item>
+  getById(id: string): Promise<Item | null>
   listByAgent(agentId: string): Promise<Item[]>
   listBySession(sessionId: string): Promise<Item[]>
   getOutputByCallId(callId: string): Promise<Item | null>

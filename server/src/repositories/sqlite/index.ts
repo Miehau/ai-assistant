@@ -81,6 +81,9 @@ function toSession(row: typeof schema.sessions.$inferSelect): Session {
     id: row.id,
     userId: row.userId!,
     rootAgentId: row.rootAgentId ?? null,
+    parentSessionId: row.parentSessionId ?? null,
+    forkedFromItemId: row.forkedFromItemId ?? null,
+    source: row.source ?? null,
     title: row.title ?? null,
     summary: row.summary ?? null,
     status: (row.status ?? 'active') as SessionStatus,
@@ -208,6 +211,9 @@ function createSessionRepo(db: DrizzleInstance): SessionRepository {
         id,
         userId: input.userId,
         rootAgentId: null,
+        parentSessionId: input.parentSessionId ?? null,
+        forkedFromItemId: input.forkedFromItemId ?? null,
+        source: input.source ?? null,
         title: input.title ?? null,
         summary: null,
         status: 'active' as const,
@@ -242,6 +248,9 @@ function createSessionRepo(db: DrizzleInstance): SessionRepository {
       const now = Date.now()
       const updates: Record<string, unknown> = { updatedAt: now }
       if (input.rootAgentId !== undefined) updates.rootAgentId = input.rootAgentId
+      if (input.parentSessionId !== undefined) updates.parentSessionId = input.parentSessionId
+      if (input.forkedFromItemId !== undefined) updates.forkedFromItemId = input.forkedFromItemId
+      if (input.source !== undefined) updates.source = input.source
       if (input.title !== undefined) updates.title = input.title
       if (input.summary !== undefined) updates.summary = input.summary
       if (input.status !== undefined) updates.status = input.status
@@ -273,6 +282,7 @@ function createSessionRepo(db: DrizzleInstance): SessionRepository {
 
         tx.delete(schema.agents).where(eq(schema.agents.sessionId, id)).run()
         tx.delete(schema.workflowRuns).where(eq(schema.workflowRuns.sessionId, id)).run()
+        tx.delete(schema.telegramMessageLinks).where(eq(schema.telegramMessageLinks.sessionId, id)).run()
         tx.delete(schema.sessions).where(eq(schema.sessions.id, id)).run()
       })
     },
@@ -418,6 +428,16 @@ function createItemRepo(db: DrizzleInstance): ItemRepository {
       })
 
       return toItem(row)
+    },
+
+    async getById(id: string): Promise<Item | null> {
+      const rows = db
+        .select()
+        .from(schema.items)
+        .where(eq(schema.items.id, id))
+        .limit(1)
+        .all()
+      return rows.length > 0 ? toItem(rows[0]) : null
     },
 
     async listByAgent(agentId: string): Promise<Item[]> {
@@ -801,6 +821,9 @@ export function createDatabase(url: string): DrizzleInstance {
       id TEXT PRIMARY KEY,
       user_id TEXT REFERENCES users(id),
       root_agent_id TEXT,
+      parent_session_id TEXT REFERENCES sessions(id),
+      forked_from_item_id TEXT REFERENCES items(id),
+      source TEXT,
       title TEXT,
       summary TEXT,
       status TEXT DEFAULT 'active',
@@ -916,6 +939,36 @@ export function createDatabase(url: string): DrizzleInstance {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS telegram_connections (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      bot_token TEXT NOT NULL,
+      bot_username TEXT,
+      allowed_telegram_user_id TEXT NOT NULL,
+      webhook_path_secret TEXT NOT NULL,
+      webhook_header_secret TEXT NOT NULL,
+      webhook_url TEXT,
+      status TEXT NOT NULL DEFAULT 'disconnected',
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS telegram_message_links (
+      id TEXT PRIMARY KEY,
+      connection_id TEXT NOT NULL REFERENCES telegram_connections(id),
+      telegram_chat_id TEXT NOT NULL,
+      telegram_message_id INTEGER NOT NULL,
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      item_id TEXT REFERENCES items(id),
+      sender_type TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS telegram_update_dedupe (
+      connection_id TEXT NOT NULL REFERENCES telegram_connections(id),
+      telegram_update_id INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (connection_id, telegram_update_id)
+    );
     CREATE INDEX IF NOT EXISTS agents_session_id_idx ON agents(session_id);
     CREATE INDEX IF NOT EXISTS agents_status_idx ON agents(status);
     CREATE INDEX IF NOT EXISTS items_agent_id_sequence_idx ON items(agent_id, sequence);
@@ -926,11 +979,19 @@ export function createDatabase(url: string): DrizzleInstance {
     CREATE INDEX IF NOT EXISTS mcp_servers_enabled_idx ON mcp_servers(enabled);
     CREATE INDEX IF NOT EXISTS mcp_tools_server_id_idx ON mcp_tools(server_id);
     CREATE INDEX IF NOT EXISTS mcp_tools_registered_name_idx ON mcp_tools(registered_name);
+    CREATE INDEX IF NOT EXISTS telegram_connections_user_id_idx ON telegram_connections(user_id);
+    CREATE INDEX IF NOT EXISTS telegram_connections_status_idx ON telegram_connections(status);
+    CREATE INDEX IF NOT EXISTS telegram_message_links_session_id_idx ON telegram_message_links(session_id);
+    CREATE INDEX IF NOT EXISTS telegram_message_links_connection_chat_message_idx
+      ON telegram_message_links(connection_id, telegram_chat_id, telegram_message_id);
   `)
 
   // Incremental migrations — ADD COLUMN IF NOT EXISTS (SQLite has no such syntax, so try/catch)
   try { sqlite.exec(`ALTER TABLE items ADD COLUMN content_blocks TEXT;`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE workflow_runs ADD COLUMN steps TEXT;`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT REFERENCES sessions(id);`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE sessions ADD COLUMN forked_from_item_id TEXT REFERENCES items(id);`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE sessions ADD COLUMN source TEXT;`) } catch { /* already exists */ }
 
   return drizzle(sqlite, { schema })
 }

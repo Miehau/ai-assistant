@@ -3,46 +3,16 @@ import { streamSSE } from 'hono/streaming'
 import { randomUUID } from 'node:crypto'
 import { logger } from '../lib/logger.js'
 import type { RuntimeContext } from '../lib/runtime.js'
-import type { OrchestratorDeps } from '../orchestrator/types.js'
 import type { Item } from '../domain/types.js'
 import { runAgent } from '../orchestrator/runner.js'
 import { deliverResult, deliverApproval } from '../orchestrator/delivery.js'
 import { EVENT_TYPES } from '../events/types.js'
 import { cancelAgent } from '../domain/index.js'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function resolveProvider(runtime: RuntimeContext, model: string) {
-  return runtime.providers.resolve(model)
-}
-
-function extractProviderName(model: string): string {
-  const idx = model.indexOf(':')
-  return idx === -1 ? model : model.slice(0, idx)
-}
-
-function buildDeps(runtime: RuntimeContext, model: string): OrchestratorDeps {
-  return {
-    agents: runtime.repositories.agents,
-    items: runtime.repositories.items,
-    toolOutputs: runtime.repositories.toolOutputs,
-    preferences: runtime.repositories.preferences,
-    provider: resolveProvider(runtime, model),
-    providers: runtime.providers,
-    tools: runtime.tools,
-    events: runtime.events,
-    agentDefinitions: runtime.agentDefinitions,
-    interceptHandlers: runtime.interceptHandlers,
-  }
-}
-
-function formatOutput(items: Item[]): Item[] {
-  return items.filter(
-    (i) => i.type === 'message' && i.role === 'assistant',
-  )
-}
+import {
+  buildDeps,
+  formatAssistantOutput,
+  prepareSessionTurn,
+} from '../services/session-runner.js'
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -70,131 +40,29 @@ export function chatRoutes(runtime: RuntimeContext) {
         maxTokens?: number
       }>()
 
-      // Reload agent definitions from disk so new .md files are picked up
-      await runtime.agentDefinitions.reload()
-
-      // Resolve agent definition if specified — its model/prompt/tools take effect
-      const agentDef = body.agent
-        ? runtime.agentDefinitions.get(body.agent)
-        : undefined
-
-      if (body.agent && !agentDef) {
-        const available = runtime.agentDefinitions.list().map((d) => d.name).join(', ')
-        return c.json({ error: `Unknown agent: "${body.agent}". Available: ${available}` }, 400)
-      }
-
-      const model = body.model ?? agentDef?.model ?? runtime.config.defaultModel
       const userId = c.get('userId') as string
+      const prepared = await prepareSessionTurn(runtime, {
+        userId,
+        sessionId: body.sessionId,
+        model: body.model,
+        agent: body.agent,
+        input: body.input,
+        instructions: body.instructions,
+        systemPrompt: body.systemPrompt,
+        mcpServerIds: body.mcpServerIds,
+      })
 
-      // 1. Get or create session
-      let sessionId = body.sessionId
-      if (!sessionId) {
-        const session = await runtime.repositories.sessions.create({
-          userId,
-          title: typeof body.input === 'string'
-            ? body.input.slice(0, 100)
-            : 'New conversation',
-        })
-        sessionId = session.id
-      } else {
-        const existing = await runtime.repositories.sessions.getById(sessionId)
-        if (!existing) {
-          return c.json({ error: `Session not found: ${sessionId}` }, 404)
-        }
-      }
-
-      // 2. Reuse existing root agent or create a new one
-      let agent = await runtime.repositories.agents.findRootAgent(sessionId)
-
-      if (agent && (agent.status === 'completed' || agent.status === 'failed' || agent.status === 'cancelled')) {
-        // Resume the existing agent — add new message and re-run
-        await runtime.repositories.agents.update(agent.id, {
-          status: 'running',
-          result: null,
-          error: null,
-          completedAt: null,
-        })
-        agent = (await runtime.repositories.agents.getById(agent.id))!
-      } else if (agent && (agent.status === 'running' || agent.status === 'waiting')) {
-        // Agent is still active — return its current state
-        const items = await runtime.repositories.items.listByAgent(agent.id)
-        const output = formatOutput(items)
+      if (prepared.status === 'active') {
         return c.json({
-          id: agent.id,
-          sessionId,
-          status: agent.status,
-          output,
-          waitingFor: agent.waitingFor.length > 0 ? agent.waitingFor : undefined,
+          id: prepared.agent.id,
+          sessionId: prepared.sessionId,
+          status: prepared.agent.status,
+          output: prepared.output,
+          waitingFor: prepared.agent.waitingFor.length > 0 ? prepared.agent.waitingFor : undefined,
         }, 202)
-      } else {
-        // No root agent — create one
-        const task = typeof body.input === 'string'
-          ? body.input
-          : JSON.stringify(body.input)
-
-        agent = await runtime.repositories.agents.create({
-          sessionId,
-          task,
-          config: {
-            model,
-            provider: extractProviderName(model),
-            max_turns: agentDef?.max_turns ?? 50,
-            max_tool_calls_per_step: 10,
-            tool_execution_timeout_ms: 60_000,
-            ...(body.systemPrompt
-              ? { system_prompt: body.systemPrompt }
-              : agentDef?.system_prompt
-                ? { system_prompt: agentDef.system_prompt }
-                : {}),
-            ...(agentDef?.tools ? { allowed_tools: agentDef.tools } : {}),
-            ...(body.mcpServerIds?.length
-              ? {
-                  tools: runtime.mcps.getNewSessionToolSnapshot(body.mcpServerIds),
-                  tool_source_ids: body.mcpServerIds,
-                }
-              : {}),
-          },
-        })
       }
 
-      // 3. Store user input as item(s) on the agent
-      if (typeof body.input === 'string') {
-        await runtime.repositories.items.create({
-          agentId: agent.id,
-          type: 'message',
-          role: 'user',
-          content: body.input,
-          turnNumber: agent.turnCount,
-        })
-      } else if (Array.isArray(body.input)) {
-        for (const item of body.input) {
-          await runtime.repositories.items.create({
-            agentId: agent.id,
-            type: item.type ?? 'message',
-            role: item.role ?? 'user',
-            content: item.content ?? null,
-            callId: item.callId ?? null,
-            name: item.name ?? null,
-            arguments: item.arguments ?? null,
-            output: item.output ?? null,
-            isError: item.isError ?? null,
-            turnNumber: agent.turnCount,
-          })
-        }
-      }
-
-      // Store instructions as system message if provided
-      if (body.instructions) {
-        await runtime.repositories.items.create({
-          agentId: agent.id,
-          type: 'message',
-          role: 'system',
-          content: body.instructions,
-          turnNumber: agent.turnCount,
-        })
-      }
-
-      // 4. Resolve provider and build deps
+      const { agent, sessionId, model } = prepared
       const deps = buildDeps(runtime, model)
 
       // 5. Streaming vs non-streaming
@@ -329,7 +197,7 @@ export function chatRoutes(runtime: RuntimeContext) {
 
       // 7. Get output items
       const items = await runtime.repositories.items.listByAgent(agent.id)
-      const output = formatOutput(items)
+      const output = formatAssistantOutput(items)
 
       if (result.status === 'waiting') {
         return c.json({
@@ -352,7 +220,10 @@ export function chatRoutes(runtime: RuntimeContext) {
     } catch (err) {
       logger.error(err, 'POST /completions failed')
       const message = err instanceof Error ? err.message : String(err)
-      return c.json({ error: message }, 500)
+      const status = message.startsWith('Unknown agent:') || message.startsWith('Session not found:')
+        ? 400
+        : 500
+      return c.json({ error: message }, status)
     }
   })
 
@@ -387,7 +258,7 @@ export function chatRoutes(runtime: RuntimeContext) {
         : agent
       const itemsAgentId = rootAgent?.id ?? result.agentId ?? agentId
       const items = await runtime.repositories.items.listByAgent(itemsAgentId)
-      const output = formatOutput(items)
+      const output = formatAssistantOutput(items)
 
       if (result.status === 'waiting') {
         return c.json({
@@ -444,7 +315,7 @@ export function chatRoutes(runtime: RuntimeContext) {
         : agent
       const itemsAgentId = rootAgent?.id ?? result.agentId ?? agentId
       const items = await runtime.repositories.items.listByAgent(itemsAgentId)
-      const output = formatOutput(items)
+      const output = formatAssistantOutput(items)
 
       if (result.status === 'waiting') {
         return c.json({

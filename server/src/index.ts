@@ -20,6 +20,7 @@ import { workflowRoutes } from './routes/workflows.js'
 import { openaiCompatRoutes } from './routes/openai-compat.js'
 import { authMiddleware } from './middleware/auth.js'
 import { mcpRoutes } from './routes/mcps.js'
+import { telegramRoutes, telegramWebhookRoutes } from './routes/telegram.js'
 
 type AppEnv = {
   Variables: {
@@ -55,6 +56,7 @@ async function main() {
 
   // Health check (no auth)
   app.get('/health', (c) => c.json({ status: 'ok', timestamp: Date.now() }))
+  app.route('/telegram', telegramWebhookRoutes(runtime))
 
   // Auth for API routes (not /health, not /v1/*)
   app.use('/api/*', authMiddleware)
@@ -70,6 +72,7 @@ async function main() {
   app.route('/api/usage', usageRoutes(runtime))
   app.route('/api/workflows', workflowRoutes(runtime))
   app.route('/api/mcps', mcpRoutes(runtime))
+  app.route('/api/telegram', telegramRoutes(runtime))
 
   // OpenAI-compatible endpoint — lets the frontend use this server as a "custom backend"
   // Register in the UI as Custom Backend with URL: http://localhost:3001/v1/chat/completions
