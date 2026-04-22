@@ -22,6 +22,15 @@ export interface AgentConfig {
   system_prompt?: string
   /** If set, only these tool names are visible to the LLM. Orchestrator-intercept tools (e.g. delegate) are always included. */
   allowed_tools?: string[]
+  /** Immutable tool metadata selected when the root session starts. */
+  tools?: Array<{
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+    requires_approval: boolean
+  }>
+  /** Optional source ids used to reconstruct UI selections such as selected MCP servers. */
+  tool_source_ids?: string[]
 }
 
 export interface Agent {

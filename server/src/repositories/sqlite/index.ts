@@ -889,12 +889,43 @@ export function createDatabase(url: string): DrizzleInstance {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      transport TEXT NOT NULL,
+      command TEXT,
+      args TEXT,
+      env TEXT,
+      cwd TEXT,
+      url TEXT,
+      bearer_token TEXT,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'disabled',
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mcp_tools (
+      id TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL REFERENCES mcp_servers(id),
+      remote_name TEXT NOT NULL,
+      registered_name TEXT NOT NULL,
+      description TEXT,
+      input_schema TEXT,
+      enabled_for_new_sessions INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS agents_session_id_idx ON agents(session_id);
     CREATE INDEX IF NOT EXISTS agents_status_idx ON agents(status);
     CREATE INDEX IF NOT EXISTS items_agent_id_sequence_idx ON items(agent_id, sequence);
     CREATE INDEX IF NOT EXISTS items_call_id_idx ON items(call_id);
     CREATE INDEX IF NOT EXISTS workflow_runs_session_id_idx ON workflow_runs(session_id);
     CREATE INDEX IF NOT EXISTS workflow_runs_status_idx ON workflow_runs(status);
+    CREATE INDEX IF NOT EXISTS mcp_servers_name_idx ON mcp_servers(name);
+    CREATE INDEX IF NOT EXISTS mcp_servers_enabled_idx ON mcp_servers(enabled);
+    CREATE INDEX IF NOT EXISTS mcp_tools_server_id_idx ON mcp_tools(server_id);
+    CREATE INDEX IF NOT EXISTS mcp_tools_registered_name_idx ON mcp_tools(registered_name);
   `)
 
   // Incremental migrations — ADD COLUMN IF NOT EXISTS (SQLite has no such syntax, so try/catch)

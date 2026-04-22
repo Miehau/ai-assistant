@@ -19,6 +19,7 @@ import { usageRoutes } from './routes/usage.js'
 import { workflowRoutes } from './routes/workflows.js'
 import { openaiCompatRoutes } from './routes/openai-compat.js'
 import { authMiddleware } from './middleware/auth.js'
+import { mcpRoutes } from './routes/mcps.js'
 
 type AppEnv = {
   Variables: {
@@ -68,6 +69,7 @@ async function main() {
   app.route('/api/tools', toolRoutes(runtime))
   app.route('/api/usage', usageRoutes(runtime))
   app.route('/api/workflows', workflowRoutes(runtime))
+  app.route('/api/mcps', mcpRoutes(runtime))
 
   // OpenAI-compatible endpoint — lets the frontend use this server as a "custom backend"
   // Register in the UI as Custom Backend with URL: http://localhost:3001/v1/chat/completions

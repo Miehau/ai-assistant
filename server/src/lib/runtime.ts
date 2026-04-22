@@ -35,6 +35,7 @@ import { WorkflowRegistryImpl } from '../workflows/registry.js'
 import { WorkflowExecutor } from '../workflows/executor.js'
 import { registerWorkflowTools } from '../workflows/tool.js'
 import { loadWorkflowDefinitions } from '../workflows/loader.js'
+import { McpManager } from '../mcp/manager.js'
 import type {
   UserRepository,
   SessionRepository,
@@ -61,6 +62,7 @@ export interface RuntimeContext {
   }
   providers: ProviderRegistry
   tools: ToolExecutor
+  mcps: McpManager
   events: EventSink & EventSource
   config: AppConfig
   db: DrizzleInstance
@@ -131,6 +133,9 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   // Intercept handlers — populated by register*Tools functions that provide orchestrator_intercept tools
   const interceptHandlers = new Map<string, InterceptHandler>()
   registerDelegateTools(tools, agentDefinitions, interceptHandlers)
+
+  const mcps = new McpManager(db, tools, config.encryptionKey)
+  await mcps.initialize()
 
   const toolCount = tools.listMetadata().length
   logger.info({ toolCount }, 'Tool registry initialized')
@@ -215,6 +220,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     },
     providers,
     tools,
+    mcps,
     events,
     config,
     db,
@@ -231,6 +237,7 @@ export async function shutdownRuntime(runtime: RuntimeContext): Promise<void> {
 
   // Abort in-flight workflow runs
   runtime.workflows?.executor.abortAll()
+  await runtime.mcps.shutdown()
 
   // Signal all in-flight agent runs to abort
   for (const controller of runtime.agentAbortControllers.values()) {

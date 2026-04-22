@@ -115,10 +115,15 @@ export async function runAgent(
       const useNativeTools = isNativeToolProvider(ctx.agent.config.provider)
       const systemPrompt = selectSystemPrompt(ctx.agent.config.provider)
       const allToolMetadata = ctx.tools.listMetadata()
+      const baseToolMetadata = allToolMetadata.filter((t) => !t.name.startsWith('mcp.'))
       const allowedTools = ctx.agent.config.allowed_tools
       let toolMetadata = allowedTools
-        ? allToolMetadata.filter((t) => t.orchestrator_intercept || allowedTools.includes(t.name))
-        : allToolMetadata
+        ? baseToolMetadata.filter((t) => t.orchestrator_intercept || allowedTools.includes(t.name))
+        : baseToolMetadata
+
+      if (ctx.agent.config.tools?.length) {
+        toolMetadata = [...toolMetadata, ...ctx.agent.config.tools]
+      }
 
       // Subagents should execute work, not re-plan or re-delegate
       if (ctx.agent.depth > 0) {

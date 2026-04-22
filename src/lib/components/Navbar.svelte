@@ -8,6 +8,7 @@
   import History from "lucide-svelte/icons/history";
   import TrendingUp from "lucide-svelte/icons/trending-up";
   import Network from "lucide-svelte/icons/network";
+  import PlugZap from "lucide-svelte/icons/plug-zap";
   import PanelLeftOpen from "lucide-svelte/icons/panel-left-open";
   import PanelLeftClose from "lucide-svelte/icons/panel-left-close";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -17,10 +18,11 @@
   import BranchDrawer from "$lib/components/branch/BranchDrawer.svelte";
   import SettingsDrawer from "$lib/components/SettingsDrawer.svelte";
   import { currentConversation } from "$lib/services/conversation";
-  import { settingsDrawerOpen, assistantsDrawerOpen, modelsDrawerOpen, usageDrawerOpen } from "$lib/stores/drawers";
+  import { settingsDrawerOpen, assistantsDrawerOpen, modelsDrawerOpen, usageDrawerOpen, mcpDrawerOpen } from "$lib/stores/drawers";
   import AssistantsDrawer from "$lib/components/AssistantsDrawer.svelte";
   import ModelsDrawer from "$lib/components/ModelsDrawer.svelte";
   import UsageDrawer from "$lib/components/UsageDrawer.svelte";
+  import McpDrawer from "$lib/components/McpDrawer.svelte";
 
   $: currentPath = $page.url.pathname;
   $: hasConversation = Boolean($currentConversation?.id);
@@ -31,7 +33,7 @@
   let skipNavTransition = false;
   $: isAnyDrawerOpen =
     isConversationDrawerOpen || isBranchDrawerOpen || $settingsDrawerOpen ||
-    $assistantsDrawerOpen || $modelsDrawerOpen || $usageDrawerOpen;
+    $assistantsDrawerOpen || $modelsDrawerOpen || $usageDrawerOpen || $mcpDrawerOpen;
 
   function toggleNav() {
     const next = !isNavOpen;
@@ -43,6 +45,7 @@
       $assistantsDrawerOpen = false;
       $modelsDrawerOpen = false;
       $usageDrawerOpen = false;
+      $mcpDrawerOpen = false;
     }
   }
 
@@ -78,6 +81,11 @@
 
   function toggleUsageDrawer() {
     $usageDrawerOpen = !$usageDrawerOpen;
+    closeNav();
+  }
+
+  function toggleMcpDrawer() {
+    $mcpDrawerOpen = !$mcpDrawerOpen;
     closeNav();
   }
 
@@ -221,6 +229,14 @@
               <CodeXML class="size-4" />
               <span>Models</span>
             </button>
+            <button
+              type="button"
+              class={navItemClasses($mcpDrawerOpen)}
+              onclick={toggleMcpDrawer}
+            >
+              <PlugZap class="size-4" />
+              <span>MCPs</span>
+            </button>
           </div>
         </div>
 
@@ -283,6 +299,7 @@
 <AssistantsDrawer bind:isOpen={$assistantsDrawerOpen} onBack={openNavAfterClose} />
 <ModelsDrawer bind:isOpen={$modelsDrawerOpen} onBack={openNavAfterClose} />
 <UsageDrawer bind:isOpen={$usageDrawerOpen} onBack={openNavAfterClose} />
+<McpDrawer bind:isOpen={$mcpDrawerOpen} onBack={openNavAfterClose} />
 {#if $currentConversation?.id}
   <BranchDrawer
     conversationId={$currentConversation.id}

@@ -346,12 +346,30 @@ class BackendClient {
 
   // ============ MCP Servers ============
 
-  async getMcpServers(): Promise<McpServer[]> { return []; }
-  async getMcpServer(_id: string): Promise<McpServer | null> { return null; }
-  async createMcpServer(_input: CreateMcpServerInput): Promise<McpServer> { return {} as McpServer; }
-  async updateMcpServer(_input: UpdateMcpServerInput): Promise<McpServer | null> { return null; }
-  async deleteMcpServer(_id: string): Promise<boolean> { return false; }
-  async testMcpServer(_id: string): Promise<{ ok: boolean; status: number }> { return { ok: false, status: 0 }; }
+  async getMcpServers(): Promise<McpServer[]> {
+    return this.http.listMcpServers() as Promise<unknown> as Promise<McpServer[]>;
+  }
+  async getMcpServer(id: string): Promise<McpServer | null> {
+    return (await this.http.listMcpServers()).find((server) => server.id === id) as McpServer | undefined ?? null;
+  }
+  async createMcpServer(input: CreateMcpServerInput): Promise<McpServer> {
+    return this.http.createMcpServer(input as any) as Promise<unknown> as Promise<McpServer>;
+  }
+  async updateMcpServer(input: UpdateMcpServerInput): Promise<McpServer | null> {
+    const { id, ...updates } = input;
+    return this.http.updateMcpServer(id, updates) as Promise<unknown> as Promise<McpServer>;
+  }
+  async deleteMcpServer(id: string): Promise<boolean> {
+    await this.http.deleteMcpServer(id);
+    return true;
+  }
+  async testMcpServer(id: string): Promise<{ ok: boolean; status: number }> {
+    const server = await this.http.updateMcpServer(id, { enabled: true });
+    return { ok: server.status === 'connected', status: server.status === 'connected' ? 200 : 500 };
+  }
+  async setMcpToolEnabled(serverId: string, toolName: string, enabledForNewSessions: boolean): Promise<void> {
+    await this.http.updateMcpTool(serverId, toolName, enabledForNewSessions);
+  }
 
   // ============ Tools ============
 

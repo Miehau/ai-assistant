@@ -22,6 +22,7 @@ export interface HonoStreamOptions {
   agent?: string;
   instructions?: string;
   systemPrompt?: string;
+  mcpServerIds?: string[];
   /** Called as soon as the server's session ID is known (first SSE event).
    *  Persist it immediately so follow-up messages don't lose context on abort. */
   onSessionId?: (sessionId: string) => void;
@@ -88,7 +89,14 @@ export async function streamMessageViaHono(
 
   for await (const sseEvent of client.sendMessageStream(
     input,
-    { sessionId: options.sessionId, model: options.model, agent: options.agent, instructions: options.instructions, systemPrompt: options.systemPrompt },
+    {
+      sessionId: options.sessionId,
+      model: options.model,
+      agent: options.agent,
+      instructions: options.instructions,
+      systemPrompt: options.systemPrompt,
+      mcpServerIds: options.mcpServerIds,
+    },
     signal,
   )) {
     const { event, data } = sseEvent;

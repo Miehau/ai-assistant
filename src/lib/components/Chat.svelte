@@ -3,14 +3,18 @@
   import {
     messages,
     availableModels,
+    availableMcpServers,
+    selectedMcpServerIds,
     systemPrompts,
     selectedModel,
     selectedSystemPrompt,
     streamingEnabled,
     isLoading,
+    isFirstMessage,
     currentMessage,
     attachments,
     loadModels,
+    loadMcpServers,
     loadSystemPrompts,
     loadConversationHistory,
     toggleStreaming,
@@ -38,6 +42,7 @@
   onMount(() => {
     startAgentEvents();
     void loadModels();
+    void loadMcpServers();
     void loadSystemPrompts();
 
     // Debug models after loading
@@ -116,8 +121,11 @@
       {#snippet controls()}
         <ChatControls
           availableModels={$availableModels}
+          availableMcpServers={$availableMcpServers}
           systemPrompts={$systemPrompts}
           bind:selectedModel={$selectedModel}
+          bind:selectedMcpServerIds={$selectedMcpServerIds}
+          mcpSelectionLocked={!$isFirstMessage}
           bind:selectedSystemPrompt={$selectedSystemPrompt}
           bind:streamingEnabled={$streamingEnabled}
           onToggleStreaming={handleToggleStreaming}

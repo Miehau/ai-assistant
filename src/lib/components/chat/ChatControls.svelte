@@ -6,12 +6,16 @@
     import { modelRegistry } from "$lib/models/registry";
     import { type ModelWithBackend, saveLastUsedModel } from "$lib/stores/chat";
     import type { SystemPrompt } from "$lib/types";
+    import type { McpServer } from "$lib/types/mcpServer";
     import { Eye, Headphones, Database, Brain } from "lucide-svelte";
 
     interface Props {
         availableModels?: Model[];
+        availableMcpServers?: McpServer[];
         systemPrompts?: SystemPrompt[];
         selectedModel: string;
+        selectedMcpServerIds?: string[];
+        mcpSelectionLocked?: boolean;
         selectedSystemPrompt?: SystemPrompt | null;
         streamingEnabled?: boolean;
         onSystemPromptSelect?: (prompt: SystemPrompt) => void;
@@ -22,8 +26,11 @@
 
     let {
         availableModels = [],
+        availableMcpServers = [],
         systemPrompts = [],
         selectedModel = $bindable(),
+        selectedMcpServerIds = $bindable([]),
+        mcpSelectionLocked = false,
         selectedSystemPrompt = $bindable(null),
         streamingEnabled = $bindable(true),
         onSystemPromptSelect,
@@ -51,6 +58,7 @@
 
     // Track if model dropdown is open for lazy-loading tooltips
     let modelDropdownOpen = $state(false);
+    let mcpDropdownOpen = $state(false);
 
     // Get the display provider name for a model
     // Custom models use their backend name, others use their provider
@@ -94,6 +102,24 @@
 
         return groups;
     });
+
+    const enabledMcpServers = $derived(availableMcpServers.filter((server) => server.enabled));
+    const selectedMcpLabel = $derived.by(() => {
+        if (selectedMcpServerIds.length === 0) return "No MCPs";
+        const names = selectedMcpServerIds
+            .map((id) => availableMcpServers.find((server) => server.id === id)?.name)
+            .filter(Boolean);
+        if (names.length === 0) return `${selectedMcpServerIds.length} MCPs`;
+        if (names.length <= 2) return names.join(", ");
+        return `${names.length} MCPs`;
+    });
+
+    function toggleMcpServer(id: string) {
+        if (mcpSelectionLocked) return;
+        selectedMcpServerIds = selectedMcpServerIds.includes(id)
+            ? selectedMcpServerIds.filter((serverId) => serverId !== id)
+            : [...selectedMcpServerIds, id];
+    }
 </script>
 
 <div class="group flex items-center justify-between w-full gap-2">
@@ -338,6 +364,45 @@
                     </Select.Content>
                 </Select.Portal>
             </Select.Root>
+        </div>
+
+        <span class="h-3 w-px bg-white/10"></span>
+
+        <div class="relative flex items-center gap-2 min-w-0">
+            <span class="text-[8px] uppercase tracking-wide text-muted-foreground/50">MCP</span>
+            <button
+                type="button"
+                class="min-w-[110px] max-w-[190px] h-6 rounded-full border border-white/10 bg-white/[0.02] px-2 text-[11px] shadow-none hover:bg-white/[0.04] disabled:opacity-60"
+                onclick={() => mcpDropdownOpen = !mcpDropdownOpen}
+                disabled={mcpSelectionLocked}
+                title={mcpSelectionLocked ? "MCP selection is locked for this chat session" : "Select MCP servers"}
+            >
+                <span class="block truncate">{selectedMcpLabel}</span>
+            </button>
+            {#if mcpDropdownOpen && !mcpSelectionLocked}
+                <div class="absolute left-8 bottom-8 z-50 w-72 rounded-lg border border-white/10 bg-background p-2 shadow-xl">
+                    {#if enabledMcpServers.length === 0}
+                        <p class="px-2 py-1.5 text-xs text-muted-foreground">No enabled MCP servers.</p>
+                    {:else}
+                        {#each enabledMcpServers as server (server.id)}
+                            <label class="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-white/5">
+                                <input
+                                    type="checkbox"
+                                    class="mt-0.5"
+                                    checked={selectedMcpServerIds.includes(server.id)}
+                                    onchange={() => toggleMcpServer(server.id)}
+                                />
+                                <span class="min-w-0">
+                                    <span class="block truncate font-medium">{server.name}</span>
+                                    <span class="block truncate text-[10px] text-muted-foreground">
+                                        {server.tools.filter((tool) => tool.enabledForNewSessions).length} tools · {server.status}
+                                    </span>
+                                </span>
+                            </label>
+                        {/each}
+                    {/if}
+                </div>
+            {/if}
         </div>
     </div>
 

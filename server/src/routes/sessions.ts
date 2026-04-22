@@ -3,8 +3,10 @@ import { logger } from '../lib/logger.js'
 import { splitModelId } from '../lib/model.js'
 import type { RuntimeContext } from '../lib/runtime.js'
 
-export function sessionRoutes(runtime: RuntimeContext): Hono {
-  const app = new Hono()
+type SessionEnv = { Variables: { userId: string } }
+
+export function sessionRoutes(runtime: RuntimeContext): Hono<SessionEnv> {
+  const app = new Hono<SessionEnv>()
 
   // GET / — List user's sessions
   app.get('/', async (c) => {

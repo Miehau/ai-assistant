@@ -37,6 +37,8 @@ import type {
 import type { AgentPlan, AgentPlanStep, PhaseKind } from '$lib/types/agent';
 import { currentConversationUsage } from '$lib/stores/tokenUsage';
 import type { OllamaModel } from '$lib/types/ollama';
+import type { McpServer } from '$lib/types/mcpServer';
+import { mcpServerService } from '$lib/services/mcpServerService.svelte';
 
 // Extended model type with backend name for UI display
 export interface ModelWithBackend extends Model {
@@ -47,6 +49,8 @@ export interface ModelWithBackend extends Model {
 export const messages = writable<Message[]>([]);
 export const availableModels = writable<Model[]>([]);
 export const systemPrompts = writable<SystemPrompt[]>([]);
+export const availableMcpServers = writable<McpServer[]>([]);
+export const selectedMcpServerIds = writable<string[]>([]);
 export const selectedModel = writable<string>('');
 export const selectedSystemPrompt = writable<SystemPrompt | null>(null);
 export const streamingEnabled = writable<boolean>(true);
@@ -95,6 +99,7 @@ let modelsLoaded = false;
 let modelsLoadingPromise: Promise<void> | null = null;
 let systemPromptsLoaded = false;
 let systemPromptsLoadingPromise: Promise<void> | null = null;
+let mcpServersLoadingPromise: Promise<void> | null = null;
 let honoStreamController: AbortController | null = null;
 let honoAgentId: string | null = null;
 let streamingAssistantMessageId: string | null = null;
@@ -1325,6 +1330,24 @@ export function toggleStreaming() {
   streamingEnabled.update(value => !value);
 }
 
+export async function loadMcpServers(): Promise<void> {
+  if (mcpServersLoadingPromise) return mcpServersLoadingPromise;
+  mcpServersLoadingPromise = (async () => {
+    try {
+      const servers = await mcpServerService.loadServers();
+      availableMcpServers.set(servers);
+      const availableIds = new Set(servers.filter((server) => server.enabled).map((server) => server.id));
+      selectedMcpServerIds.update((ids) => ids.filter((id) => availableIds.has(id)));
+    } catch (error) {
+      console.error('Failed to load MCP servers:', error);
+      availableMcpServers.set([]);
+    } finally {
+      mcpServersLoadingPromise = null;
+    }
+  })();
+  return mcpServersLoadingPromise;
+}
+
 // Helper to generate unique message IDs using UUID v4
 function generateMessageId(): string {
   return uuidv4();
@@ -1338,6 +1361,7 @@ export async function sendMessage() {
   const attachmentsValue = [...get(attachments)];
   const selectedModelValue = get(selectedModel);
   const selectedSystemPromptValue = get(selectedSystemPrompt);
+  const selectedMcpServerIdsValue = get(selectedMcpServerIds);
   const isFirstMessageValue = get(isFirstMessage);
 
   if (!currentMessageValue.trim() && attachmentsValue.length === 0) return;
@@ -1420,6 +1444,7 @@ export async function sendMessage() {
             : selectedModelValue || undefined,
           agent: 'planner',
           systemPrompt: systemPromptContent,
+          mcpServerIds: isFirstMessageValue ? selectedMcpServerIdsValue : undefined,
           // Persist session ID eagerly — if the stream is aborted before `done`,
           // the next follow-up message still has the correct session to resume.
           onSessionId: (sid) => sessionMap.set(currentConversation.id, sid),
@@ -1762,4 +1787,3 @@ export async function resolveToolApproval(
     }
   }
 }
-

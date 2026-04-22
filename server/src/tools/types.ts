@@ -7,6 +7,7 @@ export interface ToolExecutor {
   executeBatch(calls: ToolCall[], ctx: ToolContext): Promise<ToolBatchResult>
   getMetadata(name: string): ToolMetadata | undefined
   listMetadata(): ToolMetadata[]
+  unregister(name: string): boolean
   validateArgs(name: string, args: unknown): ValidationResult
   getPreview(name: string, args: Record<string, unknown>, ctx: ToolContext): ToolPreview | undefined
 }

@@ -51,6 +51,7 @@ export interface CompletionRequest {
   instructions?: string;
   systemPrompt?: string;
   tools?: string[];
+  mcpServerIds?: string[];
   stream?: boolean;
   temperature?: number;
   maxTokens?: number;
@@ -140,6 +141,50 @@ export interface ToolMetadata {
   description?: string;
   [key: string]: unknown;
 }
+
+export interface McpTool {
+  id: string;
+  serverId: string;
+  remoteName: string;
+  registeredName: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  enabledForNewSessions: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  transport: 'stdio' | 'streamable_http';
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string | null;
+  url: string | null;
+  bearerTokenConfigured: boolean;
+  enabled: boolean;
+  status: 'disabled' | 'connected' | 'error';
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  tools: McpTool[];
+}
+
+export interface CreateMcpServerRequest {
+  name: string;
+  transport: 'stdio' | 'streamable_http';
+  command?: string | null;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string | null;
+  url?: string | null;
+  bearerToken?: string | null;
+  enabled?: boolean;
+}
+
+export type UpdateMcpServerRequest = Partial<CreateMcpServerRequest>;
 
 export interface ModelInfo {
   id?: string;
@@ -530,6 +575,36 @@ export class HttpBackendClient {
 
   async listTools(signal?: AbortSignal): Promise<ToolMetadata[]> {
     return this.request<ToolMetadata[]>('GET', '/api/tools', undefined, signal);
+  }
+
+  async listMcpServers(signal?: AbortSignal): Promise<McpServer[]> {
+    return this.request<McpServer[]>('GET', '/api/mcps', undefined, signal);
+  }
+
+  async createMcpServer(input: CreateMcpServerRequest, signal?: AbortSignal): Promise<McpServer> {
+    return this.request<McpServer>('POST', '/api/mcps', input, signal);
+  }
+
+  async updateMcpServer(id: string, input: UpdateMcpServerRequest, signal?: AbortSignal): Promise<McpServer> {
+    return this.request<McpServer>('PATCH', `/api/mcps/${id}`, input, signal);
+  }
+
+  async deleteMcpServer(id: string, signal?: AbortSignal): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>('DELETE', `/api/mcps/${id}`, undefined, signal);
+  }
+
+  async updateMcpTool(
+    serverId: string,
+    toolName: string,
+    enabledForNewSessions: boolean,
+    signal?: AbortSignal,
+  ): Promise<McpTool> {
+    return this.request<McpTool>(
+      'PATCH',
+      `/api/mcps/${serverId}/tools/${encodeURIComponent(toolName)}`,
+      { enabledForNewSessions },
+      signal,
+    );
   }
 
   // ========================================================================

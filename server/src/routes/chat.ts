@@ -64,6 +64,7 @@ export function chatRoutes(runtime: RuntimeContext) {
         instructions?: string
         systemPrompt?: string
         tools?: string[]
+        mcpServerIds?: string[]
         stream?: boolean
         temperature?: number
         maxTokens?: number
@@ -146,6 +147,12 @@ export function chatRoutes(runtime: RuntimeContext) {
                 ? { system_prompt: agentDef.system_prompt }
                 : {}),
             ...(agentDef?.tools ? { allowed_tools: agentDef.tools } : {}),
+            ...(body.mcpServerIds?.length
+              ? {
+                  tools: runtime.mcps.getNewSessionToolSnapshot(body.mcpServerIds),
+                  tool_source_ids: body.mcpServerIds,
+                }
+              : {}),
           },
         })
       }

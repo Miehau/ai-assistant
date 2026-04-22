@@ -131,3 +131,46 @@ export const workflowRuns = sqliteTable(
     index('workflow_runs_status_idx').on(table.status),
   ]
 )
+
+export const mcpServers = sqliteTable(
+  'mcp_servers',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    transport: text('transport').notNull(),
+    command: text('command'),
+    args: text('args'),
+    env: text('env'),
+    cwd: text('cwd'),
+    url: text('url'),
+    bearerToken: text('bearer_token'),
+    enabled: integer('enabled').default(0).notNull(),
+    status: text('status').default('disabled').notNull(),
+    error: text('error'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('mcp_servers_name_idx').on(table.name),
+    index('mcp_servers_enabled_idx').on(table.enabled),
+  ]
+)
+
+export const mcpTools = sqliteTable(
+  'mcp_tools',
+  {
+    id: text('id').primaryKey(),
+    serverId: text('server_id').references(() => mcpServers.id).notNull(),
+    remoteName: text('remote_name').notNull(),
+    registeredName: text('registered_name').notNull(),
+    description: text('description'),
+    inputSchema: text('input_schema'),
+    enabledForNewSessions: integer('enabled_for_new_sessions').default(1).notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    index('mcp_tools_server_id_idx').on(table.serverId),
+    index('mcp_tools_registered_name_idx').on(table.registeredName),
+  ]
+)

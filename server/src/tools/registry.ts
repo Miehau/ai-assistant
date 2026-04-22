@@ -20,6 +20,10 @@ export class ToolRegistryImpl implements ToolExecutor {
     this.handlers.set(handler.metadata.name, handler)
   }
 
+  unregister(name: string): boolean {
+    return this.handlers.delete(name)
+  }
+
   async execute(
     name: string,
     args: Record<string, unknown>,
