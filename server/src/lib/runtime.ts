@@ -14,13 +14,13 @@ import { registerFileTools } from '../tools/files.js'
 import { registerShellTools } from '../tools/shell.js'
 import { registerWebTools } from '../tools/web.js'
 import { registerSearchTools } from '../tools/search.js'
+import { registerNoteTools } from '../tools/notes.js'
 import { registerToolOutputTools } from '../tools/tool-outputs.js'
 import { registerPreferenceTools } from '../tools/preferences.js'
 import { registerDelegateTools } from '../tools/delegate.js'
 import { loadAgentDefinitions } from '../agents/loader.js'
 import { AgentDefinitionRegistryImpl } from '../agents/registry.js'
 import type { AgentDefinitionRegistry } from '../agents/registry.js'
-import { registerVerifyTools } from '../tools/verify.js'
 import { registerTaskTools } from '../tools/tasks.js'
 import { registerThinkTool } from '../tools/think.js'
 import { logger } from './logger.js'
@@ -118,7 +118,6 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   registerSearchTools(tools)
   registerToolOutputTools(tools, repos.toolOutputs)
   registerPreferenceTools(tools, repos.preferences)
-  registerVerifyTools(tools)
   registerThinkTool(tools)
 
   // Task management tools — files stored in data/tasks/, outputs in data/workspace/
@@ -129,6 +128,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     ? config.workspaceDir
     : path.resolve(SERVER_ROOT, config.workspaceDir)
   registerTaskTools(tools, tasksDir, workspaceDir)
+  registerNoteTools(tools, path.resolve(SERVER_ROOT, './data/research-notes'), [workspaceDir])
 
   // Intercept handlers — populated by register*Tools functions that provide orchestrator_intercept tools
   const interceptHandlers = new Map<string, InterceptHandler>()

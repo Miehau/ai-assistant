@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import * as schema from '../db/schema.js'
 import { loadConfig } from '../lib/config.js'
 import { initRuntime, type RuntimeContext } from '../lib/runtime.js'
@@ -384,10 +384,10 @@ async function main() {
     // 14. Telegram integration
     // ──────────────────────────────────────────
     console.log('\n14. Telegram integration')
-    providers.register('stub', {
+    const stubProvider = {
       async generate() {
         return {
-          content: { action: 'complete', message: 'Stubbed Telegram reply' },
+          content: 'Stubbed Telegram reply',
           usage: { input_tokens: 1, output_tokens: 1 },
           finish_reason: 'stop',
         }
@@ -396,13 +396,15 @@ async function main() {
         yield {
           type: 'done' as const,
           response: {
-            content: { action: 'complete', message: 'Stubbed Telegram reply' },
+            content: 'Stubbed Telegram reply',
             usage: { input_tokens: 1, output_tokens: 1 },
             finish_reason: 'stop',
           },
         }
       },
-    })
+    }
+    providers.register('stub', stubProvider)
+    providers.register('openrouter', stubProvider)
 
     let sentMessageId = 1000
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -523,6 +525,7 @@ async function main() {
     assert(first.status === 'processed' && first.sessionId != null, 'Telegram free message starts a session')
 
     const firstSessionId = first.sessionId!
+    await waitForTelegramBotReplies(runtime, firstSessionId, 2)
     const firstSession = await repos.sessions.getById(firstSessionId)
     assert(firstSession?.source === 'telegram', 'Telegram-created session is marked with telegram source')
 
@@ -547,7 +550,8 @@ async function main() {
       .from(schema.telegramMessageLinks)
       .where(eq(schema.telegramMessageLinks.sessionId, firstSessionId))
       .all()
-      .sort((a, b) => a.createdAt - b.createdAt)
+      .filter((link) => link.senderType === 'bot' && link.itemId != null)
+      .sort((a, b) => (a.createdAt - b.createdAt) || (a.telegramMessageId - b.telegramMessageId))
     const firstBotReplyId = headAfterFirst[headAfterFirst.length - 1]?.telegramMessageId
     assert(typeof firstBotReplyId === 'number', 'Telegram stores outbound bot message link for first session')
 
@@ -567,6 +571,7 @@ async function main() {
       },
     )
     assert(second.sessionId === firstSessionId && !second.forked, 'Replying to current head continues the same Telegram session')
+    await waitForTelegramBotReplies(runtime, firstSessionId, 4)
 
     const secondSessionLinks = runtime.db
       .select()
@@ -640,6 +645,28 @@ async function main() {
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`)
   process.exit(failed > 0 ? 1 : 0)
+}
+
+async function waitForTelegramBotReplies(
+  runtime: RuntimeContext,
+  sessionId: string,
+  expectedCount: number,
+): Promise<void> {
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline) {
+    const count = runtime.db
+      .select()
+      .from(schema.telegramMessageLinks)
+      .where(and(
+        eq(schema.telegramMessageLinks.sessionId, sessionId),
+        eq(schema.telegramMessageLinks.senderType, 'bot'),
+      ))
+      .all()
+      .length
+    if (count >= expectedCount) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error(`Timed out waiting for ${expectedCount} Telegram bot replies in session ${sessionId}`)
 }
 
 main()

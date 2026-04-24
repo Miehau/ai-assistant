@@ -5,6 +5,7 @@ import type {
   LLMResponse,
   LLMStreamEvent,
   LLMToolCall,
+  LLMToolDefinition,
 } from './types.js'
 
 const BASE_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -36,6 +37,7 @@ export class OpenRouterProvider implements LLMProvider {
 
   async generate(request: LLMRequest): Promise<LLMResponse> {
     const body = buildRequestBody(request)
+    preflightRequestBody(body)
 
     logger.debug({ provider: 'openrouter', model: request.model, messages: body.messages }, 'LLM request messages')
     logger.debug('LLM request tools:\n%s', JSON.stringify(body.tools, null, 2))
@@ -70,6 +72,7 @@ export class OpenRouterProvider implements LLMProvider {
       stream: true,
       stream_options: { include_usage: true },
     }
+    preflightRequestBody(body)
 
     const res = await fetch(BASE_URL, {
       method: 'POST',
@@ -254,7 +257,7 @@ function parseOpenRouterSSEBlock(block: string): ChatCompletionChunk | '[DONE]' 
 // Request building
 // ---------------------------------------------------------------------------
 
-function buildRequestBody(request: LLMRequest): Record<string, unknown> {
+export function buildRequestBody(request: LLMRequest): Record<string, unknown> {
   const messages: Record<string, unknown>[] = []
   let deferredImages: Array<{ type: string; data?: string; media_type?: string }> = []
 
@@ -362,14 +365,7 @@ function buildRequestBody(request: LLMRequest): Record<string, unknown> {
   }
 
   const tools = request.tools?.length
-    ? request.tools.map((t) => ({
-        type: 'function',
-        function: {
-          name: sanitizeToolName(t.name),
-          description: t.description,
-          parameters: t.parameters,
-        },
-      }))
+    ? request.tools.map(mapToolDefinition)
     : undefined
 
   return {
@@ -389,6 +385,54 @@ function buildRequestBody(request: LLMRequest): Record<string, unknown> {
       },
     }),
   }
+}
+
+function mapToolDefinition(tool: LLMToolDefinition): Record<string, unknown> {
+  if (tool.name === 'web_search') {
+    return { type: 'openrouter:web_search' }
+  }
+  return {
+    type: 'function',
+    function: {
+      name: sanitizeToolName(tool.name),
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  }
+}
+
+export function preflightRequestBody(body: Record<string, unknown>): void {
+  if (typeof body.model !== 'string' || !body.model) {
+    throw new Error('Invalid OpenRouter request: model is required')
+  }
+  if (!Array.isArray(body.messages)) {
+    throw new Error('Invalid OpenRouter request: messages must be an array')
+  }
+
+  const tools = body.tools
+  if (tools === undefined) return
+  if (!Array.isArray(tools)) {
+    throw new Error('Invalid OpenRouter request: tools must be an array')
+  }
+
+  for (const [index, rawTool] of tools.entries()) {
+    if (!rawTool || typeof rawTool !== 'object') {
+      throw new Error(`Invalid OpenRouter request: tools[${index}] must be an object`)
+    }
+    const tool = rawTool as Record<string, unknown>
+    if (tool.type === 'openrouter:web_search') continue
+    if (tool.type === 'function' && isFunctionToolPayload(tool.function)) continue
+    throw new Error(`Invalid OpenRouter request: unsupported tools[${index}] shape`)
+  }
+}
+
+function isFunctionToolPayload(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const fn = value as Record<string, unknown>
+  return typeof fn.name === 'string' &&
+    typeof fn.description === 'string' &&
+    !!fn.parameters &&
+    typeof fn.parameters === 'object'
 }
 
 // ---------------------------------------------------------------------------

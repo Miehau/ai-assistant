@@ -50,6 +50,7 @@ export function chatRoutes(runtime: RuntimeContext) {
         instructions: body.instructions,
         systemPrompt: body.systemPrompt,
         mcpServerIds: body.mcpServerIds,
+        allowedTools: body.tools,
       })
 
       if (prepared.status === 'active') {

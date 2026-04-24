@@ -56,13 +56,12 @@ export async function prepareSessionTurn(
 ): Promise<PreparedSessionTurn> {
   await runtime.agentDefinitions.reload()
 
-  const agentDef = body.agent
-    ? runtime.agentDefinitions.get(body.agent)
-    : undefined
+  const requestedAgent = body.agent ?? 'planner'
+  const agentDef = runtime.agentDefinitions.get(requestedAgent)
 
-  if (body.agent && !agentDef) {
+  if (!agentDef) {
     const available = runtime.agentDefinitions.list().map((d) => d.name).join(', ')
-    throw new Error(`Unknown agent: "${body.agent}". Available: ${available}`)
+    throw new Error(`Unknown agent: "${requestedAgent}". Available: ${available}`)
   }
 
   const model = body.model ?? agentDef?.model ?? runtime.config.defaultModel

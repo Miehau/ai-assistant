@@ -81,6 +81,7 @@ export async function runAgent(
     toolOutputs: deps.toolOutputs,
     preferences: deps.preferences,
     provider: deps.provider,
+    providers: deps.providers,
     tools: deps.tools,
     events: deps.events,
     agentDefinitions: deps.agentDefinitions,
@@ -118,16 +119,16 @@ export async function runAgent(
       const baseToolMetadata = allToolMetadata.filter((t) => !t.name.startsWith('mcp.'))
       const allowedTools = ctx.agent.config.allowed_tools
       let toolMetadata = allowedTools
-        ? baseToolMetadata.filter((t) => t.orchestrator_intercept || allowedTools.includes(t.name))
+        ? baseToolMetadata.filter((t) => allowedTools.includes(t.name))
         : baseToolMetadata
+      toolMetadata = filterToolMetadataForProvider(ctx.agent.config.provider, toolMetadata)
 
       if (ctx.agent.config.tools?.length) {
         toolMetadata = [...toolMetadata, ...ctx.agent.config.tools]
       }
 
-      // Subagents should execute work, not re-plan or re-delegate
-      if (ctx.agent.depth > 0) {
-        toolMetadata = toolMetadata.filter((t) => t.name !== 'delegate' && !t.name.startsWith('tasks.'))
+      if (ctx.agent.depth >= MAX_AGENT_DEPTH) {
+        toolMetadata = toolMetadata.filter((t) => t.name !== 'delegate')
       }
       const toolListStr = buildToolListString(toolMetadata)
 
@@ -438,6 +439,15 @@ function selectSystemPrompt(provider: string): string {
     default:
       return CONTROLLER_PROMPT_BASE
   }
+}
+
+function filterToolMetadataForProvider<T extends { name: string }>(provider: string, tools: T[]): T[] {
+  if (providerSupportsNativeWebSearch(provider)) return tools
+  return tools.filter((tool) => tool.name !== 'web_search')
+}
+
+function providerSupportsNativeWebSearch(provider: string): boolean {
+  return ['anthropic', 'openai', 'openrouter'].includes(provider.toLowerCase())
 }
 
 // ---------------------------------------------------------------------------
@@ -1062,7 +1072,7 @@ export async function handleDelegation(
   }
 
   // Depth guard
-  if (ctx.agent.depth + 1 > MAX_AGENT_DEPTH) {
+  if (ctx.agent.depth >= MAX_AGENT_DEPTH) {
     await ctx.items.create({
       agentId: ctx.agent.id,
       type: 'function_call_output',
@@ -1225,6 +1235,7 @@ function buildDepsFromContext(ctx: RunContext): OrchestratorDeps {
     toolOutputs: ctx.toolOutputs,
     preferences: ctx.preferences,
     provider: ctx.provider,
+    providers: ctx.providers,
     tools: ctx.tools,
     events: ctx.events,
     agentDefinitions: ctx.agentDefinitions,

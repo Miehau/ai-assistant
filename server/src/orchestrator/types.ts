@@ -59,6 +59,7 @@ export interface RunContext {
   readonly toolOutputs: ToolOutputRepository
   readonly preferences: PreferenceRepository
   readonly provider: LLMProvider
+  readonly providers?: ProviderRegistry
   readonly tools: ToolExecutor
   readonly events: EventSink
   readonly agentDefinitions: AgentDefinitionRegistry

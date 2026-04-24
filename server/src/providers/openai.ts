@@ -139,19 +139,38 @@ function mapMessagesToOpenAI(messages: LLMMessage[]): OpenAI.ChatCompletionMessa
   return mapped
 }
 
-function mapToolsToOpenAI(tools: LLMToolDefinition[]): OpenAI.ChatCompletionTool[] {
-  return tools.map((tool) => ({
-    type: 'function',
+function mapToolsToOpenAI(tools: LLMToolDefinition[]): OpenAI.ChatCompletionTool[] | undefined {
+  const mapped = tools.filter((tool) => tool.name !== 'web_search').map((tool) => ({
+    type: 'function' as const,
     function: {
       name: tool.name,
       description: tool.description,
       parameters: tool.parameters,
     },
   }))
+  return mapped.length > 0 ? mapped : undefined
+}
+
+function requestUsesWebSearch(request: LLMRequest): boolean {
+  return request.tools?.some((tool) => tool.name === 'web_search') ?? false
+}
+
+function isOpenAIWebSearchModel(model: string): boolean {
+  return model === 'gpt-5-search-api' ||
+    model === 'gpt-4o-search-preview' ||
+    model === 'gpt-4o-mini-search-preview'
+}
+
+export function resolveOpenAIModelForWebSearch(model: string): string {
+  if (isOpenAIWebSearchModel(model)) return model
+  if (model.startsWith('gpt-4o-mini')) return 'gpt-4o-mini-search-preview'
+  if (model.startsWith('gpt-4o')) return 'gpt-4o-search-preview'
+  return 'gpt-5-search-api'
 }
 
 export class OpenAIProvider implements LLMProvider {
   protected client: OpenAI
+  protected readonly supportsHostedWebSearch: boolean = true
 
   constructor(apiKey: string, baseURL?: string) {
     this.client = new OpenAI({
@@ -163,13 +182,16 @@ export class OpenAIProvider implements LLMProvider {
   async generate(request: LLMRequest): Promise<LLMResponse> {
     const messages = mapMessagesToOpenAI(request.messages)
     const tools = request.tools?.length ? mapToolsToOpenAI(request.tools) : undefined
+    const useWebSearch = this.supportsHostedWebSearch && requestUsesWebSearch(request)
+    const model = useWebSearch ? resolveOpenAIModelForWebSearch(request.model) : request.model
 
     const params: OpenAI.ChatCompletionCreateParams = {
-      model: request.model,
+      model,
       messages,
       ...(tools && { tools }),
+      ...(useWebSearch && { web_search_options: { search_context_size: 'medium' as const } }),
       ...(request.temperature !== undefined && { temperature: request.temperature }),
-      ...buildTokenLimit(request.model, request.max_tokens),
+      ...buildTokenLimit(model, request.max_tokens),
     }
 
     // Structured output via json_schema response format
@@ -194,14 +216,17 @@ export class OpenAIProvider implements LLMProvider {
   async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
     const messages = mapMessagesToOpenAI(request.messages)
     const tools = request.tools?.length ? mapToolsToOpenAI(request.tools) : undefined
+    const useWebSearch = this.supportsHostedWebSearch && requestUsesWebSearch(request)
+    const model = useWebSearch ? resolveOpenAIModelForWebSearch(request.model) : request.model
 
     const params: OpenAI.ChatCompletionCreateParams = {
-      model: request.model,
+      model,
       messages,
       stream: true,
       ...(tools && { tools }),
+      ...(useWebSearch && { web_search_options: { search_context_size: 'medium' as const } }),
       ...(request.temperature !== undefined && { temperature: request.temperature }),
-      ...buildTokenLimit(request.model, request.max_tokens),
+      ...buildTokenLimit(model, request.max_tokens),
     }
 
     if (request.structured_output) {

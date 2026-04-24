@@ -195,11 +195,19 @@ function mapMessagesToAnthropic(
   return { system, messages: mapped }
 }
 
-function mapToolsToAnthropic(tools: LLMToolDefinition[]): Anthropic.Tool[] {
+export function mapToolsToAnthropic(tools: LLMToolDefinition[]): Anthropic.ToolUnion[] {
   return tools.map((tool) => ({
-    name: sanitizeToolName(tool.name),
-    description: tool.description,
-    input_schema: stripUnsupportedSchemaKeywords(tool.parameters) as Anthropic.Tool.InputSchema,
+    ...(tool.name === 'web_search'
+      ? {
+          type: 'web_search_20250305' as const,
+          name: 'web_search' as const,
+          max_uses: 5,
+        }
+      : {
+          name: sanitizeToolName(tool.name),
+          description: tool.description,
+          input_schema: stripUnsupportedSchemaKeywords(tool.parameters) as Anthropic.Tool.InputSchema,
+        }),
   }))
 }
 

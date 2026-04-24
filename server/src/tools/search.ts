@@ -9,6 +9,24 @@ const MAX_RESULTS_DEFAULT = 200
 export function registerSearchTools(registry: { register: (h: ToolHandler) => void }): void {
   registry.register({
     metadata: {
+      name: 'web_search',
+      description: 'Provider-native web search. Provider adapters map this to their native web search capability.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+      requires_approval: false,
+    },
+    async handle(): Promise<ToolResult> {
+      return {
+        ok: false,
+        error: 'web_search is provider-native and must be consumed by the provider adapter before tool execution',
+      }
+    },
+  })
+
+  registry.register({
+    metadata: {
       name: 'search',
       description:
         'Search file contents using grep. Returns matching lines with file path, line number, and snippet.',

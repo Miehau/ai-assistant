@@ -112,6 +112,7 @@ export class TelegramService {
     this.encKey = runtime.config.encryptionKey ? deriveKey(runtime.config.encryptionKey) : null
   }
 
+  /** Return all Telegram bot connections configured by a user. */
   async listConnections(userId: string): Promise<TelegramConnectionRecord[]> {
     const rows = this.runtime.db
       .select()
@@ -122,11 +123,13 @@ export class TelegramService {
     return rows.map((row) => this.toConnectionRecord(row))
   }
 
+  /** Fetch one Telegram connection, optionally scoped to an owning user. */
   async getConnection(id: string, userId?: string): Promise<TelegramConnectionRecord | null> {
     const row = this.getConnectionRow(id, userId)
     return row ? this.toConnectionRecord(row) : null
   }
 
+  /** Create a bot connection and store Telegram secrets encrypted when possible. */
   async createConnection(userId: string, input: CreateTelegramConnectionInput): Promise<TelegramConnectionRecord> {
     const now = Date.now()
     const row: typeof schema.telegramConnections.$inferInsert = {
@@ -147,6 +150,7 @@ export class TelegramService {
     return this.toConnectionRecord(row as TelegramConnectionRow)
   }
 
+  /** Update bot credentials, webhook metadata, or connection status. */
   async updateConnection(id: string, userId: string, input: UpdateTelegramConnectionInput): Promise<TelegramConnectionRecord | null> {
     const existing = this.getConnectionRow(id, userId)
     if (!existing) return null
@@ -171,6 +175,7 @@ export class TelegramService {
     return updated ? this.toConnectionRecord(updated) : null
   }
 
+  /** Delete a connection and its Telegram-specific webhook/message bookkeeping. */
   async deleteConnection(id: string, userId: string): Promise<boolean> {
     const existing = this.getConnectionRow(id, userId)
     if (!existing) return false
@@ -183,6 +188,7 @@ export class TelegramService {
     return true
   }
 
+  /** Verify the stored bot token by calling Telegram getMe. */
   async testConnection(id: string, userId: string): Promise<{ ok: boolean; username?: string; description?: string }> {
     const connection = this.getConnectionRow(id, userId)
     if (!connection) return { ok: false, description: 'Telegram connection not found' }
@@ -208,6 +214,7 @@ export class TelegramService {
     }
   }
 
+  /** Register Telegram's webhook endpoint for this connection. */
   async registerWebhook(
     id: string,
     userId: string,
@@ -248,6 +255,7 @@ export class TelegramService {
     }
   }
 
+  /** Remove Telegram's webhook registration without dropping pending updates. */
   async deleteWebhook(id: string, userId: string): Promise<TelegramWebhookRegistrationResult | null> {
     const connection = this.getConnectionRow(id, userId)
     if (!connection) return null
@@ -267,6 +275,7 @@ export class TelegramService {
     }
   }
 
+  /** Read Telegram webhook status for diagnostics in the app UI. */
   async getWebhookInfo(id: string, userId: string): Promise<TelegramWebhookRegistrationResult | null> {
     const connection = this.getConnectionRow(id, userId)
     if (!connection) return null
@@ -289,6 +298,14 @@ export class TelegramService {
     }
   }
 
+  /**
+   * Validate and ingest a Telegram webhook update.
+   *
+   * This method keeps the HTTP webhook fast: it records the user message,
+   * sends a short acknowledgement, then starts agent execution in the background.
+   * The planner remains responsible for deciding whether to answer directly,
+   * use tools, delegate research, or save a note.
+   */
   async processWebhook(
     connectionId: string,
     pathSecret: string,
@@ -343,13 +360,12 @@ export class TelegramService {
     }
 
     const resolution = await this.resolveSession(connection, message, content)
-    const allowedTools = this.getTelegramAllowedTools()
     const prepared = await prepareSessionTurn(this.runtime, {
       userId: connection.userId,
       sessionId: resolution.sessionId,
-      model: this.getTelegramModel(),
+      agent: 'planner',
       input: content,
-      allowedTools,
+      instructions: 'Telegram transport: keep user-facing replies concise. For substantial research, save the final result as a markdown note and include the saved path.',
     })
 
     if (prepared.status === 'active') {
@@ -381,42 +397,19 @@ export class TelegramService {
     )
 
     await this.sendChatAction(connection, message.chat.id, 'typing')
-
-    const deps = buildDeps(this.runtime, prepared.model)
-    const agentAbort = new AbortController()
-    this.runtime.agentAbortControllers.set(prepared.agent.id, agentAbort)
-    const result = await runAgent(prepared.agent.id, deps, {
-      signal: AbortSignal.any([this.runtime.shutdownController.signal, agentAbort.signal]),
-    })
-    this.runtime.agentAbortControllers.delete(prepared.agent.id)
-
-    const assistantItems = await this.runtime.repositories.items.listByAgent(prepared.agent.id)
-    const lastAssistant = [...assistantItems].reverse().find(
-      (item) => item.type === 'message' && item.role === 'assistant',
-    )
-
-    let responseText = lastAssistant?.content ?? result.result ?? ''
-    if (!responseText && result.status === 'waiting') {
-      responseText = 'This thread needs approval in the app before it can continue.'
-    }
-    if (!responseText && result.error) {
-      responseText = `Telegram session failed: ${result.error}`
-    }
-    if (!responseText) {
-      responseText = 'No assistant response was produced.'
-    }
-
-    const outboundMessageId = await this.sendBotMessage(connection, message.chat.id, responseText)
-    if (outboundMessageId != null) {
+    const ackMessageId = await this.sendBotMessage(connection, message.chat.id, 'Working on it...')
+    if (ackMessageId != null) {
       await this.createMessageLink(
         connection.id,
         message.chat.id,
-        outboundMessageId,
+        ackMessageId,
         prepared.sessionId,
-        lastAssistant?.id ?? null,
+        null,
         'bot',
       )
     }
+
+    this.runPreparedTelegramAgent(connection, message.chat.id, prepared.agent.id, prepared.sessionId, prepared.model)
 
     return {
       ok: true,
@@ -426,6 +419,62 @@ export class TelegramService {
     }
   }
 
+  /**
+   * Run a prepared Telegram agent after the webhook has already returned.
+   *
+   * The final assistant response is sent back to Telegram and linked to the
+   * session transcript so replies can continue or fork from that message.
+   */
+  private runPreparedTelegramAgent(
+    connection: TelegramConnectionRow,
+    chatId: number,
+    agentId: string,
+    sessionId: string,
+    model: string,
+  ): void {
+    void (async () => {
+      const deps = buildDeps(this.runtime, model)
+      const agentAbort = new AbortController()
+      this.runtime.agentAbortControllers.set(agentId, agentAbort)
+
+      try {
+        const result = await runAgent(agentId, deps, {
+          signal: AbortSignal.any([this.runtime.shutdownController.signal, agentAbort.signal]),
+        })
+
+        const assistantItems = await this.runtime.repositories.items.listByAgent(agentId)
+        const lastAssistant = [...assistantItems].reverse().find(
+          (item) => item.type === 'message' && item.role === 'assistant',
+        )
+
+        const responseText = this.formatTelegramCompletion(lastAssistant?.content ?? result.result ?? '', result)
+        const outboundMessageId = await this.sendBotMessageWithRetry(connection, chatId, responseText)
+        if (outboundMessageId != null) {
+          await this.createMessageLink(
+            connection.id,
+            chatId,
+            outboundMessageId,
+            sessionId,
+            lastAssistant?.id ?? null,
+            'bot',
+          )
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        await this.sendBotMessageWithRetry(connection, chatId, this.formatTelegramFailure(message))
+      } finally {
+        this.runtime.agentAbortControllers.delete(agentId)
+      }
+    })()
+  }
+
+  /**
+   * Choose which app session a Telegram message belongs to.
+   *
+   * Free messages start new sessions. Replies to the current bot head continue
+   * the same session. Replies to older bot messages fork the transcript at that
+   * point so Telegram can branch conversations naturally.
+   */
   private async resolveSession(
     connection: TelegramConnectionRow,
     message: TelegramMessage,
@@ -474,6 +523,7 @@ export class TelegramService {
     }
   }
 
+  /** Copy a session transcript up to an anchored Telegram message and append the new branch message. */
   private async forkSessionFromAnchor(anchor: TelegramMessageLinkRow, content: string): Promise<string> {
     const sourceSession = await this.runtime.repositories.sessions.getById(anchor.sessionId)
     if (!sourceSession) {
@@ -531,33 +581,43 @@ export class TelegramService {
     return forkedSession.id
   }
 
-  private getTelegramAllowedTools(): string[] {
-    return this.runtime.tools.listMetadata()
-      .filter((tool) => !tool.requires_approval)
-      .filter((tool) => !tool.orchestrator_intercept)
-      .filter((tool) => !tool.name.startsWith('tasks.'))
-      .filter((tool) => !tool.name.startsWith('preferences.'))
-      .map((tool) => tool.name)
-  }
-
-  private getTelegramModel(): string {
-    const defaultProvider = this.runtime.config.defaultModel.split(':', 1)[0]
-    if (this.runtime.providers.list().includes(defaultProvider)) {
-      return this.runtime.config.defaultModel
-    }
-
-    const fallbackProvider = this.runtime.providers.list()[0]
-    if (!fallbackProvider) {
-      throw new Error('No LLM providers are registered for Telegram processing')
-    }
-    return `${fallbackProvider}:telegram`
-  }
-
+  /** Return the most recent user or assistant message item for link bookkeeping. */
   private async getLastMessageItem(agentId: string, role: 'user' | 'assistant'): Promise<Item | null> {
     const items = await this.runtime.repositories.items.listByAgent(agentId)
     return [...items].reverse().find((item) => item.type === 'message' && item.role === role) ?? null
   }
 
+  /** Convert agent completion state into a Telegram-safe message body. */
+  private formatTelegramCompletion(
+    responseText: string,
+    result: Awaited<ReturnType<typeof runAgent>>,
+  ): string {
+    if (!responseText && result.status === 'waiting') {
+      responseText = 'This thread needs approval in the app before it can continue.'
+    }
+    if (!responseText && result.error) {
+      responseText = `Telegram session failed: ${result.error}`
+    }
+    if (!responseText) {
+      responseText = 'No assistant response was produced.'
+    }
+
+    const maxLength = 3900
+    return responseText.length > maxLength
+      ? `${responseText.slice(0, maxLength - 40).trimEnd()}\n\n[truncated]`
+      : responseText
+  }
+
+  /** Convert background execution failures into a concise Telegram-safe error message. */
+  private formatTelegramFailure(message: string): string {
+    const maxDetailLength = 1200
+    const detail = message.length > maxDetailLength
+      ? `${message.slice(0, maxDetailLength).trimEnd()}...`
+      : message
+    return `Telegram session failed: ${detail}`
+  }
+
+  /** Fetch the raw DB row so internal webhook secrets remain available. */
   private getConnectionRow(id: string, userId?: string): TelegramConnectionRow | null {
     const where = userId
       ? and(eq(schema.telegramConnections.id, id), eq(schema.telegramConnections.userId, userId))
@@ -571,6 +631,7 @@ export class TelegramService {
     return row ?? null
   }
 
+  /** Find the app transcript item associated with a Telegram message. */
   private getMessageLink(connectionId: string, chatId: string, messageId: number): TelegramMessageLinkRow | null {
     const row = this.runtime.db
       .select()
@@ -585,6 +646,7 @@ export class TelegramService {
     return row ?? null
   }
 
+  /** Return the newest Telegram message linked to a session. */
   private getSessionHeadLink(connectionId: string, sessionId: string): TelegramMessageLinkRow | null {
     const row = this.runtime.db
       .select()
@@ -599,6 +661,7 @@ export class TelegramService {
     return row ?? null
   }
 
+  /** Persist the mapping between a Telegram message and an app session/item. */
   private async createMessageLink(
     connectionId: string,
     chatId: number,
@@ -622,6 +685,7 @@ export class TelegramService {
     }).run()
   }
 
+  /** Send a plain text message through the configured bot. */
   private async sendBotMessage(connection: TelegramConnectionRow, chatId: number, text: string): Promise<number | null> {
     const response = await this.callTelegram<TelegramSendMessageResponse>(connection, 'sendMessage', {
       chat_id: chatId,
@@ -630,6 +694,29 @@ export class TelegramService {
     return response.ok && response.result ? response.result.message_id : null
   }
 
+  /** Retry final Telegram sends because background results are otherwise easy to lose on transient API failures. */
+  private async sendBotMessageWithRetry(
+    connection: TelegramConnectionRow,
+    chatId: number,
+    text: string,
+    attempts: number = 3,
+  ): Promise<number | null> {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const messageId = await this.sendBotMessage(connection, chatId, text)
+      if (messageId != null) return messageId
+      if (attempt < attempts) {
+        await this.delay(250 * attempt)
+      }
+    }
+    return null
+  }
+
+  /** Sleep helper used by Telegram retry paths. */
+  private async delay(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  /** Send Telegram chat actions such as "typing". */
   private async sendChatAction(connection: TelegramConnectionRow, chatId: number, action: string): Promise<void> {
     await this.callTelegram<boolean>(connection, 'sendChatAction', {
       chat_id: chatId,
@@ -637,6 +724,7 @@ export class TelegramService {
     })
   }
 
+  /** Low-level Telegram Bot API wrapper that handles token decryption and error normalization. */
   private async callTelegram<T>(
     connection: TelegramConnectionRow,
     method: string,
@@ -662,6 +750,7 @@ export class TelegramService {
     return json
   }
 
+  /** Convert a raw database row into the public connection shape returned by routes. */
   private toConnectionRecord(row: TelegramConnectionRow): TelegramConnectionRecord {
     return {
       id: row.id,
@@ -677,10 +766,12 @@ export class TelegramService {
     }
   }
 
+  /** Encrypt secrets when ENCRYPTION_KEY is configured. */
   private storeSecret(value: string): string {
     return this.encKey ? encrypt(value, this.encKey) : value
   }
 
+  /** Decrypt stored secrets when ENCRYPTION_KEY is configured. */
   private readSecret(value: string): string {
     return this.encKey ? decrypt(value, this.encKey) : value
   }
