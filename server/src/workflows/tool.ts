@@ -3,6 +3,7 @@ import type { InterceptHandler, RunContext, OrchestratorDeps, StepExecutionOutco
 import type { WorkflowRegistry, WorkflowDefinition } from './types.js'
 import type { WorkflowExecutor } from './executor.js'
 import { EVENT_TYPES } from '../events/types.js'
+import { materializeTextOutput } from '../orchestrator/output.js'
 
 /**
  * Registers the `workflow.run` tool and its intercept handler.
@@ -233,6 +234,16 @@ function createWorkflowInterceptHandler(
         ? `Workflow ${completedRun.status}: ${completedRun.error ?? 'unknown'}`
         : JSON.stringify(completedRun.output ?? '(workflow completed with no output)')
     }
+
+    output = await materializeTextOutput(output, {
+      sessionFilesRoot: deps.sessionFilesRoot,
+      inlineLimitBytes: deps.inlineOutputLimitBytes,
+      sessionId: ctx.agent.sessionId,
+      agentId: ctx.agent.id,
+      callId,
+      toolName: 'workflow.run',
+      extension: 'json',
+    })
 
     // Emit tool_end so the client closes the tool bubble
     deps.events.emit({

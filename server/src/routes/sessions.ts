@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { logger } from '../lib/logger.js'
 import { splitModelId } from '../lib/model.js'
 import type { RuntimeContext } from '../lib/runtime.js'
+import { deleteSessionFiles } from '../tools/path-policy.js'
 
 type SessionEnv = { Variables: { userId: string } }
 
@@ -135,6 +136,7 @@ export function sessionRoutes(runtime: RuntimeContext): Hono<SessionEnv> {
       }
 
       await runtime.repositories.sessions.delete(id)
+      await deleteSessionFiles(runtime.sessionFilesRoot, id)
       return c.json({ ok: true })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

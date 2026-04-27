@@ -117,6 +117,8 @@ export interface ToolCallRecord {
   completed_at?: number;
   session_id?: string;
   parent_session_id?: string | null;
+  /** Tool execution that spawned this sub-agent session, when known. */
+  source_execution_id?: string | null;
   is_sub_agent?: boolean;
   /** Accumulated workflow progress lines (survives result overwrite on completion). */
   workflowProgress?: string;

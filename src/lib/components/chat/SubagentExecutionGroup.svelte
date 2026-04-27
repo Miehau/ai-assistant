@@ -1,30 +1,107 @@
 <script lang="ts">
   import type { ToolCallRecord } from "$lib/types";
-  import ToolCallGroup from "./ToolCallGroup.svelte";
+  import type { ToolCallGroup as ToolCallGroupModel } from "$lib/utils/toolCallGrouping";
+  import StreamingMarkdown from "../StreamingMarkdown.svelte";
+  import SubagentExecutionGroup from "./SubagentExecutionGroup.svelte";
+  import ToolCallGroupView from "./ToolCallGroup.svelte";
 
-  let { calls, sessionId, spawnCall }: { calls: ToolCallRecord[]; sessionId?: string; spawnCall?: ToolCallRecord } = $props();
+  let {
+    calls,
+    sessionId,
+    spawnCall,
+    childGroups = [],
+    depth = 1,
+  }: {
+    calls: ToolCallRecord[];
+    sessionId?: string;
+    spawnCall?: ToolCallRecord;
+    childGroups?: ToolCallGroupModel[];
+    depth?: number;
+  } = $props();
+
+  const spawnArgs = $derived(
+    spawnCall?.args && typeof spawnCall.args === 'object'
+      ? spawnCall.args as Record<string, unknown>
+      : {}
+  );
+
+  const agentName = $derived.by(() => {
+    const rawName = spawnArgs.agent ?? spawnArgs.name ?? spawnArgs.agent_name;
+    if (typeof rawName === 'string' && rawName.trim()) return rawName.trim();
+    return spawnCall?.tool_name === 'delegate' ? 'default' : undefined;
+  });
 
   /** The task prompt passed to the subagent. */
   const taskPrompt = $derived(
-    spawnCall?.args && typeof spawnCall.args === 'object' && 'prompt' in spawnCall.args
-      ? String((spawnCall.args as Record<string, unknown>).prompt)
-      : undefined
+    typeof spawnArgs.task === 'string'
+      ? spawnArgs.task
+      : typeof spawnArgs.prompt === 'string'
+        ? spawnArgs.prompt
+        : typeof spawnArgs.message === 'string'
+          ? spawnArgs.message
+          : undefined
   );
 
-  /** Final text response from the subagent, available after agent.spawn completes. */
-  const responseText = $derived(
-    spawnCall?.result && typeof spawnCall.result === 'object' && 'response' in spawnCall.result
+  const title = $derived(
+    agentName
+      ? `Subagent: ${agentName}`
+      : "Subagent"
+  );
+
+  const childGroupsBySpawnExecutionId = $derived.by(() => {
+    const byExecutionId = new Map<string, ToolCallGroupModel[]>();
+    for (const group of childGroups) {
+      const executionId = group.spawnCall?.execution_id;
+      if (!executionId) continue;
+      const existing = byExecutionId.get(executionId) ?? [];
+      existing.push(group);
+      byExecutionId.set(executionId, existing);
+    }
+    return byExecutionId;
+  });
+
+  const orphanChildGroups = $derived(
+    childGroups.filter((group) => !group.spawnCall?.execution_id)
+  );
+
+  /** Final text response from the subagent, available after the delegate completes. */
+  const responseText = $derived.by(() => {
+    if (typeof spawnCall?.result === 'string') return spawnCall.result;
+    return spawnCall?.result && typeof spawnCall.result === 'object' && 'response' in spawnCall.result
       ? String((spawnCall.result as Record<string, unknown>).response)
       : undefined
-  );
+  });
 
   const responseSuccess = $derived(
     spawnCall?.result && typeof spawnCall.result === 'object' && 'success' in spawnCall.result
       ? Boolean((spawnCall.result as Record<string, unknown>).success)
-      : undefined
+      : spawnCall?.success
   );
 
   let isOpen = $state(true);
+  let responseOpen = $state(false);
+
+  async function handleMarkdownInteraction(event: MouseEvent | KeyboardEvent) {
+    if (
+      event instanceof KeyboardEvent &&
+      event.key !== "Enter" &&
+      event.key !== " "
+    ) {
+      return;
+    }
+
+    const target = event.target as HTMLElement;
+    const copyButton = target.closest(".copy-button");
+    const code = copyButton?.getAttribute("data-copy");
+    if (!code) return;
+
+    event.preventDefault();
+    try {
+      await navigator.clipboard.writeText(decodeURIComponent(code));
+    } catch (error) {
+      console.error("Failed to copy:", error);
+    }
+  }
 
   const completedCount = $derived(calls.filter((c) => c.success === true).length);
   const failedCount = $derived(calls.filter((c) => c.success === false).length);
@@ -85,7 +162,17 @@
       </svg>
       <div class="text-left min-w-0 overflow-hidden">
         <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-xs font-semibold text-purple-300">Subagent</span>
+          <span class="text-xs font-semibold text-purple-300">{title}</span>
+          {#if depth > 1}
+            <span class="text-[9px] text-purple-300/70 bg-purple-500/10 px-1.5 py-0.5 rounded">
+              level {depth}
+            </span>
+          {/if}
+          {#if childGroups.length > 0}
+            <span class="text-[9px] text-purple-300/70 bg-purple-500/10 px-1.5 py-0.5 rounded">
+              {childGroups.length} delegated
+            </span>
+          {/if}
           {#if sessionId}
             <span class="text-[9px] text-purple-400/60 font-mono">
               {sessionId.slice(0, 8)}
@@ -127,16 +214,70 @@
   {#if isOpen}
     <div class="px-3 pb-3 space-y-2">
       <div class="pl-4 border-l-2 border-purple-500/20">
-        <ToolCallGroup {calls} />
+        {#if childGroups.length > 0}
+          <div class="space-y-2">
+            {#each calls as call (call.execution_id)}
+              <ToolCallGroupView calls={[call]} />
+              {@const nestedGroups = childGroupsBySpawnExecutionId.get(call.execution_id) ?? []}
+              {#if nestedGroups.length > 0}
+                <div class="ml-3 pl-3 border-l border-purple-400/25 space-y-2">
+                  {#each nestedGroups as childGroup (childGroup.sessionId)}
+                    <SubagentExecutionGroup
+                      calls={childGroup.calls}
+                      sessionId={childGroup.sessionId}
+                      spawnCall={childGroup.spawnCall}
+                      childGroups={childGroup.childGroups ?? []}
+                      depth={depth + 1}
+                    />
+                  {/each}
+                </div>
+              {/if}
+            {/each}
+            {#if orphanChildGroups.length > 0}
+              <div class="ml-3 pl-3 border-l border-purple-400/25 space-y-2">
+                {#each orphanChildGroups as childGroup (childGroup.sessionId)}
+                  <SubagentExecutionGroup
+                    calls={childGroup.calls}
+                    sessionId={childGroup.sessionId}
+                    spawnCall={childGroup.spawnCall}
+                    childGroups={childGroup.childGroups ?? []}
+                    depth={depth + 1}
+                  />
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <ToolCallGroupView {calls} />
+        {/if}
       </div>
       {#if responseText}
         <div class="mt-3 pt-3 border-t border-purple-500/20">
-          <p class="text-[10px] uppercase tracking-wide text-purple-400/60 mb-1.5 px-1">
-            {responseSuccess === false ? "Error" : "Response"}
-          </p>
-          <div class="rounded-lg bg-background/50 px-3 py-2.5 text-sm text-foreground whitespace-pre-wrap break-words">
-            {responseText}
-          </div>
+          <button
+            class="w-full flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-purple-300/85 hover:bg-purple-500/8 transition-colors"
+            onclick={() => (responseOpen = !responseOpen)}
+          >
+            <span class="text-[10px] text-purple-400/70 shrink-0">{responseOpen ? '▾' : '▸'}</span>
+            <span class="text-[10px] uppercase tracking-wide">
+              {responseSuccess === false ? "Error" : "Response"}
+            </span>
+            <span class="ml-auto text-[10px] text-muted-foreground">
+              {responseOpen ? "Hide" : "Show"}
+            </span>
+          </button>
+          {#if responseOpen}
+            <div class="mt-2 rounded-lg bg-background/50 px-3 py-2.5 text-sm text-foreground break-words">
+              <div
+                class="prose prose-sm dark:prose-invert max-w-none markdown-content subagent-response-markdown"
+                onclick={handleMarkdownInteraction}
+                onkeydown={handleMarkdownInteraction}
+                role="textbox"
+                tabindex="0"
+              >
+                <StreamingMarkdown content={responseText} />
+              </div>
+            </div>
+          {/if}
         </div>
       {/if}
     </div>

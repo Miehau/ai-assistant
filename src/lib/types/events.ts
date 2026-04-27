@@ -143,6 +143,7 @@ export interface ToolExecutionStartedPayload {
   message_id?: string;
   session_id?: string;
   parent_session_id?: string | null;
+  source_execution_id?: string | null;
   is_sub_agent?: boolean;
   timestamp_ms: number;
 }
@@ -186,6 +187,7 @@ export interface ToolExecutionCompletedPayload {
   message_id?: string;
   session_id?: string;
   parent_session_id?: string | null;
+  source_execution_id?: string | null;
   is_sub_agent?: boolean;
   timestamp_ms: number;
 }

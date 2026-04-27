@@ -29,8 +29,8 @@ Use `think` ONCE to extract from the briefing: map data, cost model, constraints
 You MUST write a Node.js script before making ANY game API calls. This is not optional.
 
 ```
-files.write → /tmp/plan.mjs
-shell.exec → node /tmp/plan.mjs
+files.write → plans/plan.mjs
+shell.exec → node plans/plan.mjs
 ```
 
 The script MUST:
@@ -43,7 +43,7 @@ The script MUST:
 
 Pass the map data to the script. Either:
 - Embed it as a constant in the script, or
-- Write it to /tmp/map.json first, then read it in the script
+- Write it to `plans/map.json` first, then read it in the script
 
 ### Step 3: Execute the plan
 Read the script output. Make API calls via `web.request` exactly as the plan specifies.
@@ -62,7 +62,7 @@ The planning script is your single most important tool. A mission that starts wi
 When you're unsure what to write, start from this structure:
 
 ```javascript
-// /tmp/plan.mjs
+// plans/plan.mjs
 const map = [ /* paste grid rows here */ ];
 const BUDGET = 300; // from briefing
 const COSTS = { /* from briefing */ };

@@ -14,7 +14,7 @@
   import { getPhaseLabel } from "$lib/types/agent";
   import type { AgentPlan, AgentPlanStep, PhaseKind } from "$lib/types/agent";
   import type { ToolActivityEntry } from "$lib/stores/chat";
-  import { groupToolCallsBySession, computeDisplayItems } from "$lib/utils/toolCallGrouping";
+  import { groupToolCallsBySession, flattenToolCallGroups, computeDisplayItems } from "$lib/utils/toolCallGrouping";
 
   export let messages: Message[] = [];
   export let chatContainer: HTMLElement | null = null;
@@ -236,24 +236,50 @@
       }
     }
 
-    // Find parent messages (messages with agent.spawn) and merge subagent calls
+    const subagentCallsByParentSession = new Map<string, NonNullable<typeof messages[0]['tool_calls']>>();
+    for (const call of allSubagentCalls ?? []) {
+      if (!call.parent_session_id) continue;
+      const existing = subagentCallsByParentSession.get(call.parent_session_id) ?? [];
+      existing.push(call);
+      subagentCallsByParentSession.set(call.parent_session_id, existing);
+    }
+
+    function collectDescendantSubagentCalls(
+      parentSessionId: string,
+      seen = new Set<string>()
+    ): NonNullable<typeof messages[0]['tool_calls']> {
+      if (seen.has(parentSessionId)) return [];
+      seen.add(parentSessionId);
+
+      const directCalls = subagentCallsByParentSession.get(parentSessionId) ?? [];
+      const collected: NonNullable<typeof messages[0]['tool_calls']> = [];
+      for (const call of directCalls) {
+        collected.push(call);
+        if (call.session_id) {
+          collected.push(...collectDescendantSubagentCalls(call.session_id, seen));
+        }
+      }
+      return collected;
+    }
+
+    // Find parent messages (messages with delegate/agent.spawn) and merge subagent calls
     const mergedMessages = messages
       .filter(msg => !subagentMessageIds.has(msg.id))
       .map(msg => {
         if (!msg.tool_calls) return msg;
 
-        // Check if this message has an agent.spawn call
-        const hasAgentSpawn = msg.tool_calls.some(call => call.tool_name === 'agent.spawn');
-        if (!hasAgentSpawn) return msg;
+        // Check if this message has a delegate/agent.spawn call
+        const hasDelegate = msg.tool_calls.some(
+          call => call.tool_name === 'delegate' || call.tool_name === 'agent.spawn'
+        );
+        if (!hasDelegate) return msg;
 
         // Get session_id from the message's tool calls
         const sessionId = msg.tool_calls.find(call => call.session_id)?.session_id;
         if (!sessionId) return msg;
 
         // Filter subagent calls that belong to this parent session
-        const relevantSubagentCalls = allSubagentCalls.filter(
-          call => call.parent_session_id === sessionId
-        );
+        const relevantSubagentCalls = collectDescendantSubagentCalls(sessionId);
 
         if (relevantSubagentCalls.length === 0) return msg;
 
@@ -337,16 +363,20 @@
       <!-- Interleaved rendering: text and tool calls in streaming order.
            computeDisplayItems batches consecutive non-subagent tool anchors so they
            render as a single collapsible ToolCallGroup instead of N separate bubbles. -->
-      {@const allToolGroups = groupToolCallsBySession(msg.tool_calls ?? [])}
-      {@const execToGroup = new Map(allToolGroups.flatMap((g) => g.calls.map((c) => [c.execution_id, g])))}
+      {@const toolGroups = groupToolCallsBySession(msg.tool_calls ?? [])}
+      {@const allToolGroups = flattenToolCallGroups(toolGroups)}
+      {@const topLevelGroups = allToolGroups.filter((g) => !g.parentSubagentSessionId)}
+      {@const execToGroup = new Map(topLevelGroups
+        .filter((g) => !g.isSubAgent || !g.spawnCall)
+        .flatMap((g) => g.calls.map((c) => [c.execution_id, g])))}
       {@const toolSegmentIds = msg.segments.filter((s) => s.kind === 'tool').map((s) => s.execution_id)}
       {@const spawnExecToSubagentGroup = new Map(
-        allToolGroups
+        topLevelGroups
           .filter((g) => g.isSubAgent && g.spawnCall)
           .map((g) => [g.spawnCall!.execution_id, g])
       )}
       {@const anchorExecIds = new Set([
-        ...allToolGroups.map((g) => {
+        ...topLevelGroups.filter((g) => !g.isSubAgent || !g.spawnCall).map((g) => {
           const groupExecIds = new Set(g.calls.map((c) => c.execution_id));
           return toolSegmentIds.find((id) => groupExecIds.has(id));
         }).filter(Boolean),
@@ -403,11 +433,11 @@
               in:fly={{ y: 10, duration: 150, easing: backOut }}
               class="w-full message-container"
             >
-              <SubagentExecutionGroup calls={item.group.calls} sessionId={item.group.sessionId} spawnCall={item.group.spawnCall} />
+              <SubagentExecutionGroup calls={item.group.calls} sessionId={item.group.sessionId} spawnCall={item.group.spawnCall} childGroups={item.group.childGroups ?? []} />
             </div>
           {:else}
             <div class="w-full message-container">
-              <SubagentExecutionGroup calls={item.group.calls} sessionId={item.group.sessionId} spawnCall={item.group.spawnCall} />
+              <SubagentExecutionGroup calls={item.group.calls} sessionId={item.group.sessionId} spawnCall={item.group.spawnCall} childGroups={item.group.childGroups ?? []} />
             </div>
           {/if}
         {:else if item.kind === 'workflow'}
@@ -460,11 +490,11 @@
               in:fly={{ y: 10, duration: 150, easing: backOut }}
               class="w-full message-container"
             >
-              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
+              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} childGroups={group.childGroups ?? []} />
             </div>
           {:else}
             <div class="w-full message-container">
-              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} />
+              <SubagentExecutionGroup calls={group.calls} sessionId={group.sessionId} spawnCall={group.spawnCall} childGroups={group.childGroups ?? []} />
             </div>
           {/if}
         {/each}

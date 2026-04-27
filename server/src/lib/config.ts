@@ -14,6 +14,8 @@ const configSchema = z.object({
   agentsDir: z.string().default('./agents'),
   tasksDir: z.string().default('./data/tasks'),
   workspaceDir: z.string().default('./data/workspace'),
+  sessionFilesDir: z.string().default('./data/sessions'),
+  inlineOutputLimitBytes: z.coerce.number().default(32 * 1024),
   workflowsDir: z.string().default('./workflows'),
 })
 
@@ -34,6 +36,8 @@ export function loadConfig(): AppConfig {
     agentsDir: process.env.AGENTS_DIR,
     tasksDir: process.env.TASKS_DIR,
     workspaceDir: process.env.WORKSPACE_DIR,
+    sessionFilesDir: process.env.SESSION_FILES_DIR,
+    inlineOutputLimitBytes: process.env.INLINE_OUTPUT_LIMIT_BYTES,
     workflowsDir: process.env.WORKFLOWS_DIR,
   })
 }

@@ -13,5 +13,7 @@ vite.config.ts.timestamp-*
 .env.*
 server/src/tools/verify.ts
 server/data/
+notes/
+artifacts/
 server/dist/
 ..bfg-report/

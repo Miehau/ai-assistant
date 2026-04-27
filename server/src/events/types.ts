@@ -45,7 +45,7 @@ interface BaseEvent {
 
 export interface AgentStartedEvent extends BaseEvent {
   type: typeof EVENT_TYPES.AGENT_STARTED
-  payload: { task: string; model: string; parentId: string | null; depth: number }
+  payload: { task: string; model: string; parentId: string | null; sourceCallId?: string | null; depth: number }
 }
 
 export interface AgentCompletedEvent extends BaseEvent {
@@ -115,12 +115,12 @@ export interface StepCompletedEvent extends BaseEvent {
 
 export interface CompanionTextEvent extends BaseEvent {
   type: typeof EVENT_TYPES.COMPANION_TEXT
-  payload: { text: string; parentId: string | null; depth: number }
+  payload: { text: string; parentId: string | null; sourceCallId?: string | null; depth: number }
 }
 
 export interface TextDeltaEvent extends BaseEvent {
   type: typeof EVENT_TYPES.TEXT_DELTA
-  payload: { text: string; parentId: string | null; depth: number }
+  payload: { text: string; parentId: string | null; sourceCallId?: string | null; depth: number }
 }
 
 // --- Workflow events ---

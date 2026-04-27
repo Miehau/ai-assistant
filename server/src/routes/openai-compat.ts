@@ -99,6 +99,7 @@ export function openaiCompatRoutes(runtime: RuntimeContext): Hono {
           model,
           provider: model.indexOf(':') !== -1 ? model.slice(0, model.indexOf(':')) : model,
           max_turns: 50,
+          ...(body.max_tokens ? { max_output_tokens: body.max_tokens } : {}),
           max_tool_calls_per_step: 10,
           tool_execution_timeout_ms: 60_000,
         },
@@ -151,9 +152,13 @@ export function openaiCompatRoutes(runtime: RuntimeContext): Hono {
         toolOutputs: runtime.repositories.toolOutputs,
         preferences: runtime.repositories.preferences,
         provider: runtime.providers.resolve(model),
+        providers: runtime.providers,
         tools: runtime.tools,
         events: runtime.events,
         agentDefinitions: runtime.agentDefinitions,
+        sessionFilesRoot: runtime.sessionFilesRoot,
+        inlineOutputLimitBytes: runtime.inlineOutputLimitBytes,
+        interceptHandlers: runtime.interceptHandlers,
       }
 
       const completionId = `chatcmpl-${randomUUID()}`

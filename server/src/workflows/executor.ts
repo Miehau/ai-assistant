@@ -22,6 +22,8 @@ export interface ExecutorDeps {
   preferences: PreferenceRepository
   agentDefinitions: AgentDefinitionRegistry
   interceptHandlers: Map<string, InterceptHandler>
+  sessionFilesRoot: string
+  inlineOutputLimitBytes?: number
   defaultModel: string
 }
 
@@ -194,6 +196,8 @@ export class WorkflowExecutor {
         workflowRuns: this.deps.workflowRuns,
         agentDefinitions: this.deps.agentDefinitions,
         interceptHandlers: this.deps.interceptHandlers,
+        sessionFilesRoot: this.deps.sessionFilesRoot,
+        inlineOutputLimitBytes: this.deps.inlineOutputLimitBytes,
         defaultModel: this.deps.defaultModel,
         allowedTools: definition.tools,
         triggerAgentId: run.triggerAgentId ?? undefined,

@@ -52,6 +52,7 @@ export function parseAgentFile(content: string, filename: string): AgentDefiniti
     name: meta.name ?? fallbackName,
     model: meta.model,
     max_turns: meta.max_turns ? parseInt(meta.max_turns, 10) : undefined,
+    max_output_tokens: meta.max_output_tokens ? parseInt(meta.max_output_tokens, 10) : undefined,
     description: meta.description,
     system_prompt: body,
     tools,

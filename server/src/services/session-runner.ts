@@ -12,6 +12,7 @@ export interface PrepareSessionTurnInput {
   systemPrompt?: string
   mcpServerIds?: string[]
   allowedTools?: string[]
+  maxTokens?: number
 }
 
 export interface PreparedSessionTurn {
@@ -42,6 +43,8 @@ export function buildDeps(runtime: RuntimeContext, model: string): OrchestratorD
     tools: runtime.tools,
     events: runtime.events,
     agentDefinitions: runtime.agentDefinitions,
+    sessionFilesRoot: runtime.sessionFilesRoot,
+    inlineOutputLimitBytes: runtime.inlineOutputLimitBytes,
     interceptHandlers: runtime.interceptHandlers,
   }
 }
@@ -114,6 +117,9 @@ export async function prepareSessionTurn(
       model,
       provider: extractProviderName(model),
       max_turns: agentDef?.max_turns ?? 50,
+      ...(body.maxTokens ?? agentDef?.max_output_tokens
+        ? { max_output_tokens: body.maxTokens ?? agentDef?.max_output_tokens }
+        : {}),
       max_tool_calls_per_step: 10,
       tool_execution_timeout_ms: 60_000,
       ...(body.systemPrompt

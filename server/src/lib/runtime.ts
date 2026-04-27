@@ -65,6 +65,8 @@ export interface RuntimeContext {
   mcps: McpManager
   events: EventSink & EventSource
   config: AppConfig
+  sessionFilesRoot: string
+  inlineOutputLimitBytes: number
   db: DrizzleInstance
   agentDefinitions: AgentDefinitionRegistry
   /** Pluggable intercept handlers for orchestrator_intercept tools. */
@@ -112,23 +114,29 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
 
   // 6. Create tool registry and register all tools
   const tools = new ToolRegistryImpl()
-  registerFileTools(tools)
-  registerShellTools(tools)
-  registerWebTools(tools)
-  registerSearchTools(tools)
-  registerToolOutputTools(tools, repos.toolOutputs)
-  registerPreferenceTools(tools, repos.preferences)
-  registerThinkTool(tools)
-
-  // Task management tools — files stored in data/tasks/, outputs in data/workspace/
   const tasksDir = path.isAbsolute(config.tasksDir)
     ? config.tasksDir
     : path.resolve(SERVER_ROOT, config.tasksDir)
   const workspaceDir = path.isAbsolute(config.workspaceDir)
     ? config.workspaceDir
     : path.resolve(SERVER_ROOT, config.workspaceDir)
+  const notesDir = path.resolve(SERVER_ROOT, './data/research-notes')
+  const sessionFilesRoot = path.isAbsolute(config.sessionFilesDir)
+    ? config.sessionFilesDir
+    : path.resolve(SERVER_ROOT, config.sessionFilesDir)
+  await fs.mkdir(sessionFilesRoot, { recursive: true })
+
+  registerFileTools(tools, { sessionFilesRoot, notesDir })
+  registerShellTools(tools)
+  registerWebTools(tools)
+  registerSearchTools(tools, { sessionFilesRoot, notesDir })
+  registerToolOutputTools(tools, repos.toolOutputs)
+  registerPreferenceTools(tools, repos.preferences)
+  registerThinkTool(tools)
+
+  // Task management tools — files stored in data/tasks/, outputs in data/workspace/
   registerTaskTools(tools, tasksDir, workspaceDir)
-  registerNoteTools(tools, path.resolve(SERVER_ROOT, './data/research-notes'), [workspaceDir])
+  registerNoteTools(tools, notesDir)
 
   // Intercept handlers — populated by register*Tools functions that provide orchestrator_intercept tools
   const interceptHandlers = new Map<string, InterceptHandler>()
@@ -198,6 +206,8 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
       preferences: repos.preferences,
       agentDefinitions,
       interceptHandlers,
+      sessionFilesRoot,
+      inlineOutputLimitBytes: config.inlineOutputLimitBytes,
       defaultModel: config.defaultModel,
     })
     registerWorkflowTools(tools, workflowRegistry, executor, interceptHandlers)
@@ -223,6 +233,8 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     mcps,
     events,
     config,
+    sessionFilesRoot,
+    inlineOutputLimitBytes: config.inlineOutputLimitBytes,
     db,
     agentDefinitions,
     interceptHandlers,

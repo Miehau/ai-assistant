@@ -15,8 +15,12 @@ export interface ToolCallGroup {
   isSubAgent: boolean;
   parentSessionId: string | null | undefined;
   calls: ToolCallRecord[];
-  /** For subagent groups: the agent.spawn call in the parent that spawned this session. */
+  /** For subagent groups: the delegate/agent.spawn call that spawned this session. */
   spawnCall?: ToolCallRecord;
+  /** Nested delegate groups spawned by calls inside this subagent. */
+  childGroups?: ToolCallGroup[];
+  /** Present when this group should render inside another subagent group. */
+  parentSubagentSessionId?: string;
 }
 
 /**
@@ -25,7 +29,7 @@ export interface ToolCallGroup {
  * Subagent tool calls are grouped by their session_id.
  */
 export function groupToolCallsBySession(toolCalls: ToolCallRecord[]): ToolCallGroup[] {
-  const groups: ToolCallGroup[] = [];
+  const rootGroups: ToolCallGroup[] = [];
   const sessionMap = new Map<string, ToolCallRecord[]>();
 
   for (const call of toolCalls) {
@@ -39,7 +43,7 @@ export function groupToolCallsBySession(toolCalls: ToolCallRecord[]): ToolCallGr
       }
     } else {
       // Main agent calls remain individual
-      groups.push({
+      rootGroups.push({
         sessionId: call.session_id,
         isSubAgent: false,
         parentSessionId: call.parent_session_id,
@@ -48,25 +52,71 @@ export function groupToolCallsBySession(toolCalls: ToolCallRecord[]): ToolCallGr
     }
   }
 
-  // Add grouped subagent sessions, linking each to its agent.spawn call.
-  // Match: spawnCall.session_id === subagent.parent_session_id (the parent's session ID
-  // is the session in which agent.spawn was called, propagated into all subagent events).
+  const subagentGroups: ToolCallGroup[] = [];
+
+  // Add grouped subagent sessions, linking each to the delegate/agent.spawn call
+  // that spawned this session. Prefer the exact source_execution_id when the
+  // backend provides it; fall back to the older parent-session match.
   for (const [sessionId, calls] of sessionMap.entries()) {
     const parentSessionId = calls[0]?.parent_session_id;
-    const spawnCall = groups
-      .filter((g) => !g.isSubAgent)
-      .flatMap((g) => g.calls)
-      .find((c) => c.tool_name === 'agent.spawn' && c.session_id === parentSessionId);
-    groups.push({
+    const sourceExecutionId = calls.find((c) => c.source_execution_id)?.source_execution_id;
+    const spawnCall =
+      (sourceExecutionId
+        ? toolCalls.find((c) => c.execution_id === sourceExecutionId)
+        : undefined) ??
+      toolCalls.find(
+        (c) =>
+          (c.tool_name === 'delegate' || c.tool_name === 'agent.spawn') &&
+          c.session_id === parentSessionId
+      );
+
+    subagentGroups.push({
       sessionId,
       isSubAgent: true,
       parentSessionId,
       calls,
       spawnCall,
+      childGroups: [],
     });
   }
 
-  return groups;
+  const subagentGroupBySession = new Map(
+    subagentGroups.flatMap((group) => group.sessionId ? [[group.sessionId, group] as const] : [])
+  );
+
+  for (const group of subagentGroups) {
+    const parentGroupSessionId = group.spawnCall?.session_id;
+    const parentGroup = parentGroupSessionId
+      ? subagentGroupBySession.get(parentGroupSessionId)
+      : undefined;
+
+    if (parentGroup && parentGroup.sessionId !== group.sessionId) {
+      parentGroup.childGroups = [...(parentGroup.childGroups ?? []), group];
+      group.parentSubagentSessionId = parentGroup.sessionId;
+    }
+  }
+
+  return [
+    ...rootGroups,
+    ...subagentGroups.filter((group) => !group.parentSubagentSessionId),
+  ];
+}
+
+export function flattenToolCallGroups(groups: ToolCallGroup[]): ToolCallGroup[] {
+  const flattened: ToolCallGroup[] = [];
+
+  function visit(group: ToolCallGroup) {
+    flattened.push(group);
+    for (const child of group.childGroups ?? []) {
+      visit(child);
+    }
+  }
+
+  for (const group of groups) {
+    visit(group);
+  }
+
+  return flattened;
 }
 
 /**

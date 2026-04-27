@@ -25,6 +25,38 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#039;");
 }
 
+function formatCitationLabel(id: string): string {
+  const match = id.match(/^turn(\d+)search(\d+)$/);
+  if (!match) return id;
+
+  return `ref ${Number(match[2]) + 1}`;
+}
+
+function formatCitationTitle(id: string): string {
+  const match = id.match(/^turn(\d+)search(\d+)$/);
+  if (!match) return id;
+
+  return `Generated citation ${Number(match[2]) + 1} (${id})`;
+}
+
+function normalizeGeneratedCitations(text: string): string {
+  return text.replace(/\uE200cite((?:\uE202[^\uE200\uE201\uE202]+)+)\uE201/g, (_match, refs: string) => {
+    const ids = refs
+      .split("\uE202")
+      .filter(Boolean)
+      .map((ref) => ref.trim())
+      .filter(Boolean);
+
+    const labels = ids.map((id) => escapeHtml(formatCitationLabel(id)));
+    if (labels.length === 0) return "";
+
+    const title = ids.map((id) => escapeHtml(formatCitationTitle(id))).join(", ");
+    return `<sup class="generated-citation" title="${title}" aria-label="${title}">${labels
+      .map((label) => `<span>${label}</span>`)
+      .join("")}</sup>`;
+  });
+}
+
 function configureMarkdown(enableHighlight: boolean) {
   if (configured && highlightEnabled === enableHighlight) return;
 
@@ -86,5 +118,5 @@ function configureMarkdown(enableHighlight: boolean) {
 
 export function renderMarkdown(text: string, options: { enableHighlight: boolean }): string {
   configureMarkdown(options.enableHighlight);
-  return marked(text);
+  return marked(normalizeGeneratedCitations(text));
 }

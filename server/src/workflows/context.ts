@@ -26,6 +26,8 @@ export interface ContextDeps {
   workflowRuns: WorkflowRunRepository
   agentDefinitions: AgentDefinitionRegistry
   interceptHandlers: Map<string, InterceptHandler>
+  sessionFilesRoot: string
+  inlineOutputLimitBytes?: number
   defaultModel: string
   /** If set, only these tools can be called via ctx.tool(). */
   allowedTools?: string[]
@@ -97,6 +99,7 @@ export function buildWorkflowContext<TInput>(deps: ContextDeps): WorkflowContext
           model,
           provider: providerName,
           max_turns: agentDef?.max_turns ?? 10,
+          ...(agentDef?.max_output_tokens ? { max_output_tokens: agentDef.max_output_tokens } : {}),
           max_tool_calls_per_step: 5,
           tool_execution_timeout_ms: 60_000,
           ...(agentDef?.system_prompt ? { system_prompt: agentDef.system_prompt } : {}),
@@ -124,6 +127,8 @@ export function buildWorkflowContext<TInput>(deps: ContextDeps): WorkflowContext
         tools: deps.tools,
         events: deps.events,
         agentDefinitions: deps.agentDefinitions,
+        sessionFilesRoot: deps.sessionFilesRoot,
+        inlineOutputLimitBytes: deps.inlineOutputLimitBytes,
         interceptHandlers: deps.interceptHandlers,
       }
 

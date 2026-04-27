@@ -49,6 +49,10 @@ export interface OrchestratorDeps {
   tools: ToolExecutor
   events: EventSink
   agentDefinitions: AgentDefinitionRegistry
+  /** Managed root for session-scoped workspace/artifact files. */
+  sessionFilesRoot: string
+  /** Inline output limit before output is replaced with an artifact reference. */
+  inlineOutputLimitBytes?: number
   /** Pluggable intercept handlers — keyed by tool name (e.g. 'delegate', 'workflow.run'). */
   interceptHandlers?: Map<string, InterceptHandler>
 }
@@ -63,6 +67,8 @@ export interface RunContext {
   readonly tools: ToolExecutor
   readonly events: EventSink
   readonly agentDefinitions: AgentDefinitionRegistry
+  readonly sessionFilesRoot: string
+  readonly inlineOutputLimitBytes?: number
   readonly interceptHandlers?: Map<string, InterceptHandler>
   agent: Agent
   turnNumber: number

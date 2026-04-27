@@ -17,6 +17,7 @@ export interface AgentConfig {
   model: string
   provider: string
   max_turns: number
+  max_output_tokens?: number
   max_tool_calls_per_step: number
   tool_execution_timeout_ms: number
   system_prompt?: string

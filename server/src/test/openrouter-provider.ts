@@ -25,12 +25,17 @@ const request: LLMRequest = {
 const body = buildRequestBody(request)
 preflightRequestBody(body)
 
+assert.equal(body.max_tokens, 12_000)
 assert.deepEqual((body.tools as unknown[])[0], { type: 'openrouter:web_search' })
 assert.equal((body.tools as Array<Record<string, unknown>>)[1].type, 'function')
 assert.deepEqual(
   ((body.tools as Array<{ function?: { name?: string } }>)[1].function?.name),
   'web__fetch',
 )
+
+const limitedBody = buildRequestBody({ ...request, max_tokens: 2048 })
+preflightRequestBody(limitedBody)
+assert.equal(limitedBody.max_tokens, 2048)
 
 assert.throws(
   () => preflightRequestBody({

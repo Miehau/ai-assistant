@@ -215,6 +215,7 @@ function upsertToolCall(
     completed_at: payload.completed_at ?? existing?.completed_at,
     session_id: payload.session_id ?? existing?.session_id,
     parent_session_id: payload.parent_session_id ?? existing?.parent_session_id,
+    source_execution_id: payload.source_execution_id ?? existing?.source_execution_id,
     is_sub_agent: payload.is_sub_agent ?? existing?.is_sub_agent,
     workflowProgress: payload.workflowProgress ?? existing?.workflowProgress,
   };
@@ -682,6 +683,7 @@ function handleAgentEvent(event: AgentEvent) {
           started_at: payload.timestamp_ms,
           session_id: payload.session_id,
           parent_session_id: payload.parent_session_id,
+          source_execution_id: payload.source_execution_id,
           is_sub_agent: payload.is_sub_agent,
         });
         // Flush any accumulated streaming text as a text segment BEFORE the tool segment
@@ -739,6 +741,7 @@ function handleAgentEvent(event: AgentEvent) {
         completed_at: payload.timestamp_ms,
         session_id: payload.session_id,
         parent_session_id: payload.parent_session_id,
+        source_execution_id: payload.source_execution_id,
         is_sub_agent: payload.is_sub_agent,
         ...(normalizedSuccess !== undefined ? { success: normalizedSuccess } : {}),
       };
@@ -1168,7 +1171,7 @@ function honoItemsToMessages(
   const agentMap = new Map<string, import('$lib/backend/http-client').AgentStatusResponse>();
   for (const a of agents) agentMap.set(a.id, a);
 
-  // sourceCallId → subAgentId: lets us attach subagent tool calls right after agent.spawn
+  // sourceCallId → subAgentId: lets us attach subagent tool calls right after delegate/agent.spawn
   const subagentBySourceCallId = new Map<string, string>();
   for (const a of agents) {
     if (a.sourceCallId && a.parentId) subagentBySourceCallId.set(a.sourceCallId, a.id);
@@ -1204,14 +1207,32 @@ function honoItemsToMessages(
       duration_ms: item.durationMs ?? undefined,
       session_id: item.agentId ?? undefined,
       parent_session_id: agent.parentId,
+      source_execution_id: agent.sourceCallId,
       is_sub_agent: true,
     });
     subagentCallsByAgentId.set(item.agentId!, calls);
   }
 
-  // Process root-agent items to build messages; splice in subagent calls after agent.spawn
+  // Process root-agent items to build messages; splice in subagent calls after delegate/agent.spawn
   const result: Message[] = [];
   const pendingToolCalls: ToolCallRecord[] = [];
+
+  function collectSubagentCalls(agentId: string, seen = new Set<string>()): ToolCallRecord[] {
+    if (seen.has(agentId)) return [];
+    seen.add(agentId);
+
+    const collected: ToolCallRecord[] = [];
+    for (const call of subagentCallsByAgentId.get(agentId) ?? []) {
+      collected.push(call);
+      if (call.tool_name === 'delegate' || call.tool_name === 'agent.spawn') {
+        const childAgentId = subagentBySourceCallId.get(call.execution_id);
+        if (childAgentId) {
+          collected.push(...collectSubagentCalls(childAgentId, seen));
+        }
+      }
+    }
+    return collected;
+  }
 
   for (const item of items) {
     const agent = item.agentId ? agentMap.get(item.agentId) : undefined;
@@ -1256,11 +1277,11 @@ function honoItemsToMessages(
 
       pendingToolCalls.push(toolCall);
 
-      // Splice subagent tool calls right after the agent.spawn that spawned them
-      if (item.callId && item.name === 'agent.spawn') {
+      // Splice subagent tool calls right after the delegate/agent.spawn that spawned them.
+      if (item.callId && (item.name === 'delegate' || item.name === 'agent.spawn')) {
         const subAgentId = subagentBySourceCallId.get(item.callId);
         if (subAgentId) {
-          const subCalls = subagentCallsByAgentId.get(subAgentId) ?? [];
+          const subCalls = collectSubagentCalls(subAgentId);
           pendingToolCalls.push(...subCalls);
         }
       }

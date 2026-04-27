@@ -1,12 +1,21 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import type { ToolHandler, ToolResult, ToolContext } from './types.js'
+import { managedFileRefForPath, resolveManagedFilePath } from './path-policy.js'
 
 const execFileAsync = promisify(execFile)
 
 const MAX_RESULTS_DEFAULT = 200
 
-export function registerSearchTools(registry: { register: (h: ToolHandler) => void }): void {
+export interface SearchToolOptions {
+  sessionFilesRoot: string
+  notesDir: string
+}
+
+export function registerSearchTools(
+  registry: { register: (h: ToolHandler) => void },
+  options: SearchToolOptions,
+): void {
   registry.register({
     metadata: {
       name: 'web_search',
@@ -29,12 +38,12 @@ export function registerSearchTools(registry: { register: (h: ToolHandler) => vo
     metadata: {
       name: 'search',
       description:
-        'Search file contents using grep. Returns matching lines with file path, line number, and snippet.',
+        'Search managed file contents using ripgrep/grep. Returns matching lines with logical file path, line number, and snippet.',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Search pattern (regex unless literal is true)' },
-          path: { type: 'string', description: 'Directory or file path to search in' },
+          path: { type: 'string', description: 'Managed file or directory path: relative session workspace path, artifact://..., or note://...' },
           literal: { type: 'boolean', description: 'Treat query as literal string (default: false)' },
           case_sensitive: { type: 'boolean', description: 'Case-sensitive search (default: false)' },
           max_results: {
@@ -48,33 +57,35 @@ export function registerSearchTools(registry: { register: (h: ToolHandler) => vo
     },
     async handle(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
       const query = args.query as string
-      const searchPath = args.path as string
+      const resolved = resolveManagedFilePath(args.path as string, {
+        sessionFilesRoot: options.sessionFilesRoot,
+        notesDir: options.notesDir,
+        sessionId: ctx.session_id,
+        access: 'read',
+      })
+      const searchPath = resolved.fsPath
       const literal = (args.literal as boolean) ?? false
       const caseSensitive = (args.case_sensitive as boolean) ?? false
       const maxResults = (args.max_results as number) ?? MAX_RESULTS_DEFAULT
 
-      const grepArgs: string[] = ['-rn', '--color=never']
-
-      if (literal) grepArgs.push('-F')
-      if (!caseSensitive) grepArgs.push('-i')
-
-      grepArgs.push('-m', String(maxResults))
-      grepArgs.push('--', query, searchPath)
-
       try {
-        const { stdout } = await execFileAsync('grep', grepArgs, {
-          maxBuffer: 1024 * 1024, // 1MB
+        const matches = await runSearch(query, searchPath, {
+          literal,
+          caseSensitive,
+          maxResults,
           signal: ctx.signal,
         })
-
-        const matches = parseGrepOutput(stdout, maxResults)
+        const logicalMatches = matches.map((match) => ({
+          ...match,
+          path: managedFileRefForPath(match.path, resolved),
+        }))
         return {
           ok: true,
           output: {
             query,
-            path: searchPath,
-            count: matches.length,
-            matches,
+            path: resolved.ref,
+            count: logicalMatches.length,
+            matches: logicalMatches,
           },
         }
       } catch (err) {
@@ -82,7 +93,7 @@ export function registerSearchTools(registry: { register: (h: ToolHandler) => vo
 
         // grep returns exit code 1 when no matches found
         if (error.code === 1) {
-          return { ok: true, output: { query, path: searchPath, count: 0, matches: [] } }
+          return { ok: true, output: { query, path: resolved.ref, count: 0, matches: [] } }
         }
 
         return { ok: false, error: `Search failed: ${error.message ?? String(err)}` }
@@ -92,6 +103,47 @@ export function registerSearchTools(registry: { register: (h: ToolHandler) => vo
       return { summary: `Search for "${args.query}" in ${args.path}` }
     },
   })
+}
+
+async function runSearch(
+  query: string,
+  searchPath: string,
+  opts: { literal: boolean; caseSensitive: boolean; maxResults: number; signal: AbortSignal },
+): Promise<GrepMatch[]> {
+  const rgArgs = ['--line-number', '--no-heading', '--with-filename', '--color=never']
+  if (opts.literal) rgArgs.push('--fixed-strings')
+  if (!opts.caseSensitive) rgArgs.push('--ignore-case')
+  rgArgs.push('--', query, searchPath)
+
+  try {
+    const { stdout } = await execFileAsync('rg', rgArgs, {
+      maxBuffer: 1024 * 1024,
+      signal: opts.signal,
+    })
+    return parseGrepOutput(stdout, opts.maxResults)
+  } catch (err) {
+    const error = err as { code?: number; stdout?: string; message?: string }
+    if (error.code === 1) return []
+    if (!String(error.message ?? '').includes('ENOENT')) throw err
+  }
+
+  const grepArgs: string[] = ['-rnH', '--color=never']
+  if (opts.literal) grepArgs.push('-F')
+  if (!opts.caseSensitive) grepArgs.push('-i')
+  grepArgs.push('-m', String(opts.maxResults))
+  grepArgs.push('--', query, searchPath)
+
+  try {
+    const { stdout } = await execFileAsync('grep', grepArgs, {
+      maxBuffer: 1024 * 1024,
+      signal: opts.signal,
+    })
+    return parseGrepOutput(stdout, opts.maxResults)
+  } catch (err) {
+    const error = err as { code?: number; stdout?: string; message?: string }
+    if (error.code === 1) return []
+    throw err
+  }
 }
 
 interface GrepMatch {

@@ -1,6 +1,12 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { ToolHandler, ToolResult, ToolContext } from './types.js'
+import {
+  joinManagedFileRef,
+  managedFileRefForPath,
+  resolveManagedFilePath,
+  type ResolvedManagedFile,
+} from './path-policy.js'
 
 const DEFAULT_MAX_LINES = 200
 
@@ -12,7 +18,15 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   '.webp': 'image/webp',
 }
 
-export function registerFileTools(registry: { register: (h: ToolHandler) => void }): void {
+export interface FileToolOptions {
+  sessionFilesRoot: string
+  notesDir: string
+}
+
+export function registerFileTools(
+  registry: { register: (h: ToolHandler) => void },
+  options: FileToolOptions,
+): void {
   registry.register({
     metadata: {
       name: 'files.read',
@@ -20,7 +34,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Path to the file. Relative paths are resolved from the current working directory.' },
+          path: { type: 'string', description: 'Managed path to read: relative session workspace path, artifact://..., or note://...' },
           start_line: { type: 'integer', description: 'Start line (1-based, inclusive)' },
           end_line: { type: 'integer', description: 'End line (1-based, inclusive)' },
         },
@@ -29,7 +43,13 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       requires_approval: false,
     },
     async handle(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-      const filePath = args.path as string
+      const resolved = resolveManagedFilePath(args.path as string, {
+        sessionFilesRoot: options.sessionFilesRoot,
+        notesDir: options.notesDir,
+        sessionId: ctx.session_id,
+        access: 'read',
+      })
+      const filePath = resolved.fsPath
       const startLine = (args.start_line as number | undefined) ?? 1
       const endLine = args.end_line as number | undefined
 
@@ -41,9 +61,9 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
           const buffer = await fs.readFile(filePath)
           return {
             ok: true,
-            output: { path: filePath, media_type: mediaType },
+            output: { path: resolved.ref, media_type: mediaType },
             content_blocks: [
-              { type: 'text', text: `Image file: ${filePath} (${mediaType})` },
+              { type: 'text', text: `Image file: ${resolved.ref} (${mediaType})` },
               { type: 'image', media_type: mediaType, data: buffer.toString('base64') },
             ],
           }
@@ -59,7 +79,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
         return {
           ok: true,
           output: {
-            path: filePath,
+            path: resolved.ref,
             start_line: start + 1,
             end_line: end,
             total_lines: lines.length,
@@ -83,21 +103,27 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Path to the file. Relative paths are resolved from the current working directory.' },
+          path: { type: 'string', description: 'Relative session workspace path to write. artifact:// and note:// are read-only.' },
           content: { type: 'string', description: 'Content to write' },
         },
         required: ['path', 'content'],
       },
       requires_approval: true,
     },
-    async handle(args: Record<string, unknown>): Promise<ToolResult> {
-      const filePath = args.path as string
+    async handle(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+      const resolved = resolveManagedFilePath(args.path as string, {
+        sessionFilesRoot: options.sessionFilesRoot,
+        notesDir: options.notesDir,
+        sessionId: ctx.session_id,
+        access: 'write',
+      })
+      const filePath = resolved.fsPath
       const content = args.content as string
 
       try {
         await fs.mkdir(path.dirname(filePath), { recursive: true })
         await fs.writeFile(filePath, content, 'utf-8')
-        return { ok: true, output: { path: filePath, bytes_written: Buffer.byteLength(content) } }
+        return { ok: true, output: { path: resolved.ref, bytes_written: Buffer.byteLength(content) } }
       } catch (err) {
         return { ok: false, error: `Failed to write file: ${(err as Error).message}` }
       }
@@ -114,7 +140,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Path to the file. Relative paths are resolved from the current working directory.' },
+          path: { type: 'string', description: 'Relative session workspace path to edit. artifact:// and note:// are read-only.' },
           old_text: { type: 'string', description: 'Text to find' },
           new_text: { type: 'string', description: 'Replacement text' },
         },
@@ -122,8 +148,14 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       },
       requires_approval: true,
     },
-    async handle(args: Record<string, unknown>): Promise<ToolResult> {
-      const filePath = args.path as string
+    async handle(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+      const resolved = resolveManagedFilePath(args.path as string, {
+        sessionFilesRoot: options.sessionFilesRoot,
+        notesDir: options.notesDir,
+        sessionId: ctx.session_id,
+        access: 'write',
+      })
+      const filePath = resolved.fsPath
       const oldText = args.old_text as string
       const newText = args.new_text as string
 
@@ -137,7 +169,7 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
         const updated = content.slice(0, idx) + newText + content.slice(idx + oldText.length)
         await fs.writeFile(filePath, updated, 'utf-8')
 
-        return { ok: true, output: { path: filePath, replaced: true } }
+        return { ok: true, output: { path: resolved.ref, replaced: true } }
       } catch (err) {
         return { ok: false, error: `Failed to edit file: ${(err as Error).message}` }
       }
@@ -154,28 +186,34 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Path for the new file. Relative paths are resolved from the current working directory.' },
+          path: { type: 'string', description: 'Relative session workspace path for the new file. artifact:// and note:// are read-only.' },
           content: { type: 'string', description: 'File content' },
         },
         required: ['path', 'content'],
       },
       requires_approval: true,
     },
-    async handle(args: Record<string, unknown>): Promise<ToolResult> {
-      const filePath = args.path as string
+    async handle(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+      const resolved = resolveManagedFilePath(args.path as string, {
+        sessionFilesRoot: options.sessionFilesRoot,
+        notesDir: options.notesDir,
+        sessionId: ctx.session_id,
+        access: 'write',
+      })
+      const filePath = resolved.fsPath
       const content = args.content as string
 
       try {
         try {
           await fs.access(filePath)
-          return { ok: false, error: `File already exists: ${filePath}` }
+          return { ok: false, error: `File already exists: ${resolved.ref}` }
         } catch {
           // File does not exist — proceed
         }
 
         await fs.mkdir(path.dirname(filePath), { recursive: true })
         await fs.writeFile(filePath, content, 'utf-8')
-        return { ok: true, output: { path: filePath, bytes_written: Buffer.byteLength(content) } }
+        return { ok: true, output: { path: resolved.ref, bytes_written: Buffer.byteLength(content) } }
       } catch (err) {
         return { ok: false, error: `Failed to create file: ${(err as Error).message}` }
       }
@@ -192,20 +230,26 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Path to the file. Relative paths are resolved from the current working directory.' },
+          path: { type: 'string', description: 'Relative session workspace path to append to. artifact:// and note:// are read-only.' },
           content: { type: 'string', description: 'Content to append' },
         },
         required: ['path', 'content'],
       },
       requires_approval: true,
     },
-    async handle(args: Record<string, unknown>): Promise<ToolResult> {
-      const filePath = args.path as string
+    async handle(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+      const resolved = resolveManagedFilePath(args.path as string, {
+        sessionFilesRoot: options.sessionFilesRoot,
+        notesDir: options.notesDir,
+        sessionId: ctx.session_id,
+        access: 'write',
+      })
+      const filePath = resolved.fsPath
       const content = args.content as string
 
       try {
         await fs.appendFile(filePath, content, 'utf-8')
-        return { ok: true, output: { path: filePath, bytes_appended: Buffer.byteLength(content) } }
+        return { ok: true, output: { path: resolved.ref, bytes_appended: Buffer.byteLength(content) } }
       } catch (err) {
         return { ok: false, error: `Failed to append to file: ${(err as Error).message}` }
       }
@@ -222,20 +266,26 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Directory path to list. Relative paths are resolved from the current working directory.' },
+          path: { type: 'string', description: 'Managed directory path to list: relative session workspace path, artifact://..., or note://...' },
           recursive: { type: 'boolean', description: 'List recursively (default: false)' },
         },
         required: ['path'],
       },
       requires_approval: false,
     },
-    async handle(args: Record<string, unknown>): Promise<ToolResult> {
-      const dirPath = args.path as string
+    async handle(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+      const resolved = resolveManagedFilePath(args.path as string, {
+        sessionFilesRoot: options.sessionFilesRoot,
+        notesDir: options.notesDir,
+        sessionId: ctx.session_id,
+        access: 'read',
+      })
+      const dirPath = resolved.fsPath
       const recursive = (args.recursive as boolean) ?? false
 
       try {
-        const entries = await listDir(dirPath, recursive, dirPath)
-        return { ok: true, output: { path: dirPath, count: entries.length, entries } }
+        const entries = await listDir(dirPath, recursive, dirPath, resolved)
+        return { ok: true, output: { path: resolved.ref, count: entries.length, entries } }
       } catch (err) {
         return { ok: false, error: `Failed to list directory: ${(err as Error).message}` }
       }
@@ -248,27 +298,39 @@ export function registerFileTools(registry: { register: (h: ToolHandler) => void
 
 interface DirEntry {
   name: string
+  path: string
   type: 'file' | 'directory'
   size: number
 }
 
-async function listDir(dirPath: string, recursive: boolean, basePath: string): Promise<DirEntry[]> {
+async function listDir(
+  dirPath: string,
+  recursive: boolean,
+  basePath: string,
+  resolvedBase: ResolvedManagedFile,
+): Promise<DirEntry[]> {
   const dirents = await fs.readdir(dirPath, { withFileTypes: true })
   const results: DirEntry[] = []
 
   for (const dirent of dirents) {
     const fullPath = path.join(dirPath, dirent.name)
     const relativeName = path.relative(basePath, fullPath)
+    const logicalPath = joinManagedFileRef(resolvedBase.ref, relativeName.split(path.sep).join('/'))
 
     if (dirent.isDirectory()) {
-      results.push({ name: relativeName, type: 'directory', size: 0 })
+      results.push({ name: relativeName, path: logicalPath, type: 'directory', size: 0 })
       if (recursive) {
-        const sub = await listDir(fullPath, true, basePath)
+        const sub = await listDir(fullPath, true, basePath, resolvedBase)
         results.push(...sub)
       }
     } else if (dirent.isFile()) {
       const stat = await fs.stat(fullPath)
-      results.push({ name: relativeName, type: 'file', size: stat.size })
+      results.push({
+        name: relativeName,
+        path: managedFileRefForPath(fullPath, resolvedBase),
+        type: 'file',
+        size: stat.size,
+      })
     }
   }
 

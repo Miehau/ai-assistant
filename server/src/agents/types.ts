@@ -5,6 +5,8 @@ export interface AgentDefinition {
   model?: string
   /** Max orchestrator turns before the agent is stopped */
   max_turns?: number
+  /** Max output tokens requested from the model */
+  max_output_tokens?: number
   /** System prompt — the markdown body below the frontmatter */
   system_prompt: string
   /** Short description shown in the delegate tool listing */

@@ -9,9 +9,10 @@ import type {
 } from './types.js'
 
 const BASE_URL = 'https://openrouter.ai/api/v1/chat/completions'
+const DEFAULT_MAX_TOKENS = 12_000
 
 function buildTokenLimit(model: string, maxTokens?: number): Record<string, number> {
-  return { max_tokens: 4068 }
+  return { max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS }
 }
 
 /** Replace dots with __ so tool names satisfy OpenAI's ^[a-zA-Z0-9_-]{1,64}$ requirement. */

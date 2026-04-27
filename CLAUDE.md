@@ -33,7 +33,7 @@ Full list: [`src-tauri/docs/agent/commands.md`](src-tauri/docs/agent/commands.md
 2. **Anthropic strips `oneOf`/`anyOf`/`allOf`** from structured output schemas — never use them.
 3. **Controller schema is flat** with optional fields — step type inferred from field presence (`tool` → tool call, `message` → respond, `question` → ask user).
 4. **Always-succeeds fallback parsing → infinite loops** — fail hard on parse errors instead.
-5. **Tool outputs >16 KB** are persisted to disk, not inlined in conversation.
+5. **Oversized tool outputs** are persisted to session-scoped `artifact://` refs (default inline limit: 32 KB), not inlined in conversation.
 6. **`AGENTS.md` must remain index-only** — test-enforced, no inline content.
 7. **Provider changes** must follow `provider-contracts.md` PR checklist (provider-specific tests, preflight payload check, regression tests for 4xx errors).
 8. **Trust `cargo check`** over rust-analyzer diagnostics (can be stale).

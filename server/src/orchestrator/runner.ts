@@ -27,12 +27,13 @@ import {
   buildControllerMessages,
   buildToolListString,
 } from './prompts.js'
-import { formatToolOutput } from './output.js'
+import { materializeTextOutput, materializeToolOutput } from './output.js'
 import { hydrateToolArgs } from './hydration.js'
 import { EVENT_TYPES } from '../events/types.js'
 
 const DEFAULT_MAX_TURNS = 50
 const MAX_AGENT_DEPTH = 5
+const DEFAULT_MAX_OUTPUT_TOKENS = 12_000
 
 // ---------------------------------------------------------------------------
 // Main entry point
@@ -71,7 +72,7 @@ export async function runAgent(
     type: EVENT_TYPES.AGENT_STARTED,
     agent_id: agentId,
     session_id: agent.sessionId,
-    payload: { task: agent.task, model: agent.config.model, parentId: agent.parentId, depth: agent.depth },
+    payload: { task: agent.task, model: agent.config.model, parentId: agent.parentId, sourceCallId: agent.sourceCallId, depth: agent.depth },
     timestamp: Date.now(),
   })
 
@@ -85,6 +86,8 @@ export async function runAgent(
     tools: deps.tools,
     events: deps.events,
     agentDefinitions: deps.agentDefinitions,
+    sessionFilesRoot: deps.sessionFilesRoot,
+    inlineOutputLimitBytes: deps.inlineOutputLimitBytes,
     interceptHandlers: deps.interceptHandlers,
     agent,
     turnNumber: 0,
@@ -161,13 +164,14 @@ export async function runAgent(
         messages,
         tools: toolDefs,
         structured_output: !useNativeTools ? controllerOutputSchema() : undefined,
+        max_tokens: ctx.agent.config.max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
         signal,
       }
 
       // Only stream for native tool providers — non-native providers output raw JSON
       // which is meaningless to stream character-by-character to the UI.
       const llmResponse: LLMResponse = (ctx.stream && useNativeTools)
-        ? await streamLLMTurn(ctx.provider, llmRequest, deps, agentId, ctx.agent.sessionId, ctx.agent.parentId, ctx.agent.depth)
+        ? await streamLLMTurn(ctx.provider, llmRequest, deps, agentId, ctx.agent.sessionId, ctx.agent.parentId, ctx.agent.sourceCallId, ctx.agent.depth)
         : await ctx.provider.generate(llmRequest)
 
       // 3. Handle companion text (thinking/reasoning shown alongside tool calls)
@@ -178,7 +182,7 @@ export async function runAgent(
             type: EVENT_TYPES.COMPANION_TEXT,
             agent_id: agentId,
             session_id: ctx.agent.sessionId,
-            payload: { text: llmResponse.companion_text, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+            payload: { text: llmResponse.companion_text, parentId: ctx.agent.parentId, sourceCallId: ctx.agent.sourceCallId, depth: ctx.agent.depth },
             timestamp: Date.now(),
           })
         }
@@ -379,6 +383,7 @@ async function streamLLMTurn(
   agentId: string,
   sessionId: string,
   parentId?: string | null,
+  sourceCallId?: string | null,
   depth?: number,
 ): Promise<LLMResponse> {
   const streamIter = provider.stream(request)
@@ -393,7 +398,7 @@ async function streamLLMTurn(
           type: EVENT_TYPES.TEXT_DELTA,
           agent_id: agentId,
           session_id: sessionId,
-          payload: { text: event.text, parentId: parentId ?? null, depth: depth ?? 0 },
+          payload: { text: event.text, parentId: parentId ?? null, sourceCallId: sourceCallId ?? null, depth: depth ?? 0 },
           timestamp: Date.now(),
         })
         break
@@ -490,7 +495,14 @@ async function executePendingApprovedTools(ctx: RunContext): Promise<void> {
     })
     const durationMs = Date.now() - startMs
 
-    const outputStr = formatToolOutput(result)
+    const outputStr = await materializeToolOutput(result, {
+      sessionFilesRoot: ctx.sessionFilesRoot,
+      inlineLimitBytes: ctx.inlineOutputLimitBytes,
+      sessionId: ctx.agent.sessionId,
+      agentId: ctx.agent.id,
+      callId,
+      toolName,
+    })
 
     await ctx.items.create({
       agentId: ctx.agent.id,
@@ -802,7 +814,14 @@ async function executeTool(
   })
   const durationMs = Date.now() - startMs
 
-  const outputStr = formatToolOutput(result)
+  const outputStr = await materializeToolOutput(result, {
+    sessionFilesRoot: ctx.sessionFilesRoot,
+    inlineLimitBytes: ctx.inlineOutputLimitBytes,
+    sessionId: ctx.agent.sessionId,
+    agentId: ctx.agent.id,
+    callId,
+    toolName: name,
+  })
 
   // Save function_call_output item
   await ctx.items.create({
@@ -879,10 +898,36 @@ async function executeToolBatch(
     })
   }
 
-  // Execute orchestrator-intercepted tools sequentially (e.g. delegate, workflow.run)
+  // Execute delegate fan-out in parallel, then run other intercepted tools
+  // sequentially. Workflow-style intercepted tools can have external side
+  // effects and waiting semantics, so they keep the conservative path.
   if (interceptedSpecs.length > 0) {
     const deps: OrchestratorDeps = buildDepsFromContext(ctx)
-    for (const spec of interceptedSpecs) {
+    const delegateSpecs = interceptedSpecs.filter((spec) => spec.tool === 'delegate')
+    const otherInterceptedSpecs = interceptedSpecs.filter((spec) => spec.tool !== 'delegate')
+
+    if (delegateSpecs.length > 0) {
+      const outcomes = await Promise.all(delegateSpecs.map((spec) => {
+        const handler = ctx.interceptHandlers?.get(spec.tool)
+        if (!handler) {
+          throw new Error(`No intercept handler registered for tool: ${spec.tool}`)
+        }
+        ctx.events.emit({
+          type: EVENT_TYPES.TOOL_STARTED,
+          agent_id: ctx.agent.id,
+          session_id: ctx.agent.sessionId,
+          payload: { callId: spec.callId, name: spec.tool, args: spec.args, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+          timestamp: Date.now(),
+        })
+        const interceptStartMs = Date.now()
+        return handler(spec.callId, spec.args, ctx, deps, interceptStartMs)
+      }))
+
+      const waiting = outcomes.find((outcome) => outcome.type === 'waiting')
+      if (waiting) return waiting
+    }
+
+    for (const spec of otherInterceptedSpecs) {
       const handler = ctx.interceptHandlers?.get(spec.tool)
       if (!handler) {
         throw new Error(`No intercept handler registered for tool: ${spec.tool}`)
@@ -928,7 +973,15 @@ async function executeToolBatch(
     })
 
     for (const res of batchResult.results) {
-      const outputStr = formatToolOutput(res)
+      const spec = canExecute.find((s) => s.callId === res.call_id)
+      const outputStr = await materializeToolOutput(res, {
+        sessionFilesRoot: ctx.sessionFilesRoot,
+        inlineLimitBytes: ctx.inlineOutputLimitBytes,
+        sessionId: ctx.agent.sessionId,
+        agentId: ctx.agent.id,
+        callId: res.call_id,
+        toolName: spec?.tool ?? 'unknown',
+      })
       await ctx.items.create({
         agentId: ctx.agent.id,
         type: 'function_call_output',
@@ -939,7 +992,6 @@ async function executeToolBatch(
         turnNumber: ctx.turnNumber,
       })
 
-      const spec = canExecute.find((s) => s.callId === res.call_id)
       if (res.ok && spec?.save && !isToolOutputsTool(spec.tool)) {
         await ctx.toolOutputs.save({
           agentId: ctx.agent.id,
@@ -1123,6 +1175,7 @@ export async function handleDelegation(
       ...ctx.agent.config,
       model: childModel,
       provider: childProvider,
+      ...(definition?.max_output_tokens ? { max_output_tokens: definition.max_output_tokens } : {}),
       ...(definition?.system_prompt ? { system_prompt: definition.system_prompt } : {}),
       ...(definition?.tools ? { allowed_tools: definition.tools } : {}),
     },
@@ -1141,7 +1194,7 @@ export async function handleDelegation(
     type: EVENT_TYPES.AGENT_STARTED,
     agent_id: child.id,
     session_id: ctx.agent.sessionId,
-    payload: { task, model: ctx.agent.config.model, parentId: ctx.agent.id, depth: child.depth },
+    payload: { task, model: childModel, parentId: ctx.agent.id, sourceCallId: callId, depth: child.depth },
     timestamp: Date.now(),
   })
 
@@ -1159,7 +1212,17 @@ export async function handleDelegation(
 
   // Handle child completion
   if (childResult.status === 'completed') {
-    const output = childResult.result ?? '(child completed with no output)'
+    const rawOutput = childResult.result ?? '(child completed with no output)'
+    const output = await materializeTextOutput(rawOutput, {
+      sessionFilesRoot: ctx.sessionFilesRoot,
+      inlineLimitBytes: ctx.inlineOutputLimitBytes,
+      sessionId: ctx.agent.sessionId,
+      agentId: ctx.agent.id,
+      callId,
+      toolName: `delegate-${agentName ?? 'default'}`,
+      extension: 'md',
+      persistEvenWhenInline: true,
+    })
     await ctx.items.create({
       agentId: ctx.agent.id,
       type: 'function_call_output',
@@ -1239,6 +1302,8 @@ function buildDepsFromContext(ctx: RunContext): OrchestratorDeps {
     tools: ctx.tools,
     events: ctx.events,
     agentDefinitions: ctx.agentDefinitions,
+    sessionFilesRoot: ctx.sessionFilesRoot,
+    inlineOutputLimitBytes: ctx.inlineOutputLimitBytes,
     interceptHandlers: ctx.interceptHandlers,
   }
 }

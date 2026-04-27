@@ -131,6 +131,15 @@
   @apply text-blue-500 hover:underline;
 }
 
+.prose .generated-citation {
+  @apply ml-1 inline-flex align-super text-[0.65em] not-italic font-medium leading-none;
+  gap: 0.125rem;
+}
+
+.prose .generated-citation span {
+  @apply rounded border border-violet-400/25 bg-violet-500/10 px-1 py-0.5 text-violet-200;
+}
+
 .prose table {
   @apply w-full border-collapse mb-4;
 }

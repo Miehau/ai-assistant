@@ -1,27 +1,26 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { ToolHandler, ToolResult } from './types.js'
+import { resolveManagedFilePath } from './path-policy.js'
 
 export function registerNoteTools(
   registry: { register: (h: ToolHandler) => void },
   notesDir: string,
-  allowedRoots: string[],
 ): void {
   const resolvedNotesDir = path.resolve(notesDir)
-  const roots = Array.from(new Set([resolvedNotesDir, ...allowedRoots.map((root) => path.resolve(root))]))
 
   registry.register({
     metadata: {
       name: 'notes.save_research_note',
-      description: 'Save a completed research report as a markdown note under an allowed notes/workspace directory.',
+      description: 'Save a completed research report as a markdown note under the managed research-notes directory.',
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string', description: 'Human-readable title for the research note' },
           markdown: { type: 'string', description: 'Complete markdown note body to save' },
-          path: {
+          filename: {
             type: 'string',
-            description: 'Optional absolute output path. Must resolve under an allowed notes/workspace directory.',
+            description: 'Optional relative markdown filename. Absolute paths are rejected.',
           },
         },
         required: ['title', 'markdown'],
@@ -31,8 +30,11 @@ export function registerNoteTools(
     async handle(args: Record<string, unknown>): Promise<ToolResult> {
       const title = String(args.title ?? '').trim()
       const markdown = String(args.markdown ?? '')
-      const requestedPath = typeof args.path === 'string' && args.path.trim()
-        ? args.path.trim()
+      if (args.path !== undefined) {
+        return { ok: false, error: 'path is not supported; use filename with a relative name' }
+      }
+      const requestedFilename = typeof args.filename === 'string' && args.filename.trim()
+        ? args.filename.trim()
         : undefined
 
       if (!title) {
@@ -42,17 +44,16 @@ export function registerNoteTools(
         return { ok: false, error: 'markdown is required' }
       }
 
-      const filename = `${sanitizeFilename(title)}.md`
-      const outputPath = requestedPath
-        ? path.resolve(requestedPath)
-        : path.join(resolvedNotesDir, filename)
-
-      if (!isUnderAllowedRoot(outputPath, roots)) {
-        return {
-          ok: false,
-          error: `Refusing to write outside allowed note roots: ${roots.join(', ')}`,
-        }
-      }
+      const filename = requestedFilename
+        ? normalizeRequestedFilename(requestedFilename)
+        : `${sanitizeFilename(title)}.md`
+      const outputRef = `note://${filename}`
+      const outputPath = resolveManagedFilePath(outputRef, {
+        sessionFilesRoot: resolvedNotesDir,
+        notesDir: resolvedNotesDir,
+        sessionId: 'notes',
+        access: 'read',
+      }).fsPath
 
       try {
         await fs.mkdir(path.dirname(outputPath), { recursive: true })
@@ -60,7 +61,7 @@ export function registerNoteTools(
         return {
           ok: true,
           output: {
-            path: outputPath,
+            path: outputRef,
             bytes_written: Buffer.byteLength(ensureTrailingNewline(markdown)),
           },
         }
@@ -83,12 +84,16 @@ function sanitizeFilename(title: string): string {
   return sanitized || `research-note-${Date.now()}`
 }
 
-function isUnderAllowedRoot(candidate: string, roots: string[]): boolean {
-  const resolvedCandidate = path.resolve(candidate)
-  return roots.some((root) => {
-    const resolvedRoot = path.resolve(root)
-    return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`)
-  })
+function ensureMarkdownExtension(filename: string): string {
+  return filename.endsWith('.md') ? filename : `${filename}.md`
+}
+
+function normalizeRequestedFilename(filename: string): string {
+  if (path.isAbsolute(filename) || filename.includes('/') || filename.includes('\\')) {
+    throw new Error('filename must be a relative file name, not a path')
+  }
+  const withoutExtension = filename.endsWith('.md') ? filename.slice(0, -3) : filename
+  return ensureMarkdownExtension(sanitizeFilename(withoutExtension))
 }
 
 function ensureTrailingNewline(content: string): string {

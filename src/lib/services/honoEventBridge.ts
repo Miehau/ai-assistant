@@ -72,8 +72,11 @@ export async function streamMessageViaHono(
   const pendingTurnSeparator = new Map<string, boolean>();
 
   // --- Delegate ↔ child agent text routing ---
-  // Maps the agentId that CALLED delegate → the delegate tool's callId.
-  // When a child's text_delta arrives, parentId matches the caller's agentId.
+  // Authoritative mapping from child agent id → delegate tool call id. This
+  // keeps parallel delegate previews isolated even when they share a parent.
+  const delegateCallByChild = new Map<string, { callId: string; depth: number }>();
+  // Fallback for older streams that do not include sourceCallId on child events.
+  // This is only reliable when a parent has a single active delegate.
   const delegateCallByParent = new Map<string, { callId: string; depth: number }>();
   // Accumulated child-agent text per delegate callId.
   const delegateChildText = new Map<string, string>();
@@ -85,6 +88,10 @@ export async function streamMessageViaHono(
     if (parentId != null) return true;
     if (rootAgentId && agentId && agentId !== rootAgentId) return true;
     return false;
+  }
+
+  function sourceExecutionIdForAgent(agentId: string | undefined): string | undefined {
+    return agentId ? delegateCallByChild.get(agentId)?.callId : undefined;
   }
 
   for await (const sseEvent of client.sendMessageStream(
@@ -126,7 +133,17 @@ export async function streamMessageViaHono(
       // Sub-agent text: do NOT emit as ASSISTANT_STREAM_CHUNK (would corrupt parent message).
       // Instead, route it into the delegate tool call's output as a live preview.
       if (isSubAgent(agentId, parentId)) {
-        const delegateInfo = parentId ? delegateCallByParent.get(parentId as string) : undefined;
+        const sourceCallId = data.sourceCallId as string | null | undefined;
+        const depth = (data.depth as number | undefined) ?? 1;
+        let delegateInfo = agentId ? delegateCallByChild.get(agentId) : undefined;
+        if (!delegateInfo && agentId && sourceCallId) {
+          delegateInfo = { callId: sourceCallId, depth };
+          delegateCallByChild.set(agentId, delegateInfo);
+          delegateChildText.set(sourceCallId, delegateChildText.get(sourceCallId) ?? '');
+        }
+        if (!delegateInfo && parentId) {
+          delegateInfo = delegateCallByParent.get(parentId as string);
+        }
         if (delegateInfo) {
           const text = (data.text as string) ?? '';
           const accumulated = (delegateChildText.get(delegateInfo.callId) ?? '') + text;
@@ -187,6 +204,7 @@ export async function streamMessageViaHono(
           conversation_id: conversationId,
           session_id: data.agentId as string | undefined,
           parent_session_id: parentId ?? null,
+          source_execution_id: sourceExecutionIdForAgent(data.agentId as string | undefined),
           is_sub_agent: parentId != null,
           timestamp_ms: ts(),
         },
@@ -208,6 +226,11 @@ export async function streamMessageViaHono(
       // Clean up delegate tracking when the delegate tool completes
       if ((data.name as string) === 'delegate' && agentId) {
         delegateCallByParent.delete(agentId);
+        for (const [childAgentId, delegateInfo] of delegateCallByChild.entries()) {
+          if (delegateInfo.callId === callId) {
+            delegateCallByChild.delete(childAgentId);
+          }
+        }
         delegateChildText.delete(callId);
       }
 
@@ -230,6 +253,7 @@ export async function streamMessageViaHono(
           conversation_id: conversationId,
           session_id: agentId,
           parent_session_id: parentId ?? null,
+          source_execution_id: sourceExecutionIdForAgent(agentId),
           is_sub_agent: parentId != null,
           timestamp_ms: ts(),
         },
@@ -240,13 +264,23 @@ export async function streamMessageViaHono(
       // tracked via tool_start/tool_end events with parentId/is_sub_agent.
       const agentId = data.agentId as string;
       const parentId = data.parentId as string | null | undefined;
+      const sourceCallId = data.sourceCallId as string | null | undefined;
+      const depth = (data.depth as number | undefined) ?? 1;
       if (!rootAgentId && !parentId) {
         rootAgentId = agentId;
         options.onAgentId?.(agentId);
       }
+      if (parentId && sourceCallId) {
+        delegateCallByChild.set(agentId, { callId: sourceCallId, depth });
+        delegateChildText.set(sourceCallId, delegateChildText.get(sourceCallId) ?? '');
+      }
     } else if (event === 'subagent_done' || event === 'subagent_error') {
       // Sub-agent lifecycle — no separate client event needed.
       // The delegate tool_start/tool_end already surfaces in toolActivity.
+      const agentId = data.agentId as string | undefined;
+      if (agentId) {
+        delegateCallByChild.delete(agentId);
+      }
     } else if (event === 'approval') {
       const callId = data.callId as string;
       const toolName = data.name as string;
@@ -267,6 +301,7 @@ export async function streamMessageViaHono(
           conversation_id: conversationId,
           session_id: data.agentId as string | undefined,
           parent_session_id: parentId ?? null,
+          source_execution_id: sourceExecutionIdForAgent(data.agentId as string | undefined),
           is_sub_agent: parentId != null,
           timestamp_ms: ts(),
         },

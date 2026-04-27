@@ -1,7 +1,7 @@
 import type { OrchestratorDeps, RunResult } from './types.js'
 import { deliverOne, completeAgent } from '../domain/agent.js'
 import { runAgent } from './runner.js'
-import { formatToolOutput } from './output.js'
+import { materializeTextOutput, materializeToolOutput } from './output.js'
 import { EVENT_TYPES } from '../events/types.js'
 import { AgentLock } from '../lib/agent-lock.js'
 
@@ -44,12 +44,22 @@ async function deliverResultLocked(
     throw new Error(`Agent ${agentId} is not waiting for callId '${callId}'`)
   }
 
+  const storedOutput = await materializeTextOutput(output, {
+    sessionFilesRoot: deps.sessionFilesRoot,
+    inlineLimitBytes: deps.inlineOutputLimitBytes,
+    sessionId: agent.sessionId,
+    agentId,
+    callId,
+    toolName: 'external-delivery',
+    extension: 'txt',
+  })
+
   // Store the delivered result as a function_call_output item
   await deps.items.create({
     agentId,
     type: 'function_call_output',
     callId,
-    output,
+    output: storedOutput,
     isError,
     turnNumber: agent.turnCount,
   })
@@ -257,7 +267,14 @@ async function deliverApprovalLocked(
   })
   const durationMs = Date.now() - startMs
 
-  const outputStr = formatToolOutput(result)
+  const outputStr = await materializeToolOutput(result, {
+    sessionFilesRoot: deps.sessionFilesRoot,
+    inlineLimitBytes: deps.inlineOutputLimitBytes,
+    sessionId: agent.sessionId,
+    agentId,
+    callId,
+    toolName,
+  })
 
   await deps.items.create({
     agentId,
@@ -417,7 +434,17 @@ async function runAndPropagateUp(
     if (!parentWait) break
 
     // Store child result as parent's function_call_output
-    const delegateOutput = result.result ?? '(completed)'
+    const rawDelegateOutput = result.result ?? '(completed)'
+    const delegateOutput = await materializeTextOutput(rawDelegateOutput, {
+      sessionFilesRoot: deps.sessionFilesRoot,
+      inlineLimitBytes: deps.inlineOutputLimitBytes,
+      sessionId: parent.sessionId,
+      agentId: parent.id,
+      callId: agent.sourceCallId,
+      toolName: 'delegate',
+      extension: 'md',
+      persistEvenWhenInline: true,
+    })
     await deps.items.create({
       agentId: parent.id,
       type: 'function_call_output',
