@@ -34,7 +34,7 @@ export function registerFileTools(
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Managed path to read: relative session workspace path, artifact://..., or note://...' },
+          path: { type: 'string', description: 'Managed path to read: relative session workspace path, artifact://..., or @note/...' },
           start_line: { type: 'integer', description: 'Start line (1-based, inclusive)' },
           end_line: { type: 'integer', description: 'End line (1-based, inclusive)' },
         },
@@ -103,7 +103,7 @@ export function registerFileTools(
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative session workspace path to write. artifact:// and note:// are read-only.' },
+          path: { type: 'string', description: 'Relative session workspace path to write. artifact:// and @note/ are read-only.' },
           content: { type: 'string', description: 'Content to write' },
         },
         required: ['path', 'content'],
@@ -140,7 +140,7 @@ export function registerFileTools(
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative session workspace path to edit. artifact:// and note:// are read-only.' },
+          path: { type: 'string', description: 'Relative session workspace path to edit. artifact:// and @note/ are read-only.' },
           old_text: { type: 'string', description: 'Text to find' },
           new_text: { type: 'string', description: 'Replacement text' },
         },
@@ -186,7 +186,7 @@ export function registerFileTools(
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative session workspace path for the new file. artifact:// and note:// are read-only.' },
+          path: { type: 'string', description: 'Relative session workspace path for the new file. artifact:// and @note/ are read-only.' },
           content: { type: 'string', description: 'File content' },
         },
         required: ['path', 'content'],
@@ -230,7 +230,7 @@ export function registerFileTools(
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative session workspace path to append to. artifact:// and note:// are read-only.' },
+          path: { type: 'string', description: 'Relative session workspace path to append to. artifact:// and @note/ are read-only.' },
           content: { type: 'string', description: 'Content to append' },
         },
         required: ['path', 'content'],
@@ -266,7 +266,7 @@ export function registerFileTools(
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Managed directory path to list: relative session workspace path, artifact://..., or note://...' },
+          path: { type: 'string', description: 'Managed directory path to list: relative session workspace path, artifact://..., or @note/...' },
           recursive: { type: 'boolean', description: 'List recursively (default: false)' },
         },
         required: ['path'],

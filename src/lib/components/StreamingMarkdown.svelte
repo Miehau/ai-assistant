@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { renderMarkdown } from "$lib/utils/markdownRenderer";
+  import { extractMarkdownSources, renderMarkdown, type MarkdownSourceLedger } from "$lib/utils/markdownRenderer";
   import { getCachedParse, setCachedParse } from "$lib/utils/markdownCache";
   import { parseMarkdownBlocks, type MarkdownBlock } from "$lib/utils/parseMarkdownBlocks";
 
@@ -13,6 +13,9 @@
   let liveTailContent = "";
   let renderedCommittedBlocks: RenderedMarkdownBlock[] = [];
   let renderedLiveTailHtml = "";
+  let sourceLedger: MarkdownSourceLedger = { sources: [], unresolvedCitations: [] };
+  let visibleSources: MarkdownSourceLedger["sources"] = [];
+  let hiddenSourceCount = 0;
 
   function escapeHtml(text: string): string {
     return text
@@ -53,6 +56,9 @@
   $: renderedLiveTailHtml = isStreaming && liveTailContent
     ? renderBlock(liveTailContent, { enableHighlight: false, useCache: false })
     : "";
+  $: sourceLedger = extractMarkdownSources(content);
+  $: visibleSources = sourceLedger.sources.slice(0, 12);
+  $: hiddenSourceCount = Math.max(0, sourceLedger.sources.length - visibleSources.length);
 </script>
 
 {#each renderedCommittedBlocks as block (block.id)}
@@ -67,6 +73,36 @@
       {@html renderedLiveTailHtml}
     {:else}
       <div style="white-space: pre-wrap;">{liveTailContent}</div>
+    {/if}
+  </div>
+{/if}
+
+{#if !isStreaming && (visibleSources.length > 0 || sourceLedger.unresolvedCitations.length > 0)}
+  <div class="source-ledger" aria-label="Sources">
+    {#if visibleSources.length > 0}
+      <div class="source-ledger-title">Sources</div>
+      <div class="source-ledger-list">
+        {#each visibleSources as source (source.url)}
+          <a
+            class="source-ledger-item"
+            href={source.url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span class="source-ledger-label">{source.label}</span>
+            <span class="source-ledger-domain">{source.domain}</span>
+          </a>
+        {/each}
+      </div>
+      {#if hiddenSourceCount > 0}
+        <div class="source-ledger-more">+{hiddenSourceCount} more sources</div>
+      {/if}
+    {/if}
+
+    {#if sourceLedger.unresolvedCitations.length > 0 && visibleSources.length === 0}
+      <div class="source-ledger-warning">
+        Provider citations were omitted because the response only included internal IDs, not URLs.
+      </div>
     {/if}
   </div>
 {/if}

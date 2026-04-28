@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 // server/src/lib → server/
 const SERVER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../')
 
-import { createDatabase, SQLiteRepositories, seedDevUser } from '../repositories/sqlite/index.js'
+import { openDatabase } from '../repositories/factory.js'
 import type { DrizzleInstance } from '../repositories/sqlite/index.js'
 import { ProviderRegistryImpl } from '../providers/registry.js'
 import { ToolRegistryImpl } from '../tools/registry.js'
@@ -59,6 +59,8 @@ export interface RuntimeContext {
     apiKeys: ApiKeyRepository
     systemPrompts: SystemPromptRepository
     preferences: PreferenceRepository
+    mcp: import('../repositories/types.js').McpRepository
+    telegram: import('../repositories/types.js').TelegramRepository
   }
   providers: ProviderRegistry
   tools: ToolExecutor
@@ -68,6 +70,7 @@ export interface RuntimeContext {
   sessionFilesRoot: string
   inlineOutputLimitBytes: number
   db: DrizzleInstance
+  closeDatabase: () => Promise<void>
   agentDefinitions: AgentDefinitionRegistry
   /** Pluggable intercept handlers for orchestrator_intercept tools. */
   interceptHandlers: Map<string, InterceptHandler>
@@ -85,21 +88,25 @@ export interface RuntimeContext {
 
 export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   // 1. Ensure data directory exists for SQLite file
-  const dbDir = path.dirname(config.databaseUrl)
-  await fs.mkdir(dbDir, { recursive: true })
+  if (config.dbDialect === 'sqlite') {
+    const dbDir = path.dirname(config.databaseUrl)
+    await fs.mkdir(dbDir, { recursive: true })
+  }
   logger.info({ path: config.databaseUrl }, 'Opening database')
 
-  // 2. Create database connection and repositories
-  const db = createDatabase(config.databaseUrl)
-  const repos = new SQLiteRepositories(db, config.encryptionKey)
+  // 2. Create database connection and repositories (dialect-aware)
+  const opened = await openDatabase(config)
+  // Runtime services use repository interfaces. The raw handle remains for
+  // legacy diagnostics/tests and should not be used for new service logic.
+  const db = opened.db as DrizzleInstance
+  const repos = opened.repositories
 
   if (!config.encryptionKey) {
+    if (config.nodeEnv === 'production') {
+      throw new Error('ENCRYPTION_KEY is required in production. Generate one with: openssl rand -base64 32')
+    }
     logger.warn('ENCRYPTION_KEY not set — API keys stored without encryption. Set ENCRYPTION_KEY in .env for production.')
   }
-
-  // 3. Seed dev user
-  const devUser = await seedDevUser(db)
-  logger.info({ userId: devUser.id, email: devUser.email }, 'Dev user ready')
 
   // 4. Create event emitter
   const events = new AgentEventEmitter()
@@ -127,7 +134,11 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   await fs.mkdir(sessionFilesRoot, { recursive: true })
 
   registerFileTools(tools, { sessionFilesRoot, notesDir })
-  registerShellTools(tools)
+  if (config.enableShellTool) {
+    registerShellTools(tools)
+  } else {
+    logger.warn('shell.exec disabled — set ENABLE_SHELL_TOOL=true to enable')
+  }
   registerWebTools(tools)
   registerSearchTools(tools, { sessionFilesRoot, notesDir })
   registerToolOutputTools(tools, repos.toolOutputs)
@@ -136,13 +147,13 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
 
   // Task management tools — files stored in data/tasks/, outputs in data/workspace/
   registerTaskTools(tools, tasksDir, workspaceDir)
-  registerNoteTools(tools, notesDir)
+  registerNoteTools(tools, { notesDir, sessionFilesRoot })
 
   // Intercept handlers — populated by register*Tools functions that provide orchestrator_intercept tools
   const interceptHandlers = new Map<string, InterceptHandler>()
   registerDelegateTools(tools, agentDefinitions, interceptHandlers)
 
-  const mcps = new McpManager(db, tools, config.encryptionKey)
+  const mcps = new McpManager(repos.mcp, tools, config.encryptionKey)
   await mcps.initialize()
 
   const toolCount = tools.listMetadata().length
@@ -227,6 +238,8 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
       apiKeys: repos.apiKeys,
       systemPrompts: repos.systemPrompts,
       preferences: repos.preferences,
+      mcp: repos.mcp,
+      telegram: repos.telegram,
     },
     providers,
     tools,
@@ -236,6 +249,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     sessionFilesRoot,
     inlineOutputLimitBytes: config.inlineOutputLimitBytes,
     db,
+    closeDatabase: opened.close,
     agentDefinitions,
     interceptHandlers,
     workflows,
@@ -260,24 +274,12 @@ export async function shutdownRuntime(runtime: RuntimeContext): Promise<void> {
 
   // Mark any running/waiting agents as failed so they don't appear stuck on restart
   try {
-    const { agents } = await import('../db/schema.js')
-    const { eq: eqOp, or: orOp } = await import('drizzle-orm')
-    runtime.db.update(agents)
-      .set({
-        status: 'failed',
-        error: 'Server shutdown',
-        completedAt: Date.now(),
-      })
-      .where(
-        orOp(
-          eqOp(agents.status, 'running'),
-          eqOp(agents.status, 'waiting'),
-        )!,
-      )
-      .run()
+    await runtime.repositories.agents.failRunningOrWaiting('Server shutdown')
   } catch {
     // Best-effort — don't block shutdown
   }
+
+  await runtime.closeDatabase()
 
   logger.info('Runtime shutdown complete')
 }

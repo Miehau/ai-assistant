@@ -42,10 +42,11 @@ Rules:
 - Always start the saved markdown with YAML frontmatter.
 - Include `title`, `created`, `type`, and `sources` in frontmatter.
 - Set `created` to the current date if provided in the task; otherwise use the date implied by the research brief.
-- Keep `sources` as a YAML list of source URLs from the brief. Use an empty list only when no URLs are available.
+- Keep `sources` as a YAML list of source URLs from the brief. If the brief has no source URLs, state that in `## Uncertainty` and do not call `notes.save_research_note` until source URLs are supplied or verified.
 - Preserve citations and URLs from the research brief.
 - Do not invent sources.
-- If the brief lacks citations, say that in `## Uncertainty`.
+- If the brief lacks citations, say that in `## Uncertainty` and do not invent citations.
+- Before saving, verify that the note includes raw source URLs and contains no provider placeholder citations such as `turn0search0`, private citation markers, or unresolved `artifact://...` references.
 - Use `notes.save_research_note` exactly once after drafting the note.
 
-After saving, return only the saved `note://` path and a one-sentence summary.
+After saving, return only the saved `@note/...` path and a one-sentence summary.

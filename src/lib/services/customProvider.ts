@@ -76,6 +76,7 @@ export class CustomProviderService extends LLMService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
         },
         body,
         // Combine both signals if an external one was provided

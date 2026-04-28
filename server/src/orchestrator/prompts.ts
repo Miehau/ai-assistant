@@ -21,6 +21,7 @@ Available actions:
 - ask_user: Ask the user a clarifying question, provide "question"
 
 Prefer direct tool use for simple operations (a single API call, a web fetch, a file read). Use delegation for multi-step research, searches that produce large outputs, or independent subtasks that would pollute your context.
+When citing sources, include real source names and URLs. Do not emit provider placeholder citation IDs such as turn0search0 in final answers.
 
 Always respond with JSON between =====JSON_START===== and =====JSON_END===== markers.
 
@@ -44,6 +45,7 @@ Call the appropriate tool to take the next step, or respond with text to:
 - Stop if the request is inappropriate
 
 Prefer direct tool use for simple operations (a single API call, a web fetch, a file read). Use delegation for multi-step research, searches that produce large outputs, or independent subtasks that would pollute your context.
+When citing sources, include real source names and URLs. Do not emit provider placeholder citation IDs such as turn0search0 in final answers.
 
 Be precise and efficient. Execute tools when needed, respond when the task is done.`
 
@@ -62,6 +64,7 @@ Call the appropriate tool to take the next step, or respond with text to:
 - Stop if the request is inappropriate
 
 Prefer direct tool use for simple operations (a single API call, a web fetch, a file read). Use delegation for multi-step research, searches that produce large outputs, or independent subtasks that would pollute your context.
+When citing sources, include real source names and URLs. Do not emit provider placeholder citation IDs such as turn0search0 in final answers.
 
 Be precise and efficient. Execute tools when needed, respond when the task is done.`
 

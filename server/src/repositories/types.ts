@@ -142,6 +142,7 @@ export interface AgentRepository {
   create(input: CreateAgentInput): Promise<Agent>
   getById(id: string): Promise<Agent | null>
   update(id: string, input: UpdateAgentInput): Promise<Agent>
+  failRunningOrWaiting(error: string): Promise<void>
   findWaitingForCall(callId: string): Promise<Agent | null>
   findRootAgent(sessionId: string): Promise<Agent | null>
   listBySession(sessionId: string): Promise<Agent[]>
@@ -166,8 +167,10 @@ export interface SessionRepository {
 
 export interface UserRepository {
   create(input: CreateUserInput): Promise<User>
+  list(): Promise<User[]>
   getById(id: string): Promise<User | null>
   getByApiKeyHash(apiKeyHash: string): Promise<User | null>
+  setApiKeyHash(id: string, apiKeyHash: string): Promise<User>
 }
 
 export interface ToolOutputRepository {
@@ -229,4 +232,160 @@ export interface WorkflowRunRepository {
   getById(id: string): Promise<WorkflowRun | null>
   update(id: string, input: UpdateWorkflowRunInput): Promise<WorkflowRun>
   listBySession(sessionId: string): Promise<WorkflowRun[]>
+}
+
+// --- MCP persistence ---
+
+export type StoredMcpTransport = 'stdio' | 'streamable_http'
+export type StoredMcpServerStatus = 'disabled' | 'connected' | 'error'
+
+export interface StoredMcpServer {
+  id: string
+  name: string
+  transport: StoredMcpTransport
+  command: string | null
+  args: string | null
+  env: string | null
+  cwd: string | null
+  url: string | null
+  bearerToken: string | null
+  enabled: boolean
+  status: StoredMcpServerStatus
+  error: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface StoredMcpTool {
+  id: string
+  serverId: string
+  remoteName: string
+  registeredName: string
+  description: string | null
+  inputSchema: string | null
+  enabledForNewSessions: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CreateStoredMcpServerInput {
+  id: string
+  name: string
+  transport: StoredMcpTransport
+  command: string | null
+  args: string
+  env: string
+  cwd: string | null
+  url: string | null
+  bearerToken: string | null
+  enabled: boolean
+  status: StoredMcpServerStatus
+  error: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface UpdateStoredMcpServerInput {
+  name?: string
+  transport?: StoredMcpTransport
+  command?: string | null
+  args?: string
+  env?: string
+  cwd?: string | null
+  url?: string | null
+  bearerToken?: string | null
+  enabled?: boolean
+  status?: StoredMcpServerStatus
+  error?: string | null
+  updatedAt?: number
+}
+
+export interface CreateStoredMcpToolInput {
+  id: string
+  serverId: string
+  remoteName: string
+  registeredName: string
+  description: string
+  inputSchema: string
+  enabledForNewSessions: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface UpdateStoredMcpToolInput {
+  registeredName?: string
+  description?: string
+  inputSchema?: string
+  enabledForNewSessions?: boolean
+  updatedAt?: number
+}
+
+export interface McpRepository {
+  listEnabledServers(): Promise<StoredMcpServer[]>
+  listServers(): Promise<StoredMcpServer[]>
+  getServer(id: string): Promise<StoredMcpServer | null>
+  createServer(input: CreateStoredMcpServerInput): Promise<void>
+  updateServer(id: string, input: UpdateStoredMcpServerInput): Promise<void>
+  deleteServerAndTools(id: string): Promise<void>
+  listTools(serverId?: string): Promise<StoredMcpTool[]>
+  getTool(id: string): Promise<StoredMcpTool | null>
+  getToolByServerAndRemoteName(serverId: string, remoteName: string): Promise<StoredMcpTool | null>
+  createTool(input: CreateStoredMcpToolInput): Promise<void>
+  updateTool(id: string, input: UpdateStoredMcpToolInput): Promise<void>
+  deleteToolsForServer(serverId: string): Promise<void>
+}
+
+// --- Telegram persistence ---
+
+export interface StoredTelegramConnection {
+  id: string
+  userId: string
+  botToken: string
+  botUsername: string | null
+  allowedTelegramUserId: string
+  webhookPathSecret: string
+  webhookHeaderSecret: string
+  webhookUrl: string | null
+  status: string
+  lastError: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface StoredTelegramMessageLink {
+  id: string
+  connectionId: string
+  telegramChatId: string
+  telegramMessageId: number
+  sessionId: string
+  itemId: string | null
+  senderType: string
+  createdAt: number
+}
+
+export interface CreateStoredTelegramConnectionInput extends StoredTelegramConnection {}
+
+export interface UpdateStoredTelegramConnectionInput {
+  botToken?: string
+  botUsername?: string | null
+  allowedTelegramUserId?: string
+  webhookUrl?: string | null
+  status?: string
+  lastError?: string | null
+  updatedAt?: number
+}
+
+export interface CreateStoredTelegramMessageLinkInput extends StoredTelegramMessageLink {}
+
+export interface TelegramRepository {
+  listConnections(userId: string): Promise<StoredTelegramConnection[]>
+  getConnection(id: string, userId?: string): Promise<StoredTelegramConnection | null>
+  createConnection(input: CreateStoredTelegramConnectionInput): Promise<void>
+  updateConnection(id: string, input: UpdateStoredTelegramConnectionInput): Promise<void>
+  deleteConnection(id: string, userId: string): Promise<boolean>
+  hasProcessedUpdate(connectionId: string, updateId: number): Promise<boolean>
+  createUpdateDedupe(connectionId: string, updateId: number): Promise<void>
+  getMessageLink(connectionId: string, chatId: string, messageId: number): Promise<StoredTelegramMessageLink | null>
+  getSessionHeadLink(connectionId: string, sessionId: string): Promise<StoredTelegramMessageLink | null>
+  createMessageLink(input: CreateStoredTelegramMessageLinkInput): Promise<void>
 }

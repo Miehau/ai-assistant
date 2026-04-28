@@ -21,6 +21,7 @@ import { openaiCompatRoutes } from './routes/openai-compat.js'
 import { authMiddleware } from './middleware/auth.js'
 import { mcpRoutes } from './routes/mcps.js'
 import { telegramRoutes, telegramWebhookRoutes } from './routes/telegram.js'
+import { createRateLimiter } from './lib/rate-limit.js'
 
 type AppEnv = {
   Variables: {
@@ -33,7 +34,7 @@ const config = loadConfig()
 
 if (config.workingDir) {
   // Resolve DATABASE_URL to absolute before chdir so it doesn't get re-rooted
-  if (!path.isAbsolute(config.databaseUrl)) {
+  if (config.dbDialect === 'sqlite' && !path.isAbsolute(config.databaseUrl)) {
     config.databaseUrl = path.resolve(process.cwd(), config.databaseUrl)
   }
   process.chdir(config.workingDir)
@@ -44,8 +45,21 @@ async function main() {
 
   const app = new Hono<AppEnv>()
 
-  // Middleware
-  app.use('*', cors())
+  // CORS — bearer-token auth is the gate; CORS stays open without credentials
+  // so the bearer-Authorization model works from any origin (Tauri has no fixed origin).
+  // The actual gate is authMiddleware below.
+  const allowedOrigins = config.allowedOrigins
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)
+  app.use(
+    '*',
+    cors(
+      allowedOrigins.length > 0
+        ? { origin: allowedOrigins, credentials: true }
+        : { origin: '*', credentials: false },
+    ),
+  )
   app.use('*', honoLogger())
 
   // Inject runtime into context
@@ -54,12 +68,51 @@ async function main() {
     await next()
   })
 
-  // Health check (no auth)
+  // Health check (no auth, IP-based rate limit)
+  app.use(
+    '/health',
+    createRateLimiter({
+      name: 'health',
+      limit: config.rateLimitHealthPerMin,
+      keyBy: 'ip',
+      trustProxy: config.trustProxy,
+    }),
+  )
   app.get('/health', (c) => c.json({ status: 'ok', timestamp: Date.now() }))
+
+  // Telegram webhooks — server-to-server from Telegram, IP-based rate limit
+  app.use(
+    '/telegram/*',
+    createRateLimiter({
+      name: 'telegram',
+      limit: config.rateLimitTelegramPerMin,
+      keyBy: 'ip',
+      trustProxy: config.trustProxy,
+    }),
+  )
   app.route('/telegram', telegramWebhookRoutes(runtime))
 
-  // Auth for API routes (not /health, not /v1/*)
+  // Pre-auth failure throttle, then auth + per-user rate limit for /api/*
+  app.use(
+    '/api/*',
+    createRateLimiter({
+      name: 'api-auth-failure',
+      limit: config.rateLimitAuthFailurePerMin,
+      keyBy: 'ip',
+      trustProxy: config.trustProxy,
+      skipSuccessfulRequests: true,
+    }),
+  )
   app.use('/api/*', authMiddleware)
+  app.use(
+    '/api/*',
+    createRateLimiter({
+      name: 'api',
+      limit: config.rateLimitApiPerMin,
+      keyBy: 'user',
+      trustProxy: config.trustProxy,
+    }),
+  )
 
   // API Routes
   app.route('/api/chat', chatRoutes(runtime))
@@ -74,12 +127,31 @@ async function main() {
   app.route('/api/mcps', mcpRoutes(runtime))
   app.route('/api/telegram', telegramRoutes(runtime))
 
-  // OpenAI-compatible endpoint — lets the frontend use this server as a "custom backend"
-  // Register in the UI as Custom Backend with URL: http://localhost:3001/v1/chat/completions
+  // OpenAI-compatible endpoint — gated like /api/* with its own rate-limit bucket
+  app.use(
+    '/v1/*',
+    createRateLimiter({
+      name: 'inference-auth-failure',
+      limit: config.rateLimitAuthFailurePerMin,
+      keyBy: 'ip',
+      trustProxy: config.trustProxy,
+      skipSuccessfulRequests: true,
+    }),
+  )
+  app.use('/v1/*', authMiddleware)
+  app.use(
+    '/v1/*',
+    createRateLimiter({
+      name: 'inference',
+      limit: config.rateLimitInferencePerMin,
+      keyBy: 'user',
+      trustProxy: config.trustProxy,
+    }),
+  )
   app.route('/v1', openaiCompatRoutes(runtime))
 
   // Start server
-  serve({
+  const server = serve({
     fetch: app.fetch,
     port: config.port,
     hostname: config.host,
@@ -87,12 +159,19 @@ async function main() {
 
   logger.info({ port: config.port, host: config.host }, 'Server started')
 
-  // Graceful shutdown
-  process.on('SIGINT', async () => {
-    logger.info('Shutting down...')
+  let shuttingDown = false
+  const shutdown = async (signalName: string) => {
+    if (shuttingDown) return
+    shuttingDown = true
+    logger.info({ signal: signalName }, 'Shutting down...')
+    server.close()
     await shutdownRuntime(runtime)
     process.exit(0)
-  })
+  }
+
+  // Graceful shutdown
+  process.on('SIGINT', () => { void shutdown('SIGINT') })
+  process.on('SIGTERM', () => { void shutdown('SIGTERM') })
 }
 
 main().catch((err) => {

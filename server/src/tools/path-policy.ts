@@ -20,7 +20,8 @@ export interface ResolvedManagedFile {
 }
 
 const ARTIFACT_PREFIX = 'artifact://'
-const NOTE_PREFIX = 'note://'
+const NOTE_ROOT = '@note'
+const NOTE_PREFIX = '@note/'
 const UNKNOWN_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i
 const WINDOWS_ABSOLUTE_RE = /^[a-zA-Z]:[\\/]/
 
@@ -34,7 +35,7 @@ export function resolveManagedFilePath(
 
   const rawPath = requestedPath.trim()
   if (path.isAbsolute(rawPath) || WINDOWS_ABSOLUTE_RE.test(rawPath)) {
-    throw new Error('Absolute paths are not accepted; use a relative path, artifact://, or note://')
+    throw new Error('Absolute paths are not accepted; use a relative path, artifact://, or @note/')
   }
 
   const sessionRoot = getSessionFilesDir(options.sessionFilesRoot, options.sessionId)
@@ -50,13 +51,17 @@ export function resolveManagedFilePath(
     kind = 'artifact'
     rootPath = artifactRoot
     logicalPath = normalizeLogicalPath(rawPath.slice(ARTIFACT_PREFIX.length))
+  } else if (rawPath === NOTE_ROOT) {
+    kind = 'note'
+    rootPath = notesRoot
+    logicalPath = ''
   } else if (rawPath.startsWith(NOTE_PREFIX)) {
     kind = 'note'
     rootPath = notesRoot
     logicalPath = normalizeLogicalPath(rawPath.slice(NOTE_PREFIX.length))
   } else {
     if (UNKNOWN_SCHEME_RE.test(rawPath)) {
-      throw new Error('Unsupported path scheme; use artifact://, note://, or a relative path')
+      throw new Error('Unsupported path scheme; use artifact://, @note/, or a relative path')
     }
     kind = 'workspace'
     rootPath = workspaceRoot
@@ -152,7 +157,7 @@ function resolveInsideRoot(rootPath: string, logicalPath: string): string {
 
 function buildManagedFileRef(kind: ManagedFileKind, logicalPath: string): string {
   if (kind === 'artifact') return `${ARTIFACT_PREFIX}${logicalPath}`
-  if (kind === 'note') return `${NOTE_PREFIX}${logicalPath}`
+  if (kind === 'note') return logicalPath ? `${NOTE_PREFIX}${logicalPath}` : NOTE_ROOT
   return logicalPath || '.'
 }
 

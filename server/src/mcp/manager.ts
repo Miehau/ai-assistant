@@ -1,15 +1,13 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { eq, asc, inArray } from 'drizzle-orm'
 import { v4 as uuid } from 'uuid'
 import { z } from 'zod'
-import * as schema from '../db/schema.js'
-import type { DrizzleInstance } from '../repositories/sqlite/index.js'
 import type { ToolHandler, ToolMetadata, ToolResult } from '../tools/types.js'
 import { ToolRegistryImpl } from '../tools/registry.js'
 import { decrypt, deriveKey, encrypt } from '../lib/crypto.js'
 import { logger } from '../lib/logger.js'
+import type { McpRepository, StoredMcpServer, StoredMcpTool } from '../repositories/types.js'
 import type {
   CreateMcpServerInput,
   McpServerRecord,
@@ -42,7 +40,7 @@ export class McpManager {
   private encKey: string | null
 
   constructor(
-    private readonly db: DrizzleInstance,
+    private readonly repository: McpRepository,
     private readonly tools: ToolRegistryImpl,
     encryptionKey?: string,
   ) {
@@ -50,8 +48,8 @@ export class McpManager {
   }
 
   async initialize(): Promise<void> {
-    this.registerKnownTools()
-    const enabled = this.db.select().from(schema.mcpServers).where(eq(schema.mcpServers.enabled, 1)).all()
+    await this.registerKnownTools()
+    const enabled = await this.repository.listEnabledServers()
     for (const server of enabled) {
       await this.connect(server.id)
     }
@@ -65,13 +63,13 @@ export class McpManager {
   }
 
   async listServers(): Promise<McpServerRecord[]> {
-    const servers = this.db.select().from(schema.mcpServers).orderBy(asc(schema.mcpServers.name)).all()
-    return servers.map((server) => this.toServerRecord(server, this.getToolsForServer(server.id)))
+    const servers = await this.repository.listServers()
+    return Promise.all(servers.map(async (server) => this.toServerRecord(server, await this.getToolsForServer(server.id))))
   }
 
   async getServer(id: string): Promise<McpServerRecord | null> {
-    const server = this.db.select().from(schema.mcpServers).where(eq(schema.mcpServers.id, id)).limit(1).all()[0]
-    return server ? this.toServerRecord(server, this.getToolsForServer(server.id)) : null
+    const server = await this.repository.getServer(id)
+    return server ? this.toServerRecord(server, await this.getToolsForServer(server.id)) : null
   }
 
   async createServer(input: unknown): Promise<McpServerRecord> {
@@ -79,7 +77,7 @@ export class McpManager {
     this.validateServerConfig(parsed)
     const now = Date.now()
     const id = uuid()
-    this.db.insert(schema.mcpServers).values({
+    await this.repository.createServer({
       id,
       name: parsed.name,
       transport: parsed.transport,
@@ -89,12 +87,12 @@ export class McpManager {
       cwd: parsed.cwd ?? null,
       url: parsed.url ?? null,
       bearerToken: parsed.bearerToken ? this.storeSecret(parsed.bearerToken) : null,
-      enabled: parsed.enabled ? 1 : 0,
+      enabled: Boolean(parsed.enabled),
       status: parsed.enabled ? 'error' : 'disabled',
       error: null,
       createdAt: now,
       updatedAt: now,
-    }).run()
+    })
 
     if (parsed.enabled) {
       await this.connect(id)
@@ -105,7 +103,7 @@ export class McpManager {
   }
 
   async updateServer(id: string, input: unknown): Promise<McpServerRecord> {
-    const existing = this.db.select().from(schema.mcpServers).where(eq(schema.mcpServers.id, id)).limit(1).all()[0]
+    const existing = await this.repository.getServer(id)
     if (!existing) throw new Error(`MCP server not found: ${id}`)
 
     const parsed = updateServerSchema.parse(input) satisfies UpdateMcpServerInput
@@ -124,23 +122,20 @@ export class McpManager {
 
     await this.disconnect(id, next.enabled ? 'error' : 'disabled')
 
-    this.db.update(schema.mcpServers)
-      .set({
-        name: next.name,
-        transport: next.transport,
-        command: next.command ?? null,
-        args: JSON.stringify(next.args ?? []),
-        env: JSON.stringify(next.env ?? {}),
-        cwd: next.cwd ?? null,
-        url: next.url ?? null,
-        bearerToken: next.bearerToken ? this.storeSecret(next.bearerToken) : null,
-        enabled: next.enabled ? 1 : 0,
-        status: next.enabled ? 'error' : 'disabled',
-        error: null,
-        updatedAt: Date.now(),
-      })
-      .where(eq(schema.mcpServers.id, id))
-      .run()
+    await this.repository.updateServer(id, {
+      name: next.name,
+      transport: next.transport,
+      command: next.command ?? null,
+      args: JSON.stringify(next.args ?? []),
+      env: JSON.stringify(next.env ?? {}),
+      cwd: next.cwd ?? null,
+      url: next.url ?? null,
+      bearerToken: next.bearerToken ? this.storeSecret(next.bearerToken) : null,
+      enabled: next.enabled,
+      status: next.enabled ? 'error' : 'disabled',
+      error: null,
+      updatedAt: Date.now(),
+    })
 
     if (next.enabled) {
       await this.connect(id)
@@ -159,41 +154,29 @@ export class McpManager {
       this.tools.unregister(tool.registeredName)
       this.registeredTools.delete(tool.registeredName)
     }
-    this.db.delete(schema.mcpTools).where(eq(schema.mcpTools.serverId, id)).run()
-    this.db.delete(schema.mcpServers).where(eq(schema.mcpServers.id, id)).run()
+    await this.repository.deleteServerAndTools(id)
     return true
   }
 
   async setToolEnabled(serverId: string, remoteName: string, enabled: boolean): Promise<McpToolRecord> {
-    const tool = this.db
-      .select()
-      .from(schema.mcpTools)
-      .where(eq(schema.mcpTools.serverId, serverId))
-      .all()
-      .find((row) => row.remoteName === remoteName)
+    const tool = await this.repository.getToolByServerAndRemoteName(serverId, remoteName)
     if (!tool) throw new Error(`MCP tool not found: ${remoteName}`)
 
-    this.db.update(schema.mcpTools)
-      .set({ enabledForNewSessions: enabled ? 1 : 0, updatedAt: Date.now() })
-      .where(eq(schema.mcpTools.id, tool.id))
-      .run()
-    const updated = this.db.select().from(schema.mcpTools).where(eq(schema.mcpTools.id, tool.id)).limit(1).all()[0]
+    await this.repository.updateTool(tool.id, { enabledForNewSessions: enabled, updatedAt: Date.now() })
+    const updated = await this.repository.getTool(tool.id)
+    if (!updated) throw new Error(`MCP tool not found after update: ${remoteName}`)
     return this.toToolRecord(updated)
   }
 
-  getNewSessionToolSnapshot(serverIds: string[]): McpToolSnapshot[] {
+  async getNewSessionToolSnapshot(serverIds: string[]): Promise<McpToolSnapshot[]> {
     if (serverIds.length === 0) return []
-    const servers = this.db
-      .select()
-      .from(schema.mcpServers)
-      .where(inArray(schema.mcpServers.id, serverIds))
-      .all()
-      .filter((server) => server.enabled === 1)
+    const servers = (await Promise.all(serverIds.map((id) => this.repository.getServer(id))))
+      .filter((server): server is StoredMcpServer => Boolean(server?.enabled))
     const enabledServerIds = new Set(servers.map((server) => server.id))
     if (enabledServerIds.size === 0) return []
 
-    return this.db.select().from(schema.mcpTools).all()
-      .filter((tool) => enabledServerIds.has(tool.serverId) && tool.enabledForNewSessions === 1)
+    return (await this.repository.listTools())
+      .filter((tool) => enabledServerIds.has(tool.serverId) && tool.enabledForNewSessions)
       .map((tool) => ({
         name: tool.registeredName,
         description: this.toToolRecord(tool).description,
@@ -208,7 +191,7 @@ export class McpManager {
   }
 
   private async connect(id: string): Promise<void> {
-    const server = this.db.select().from(schema.mcpServers).where(eq(schema.mcpServers.id, id)).limit(1).all()[0]
+    const server = await this.repository.getServer(id)
     if (!server) throw new Error(`MCP server not found: ${id}`)
 
     try {
@@ -219,13 +202,13 @@ export class McpManager {
 
       const response = await client.listTools()
       const remoteTools = response.tools ?? []
-      this.upsertDiscoveredTools(server.id, server.name, remoteTools)
-      this.registerKnownTools(server.id)
-      this.setServerStatus(id, 'connected', null)
+      await this.upsertDiscoveredTools(server.id, server.name, remoteTools)
+      await this.registerKnownTools(server.id)
+      await this.setServerStatus(id, 'connected', null)
     } catch (err) {
       await this.disconnect(id, 'error')
       const message = err instanceof Error ? err.message : String(err)
-      this.setServerStatus(id, 'error', message)
+      await this.setServerStatus(id, 'error', message)
       logger.warn({ err, serverId: id }, 'MCP server connection failed')
     }
   }
@@ -240,10 +223,10 @@ export class McpManager {
       }
     }
     this.clients.delete(id)
-    this.setServerStatus(id, status, status === 'disabled' ? null : undefined)
+    await this.setServerStatus(id, status, status === 'disabled' ? null : undefined)
   }
 
-  private createTransport(server: typeof schema.mcpServers.$inferSelect): any {
+  private createTransport(server: StoredMcpServer): any {
     if (server.transport === 'stdio') {
       return new StdioClientTransport({
         command: server.command ?? '',
@@ -261,10 +244,8 @@ export class McpManager {
     })
   }
 
-  private registerKnownTools(serverId?: string): void {
-    const rows = serverId
-      ? this.db.select().from(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId)).all()
-      : this.db.select().from(schema.mcpTools).all()
+  private async registerKnownTools(serverId?: string): Promise<void> {
+    const rows = await this.repository.listTools(serverId)
 
     for (const row of rows) {
       const tool = this.toToolRecord(row)
@@ -304,56 +285,47 @@ export class McpManager {
     }
   }
 
-  private upsertDiscoveredTools(
+  private async upsertDiscoveredTools(
     serverId: string,
     serverName: string,
     tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>,
-  ): void {
+  ): Promise<void> {
     const now = Date.now()
-    const existing = this.db.select().from(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId)).all()
+    const existing = await this.repository.listTools(serverId)
     const existingByRemoteName = new Map(existing.map((tool) => [tool.remoteName, tool]))
 
     for (const tool of tools) {
       const current = existingByRemoteName.get(tool.name)
       const registeredName = `mcp.${sanitizeName(serverName)}.${sanitizeName(tool.name)}`
       if (current) {
-        this.db.update(schema.mcpTools)
-          .set({
-            registeredName,
-            description: tool.description ?? '',
-            inputSchema: JSON.stringify(normalizeSchema(tool.inputSchema)),
-            updatedAt: now,
-          })
-          .where(eq(schema.mcpTools.id, current.id))
-          .run()
+        await this.repository.updateTool(current.id, {
+          registeredName,
+          description: tool.description ?? '',
+          inputSchema: JSON.stringify(normalizeSchema(tool.inputSchema)),
+          updatedAt: now,
+        })
       } else {
-        this.db.insert(schema.mcpTools).values({
+        await this.repository.createTool({
           id: uuid(),
           serverId,
           remoteName: tool.name,
           registeredName,
           description: tool.description ?? '',
           inputSchema: JSON.stringify(normalizeSchema(tool.inputSchema)),
-          enabledForNewSessions: 1,
+          enabledForNewSessions: true,
           createdAt: now,
           updatedAt: now,
-        }).run()
+        })
       }
     }
   }
 
-  private getToolsForServer(serverId: string): McpToolRecord[] {
-    return this.db
-      .select()
-      .from(schema.mcpTools)
-      .where(eq(schema.mcpTools.serverId, serverId))
-      .orderBy(asc(schema.mcpTools.remoteName))
-      .all()
-      .map((tool) => this.toToolRecord(tool))
+  private async getToolsForServer(serverId: string): Promise<McpToolRecord[]> {
+    return (await this.repository.listTools(serverId)).map((tool) => this.toToolRecord(tool))
   }
 
   private toServerRecord(
-    row: typeof schema.mcpServers.$inferSelect,
+    row: StoredMcpServer,
     tools: McpToolRecord[],
   ): McpServerRecord {
     return {
@@ -366,7 +338,7 @@ export class McpManager {
       cwd: row.cwd ?? null,
       url: row.url ?? null,
       bearerTokenConfigured: Boolean(row.bearerToken),
-      enabled: Boolean(row.enabled),
+      enabled: row.enabled,
       status: row.status as McpServerStatus,
       error: row.error ?? null,
       createdAt: row.createdAt,
@@ -375,7 +347,7 @@ export class McpManager {
     }
   }
 
-  private toToolRecord(row: typeof schema.mcpTools.$inferSelect): McpToolRecord {
+  private toToolRecord(row: StoredMcpTool): McpToolRecord {
     return {
       id: row.id,
       serverId: row.serverId,
@@ -383,16 +355,18 @@ export class McpManager {
       registeredName: row.registeredName,
       description: row.description ?? '',
       inputSchema: normalizeSchema(parseJson(row.inputSchema, { type: 'object', properties: {} })),
-      enabledForNewSessions: Boolean(row.enabledForNewSessions),
+      enabledForNewSessions: row.enabledForNewSessions,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     }
   }
 
-  private setServerStatus(id: string, status: McpServerStatus, error?: string | null): void {
-    const updates: Record<string, unknown> = { status, updatedAt: Date.now() }
-    if (error !== undefined) updates.error = error
-    this.db.update(schema.mcpServers).set(updates).where(eq(schema.mcpServers.id, id)).run()
+  private async setServerStatus(id: string, status: McpServerStatus, error?: string | null): Promise<void> {
+    await this.repository.updateServer(id, {
+      status,
+      ...(error !== undefined ? { error } : {}),
+      updatedAt: Date.now(),
+    })
   }
 
   private validateServerConfig(input: {

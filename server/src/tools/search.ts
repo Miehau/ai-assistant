@@ -43,7 +43,7 @@ export function registerSearchTools(
         type: 'object',
         properties: {
           query: { type: 'string', description: 'Search pattern (regex unless literal is true)' },
-          path: { type: 'string', description: 'Managed file or directory path: relative session workspace path, artifact://..., or note://...' },
+          path: { type: 'string', description: 'Managed file or directory path: relative session workspace path, artifact://..., or @note/...' },
           literal: { type: 'boolean', description: 'Treat query as literal string (default: false)' },
           case_sensitive: { type: 'boolean', description: 'Case-sensitive search (default: false)' },
           max_results: {

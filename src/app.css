@@ -131,15 +131,6 @@
   @apply text-blue-500 hover:underline;
 }
 
-.prose .generated-citation {
-  @apply ml-1 inline-flex align-super text-[0.65em] not-italic font-medium leading-none;
-  gap: 0.125rem;
-}
-
-.prose .generated-citation span {
-  @apply rounded border border-violet-400/25 bg-violet-500/10 px-1 py-0.5 text-violet-200;
-}
-
 .prose table {
   @apply w-full border-collapse mb-4;
 }
@@ -155,6 +146,36 @@
 
 .prose > :last-child {
   @apply mb-0;
+}
+
+.source-ledger {
+  @apply mt-3 border-t border-white/10 pt-3 text-xs;
+}
+
+.source-ledger-title {
+  @apply mb-2 font-medium uppercase tracking-wide text-muted-foreground;
+  font-size: 0.68rem;
+}
+
+.source-ledger-list {
+  @apply grid gap-1.5;
+}
+
+.source-ledger-item {
+  @apply flex min-w-0 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 text-left transition-colors hover:border-emerald-400/30 hover:bg-emerald-400/5;
+}
+
+.source-ledger-label {
+  @apply min-w-0 flex-1 truncate text-foreground;
+}
+
+.source-ledger-domain {
+  @apply max-w-[11rem] shrink-0 truncate font-mono text-[0.68rem] text-muted-foreground;
+}
+
+.source-ledger-more,
+.source-ledger-warning {
+  @apply mt-2 text-[0.7rem] text-muted-foreground;
 }
 
 /* Glassmorphism Effects */

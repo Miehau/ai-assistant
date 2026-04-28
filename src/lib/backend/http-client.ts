@@ -223,7 +223,57 @@ export class HttpBackendError extends Error {
 
 export interface HttpClientConfig {
   serverUrl?: string;
-  token?: string;
+  token?: string | null;
+}
+
+export const DEFAULT_HTTP_BACKEND_SERVER_URL = 'http://localhost:3001';
+export const HTTP_BACKEND_SERVER_URL_STORAGE_KEY =
+  'ai-frontend.backend.server-url';
+export const HTTP_BACKEND_BEARER_TOKEN_STORAGE_KEY =
+  'ai-frontend.backend.bearer-token';
+
+function getLocalStorage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeHttpBackendServerUrl(
+  url?: string | null,
+): string {
+  const trimmed = url?.trim() ?? '';
+  return (trimmed || DEFAULT_HTTP_BACKEND_SERVER_URL).replace(/\/+$/, '');
+}
+
+export function loadStoredHttpBackendConfig(): HttpClientConfig {
+  const storage = getLocalStorage();
+  if (!storage) return {};
+
+  return {
+    serverUrl:
+      storage.getItem(HTTP_BACKEND_SERVER_URL_STORAGE_KEY)?.trim() ||
+      undefined,
+    token:
+      storage.getItem(HTTP_BACKEND_BEARER_TOKEN_STORAGE_KEY)?.trim() ||
+      null,
+  };
+}
+
+export function saveStoredHttpBackendConfig(config: HttpClientConfig): void {
+  const storage = getLocalStorage();
+  if (!storage) return;
+
+  const serverUrl = normalizeHttpBackendServerUrl(config.serverUrl);
+  storage.setItem(HTTP_BACKEND_SERVER_URL_STORAGE_KEY, serverUrl);
+
+  const token = config.token?.trim() ?? '';
+  if (token) {
+    storage.setItem(HTTP_BACKEND_BEARER_TOKEN_STORAGE_KEY, token);
+  } else {
+    storage.removeItem(HTTP_BACKEND_BEARER_TOKEN_STORAGE_KEY);
+  }
 }
 
 export class HttpBackendClient {
@@ -231,21 +281,23 @@ export class HttpBackendClient {
   private token: string | null;
 
   constructor(config: HttpClientConfig = {}) {
-    this.serverUrl = (config.serverUrl ?? 'http://localhost:3001').replace(
-      /\/$/,
-      '',
+    const storedConfig = loadStoredHttpBackendConfig();
+    this.serverUrl = normalizeHttpBackendServerUrl(
+      config.serverUrl ?? storedConfig.serverUrl,
     );
-    this.token = config.token ?? 'dev-key';
+    this.token = Object.prototype.hasOwnProperty.call(config, 'token')
+      ? config.token?.trim() || null
+      : storedConfig.token?.trim() || null;
   }
 
   // ---- Config helpers -----------------------------------------------------
 
   setServerUrl(url: string): void {
-    this.serverUrl = url.replace(/\/$/, '');
+    this.serverUrl = normalizeHttpBackendServerUrl(url);
   }
 
   setToken(token: string | null): void {
-    this.token = token;
+    this.token = token?.trim() || null;
   }
 
   // ---- Internal helpers ---------------------------------------------------

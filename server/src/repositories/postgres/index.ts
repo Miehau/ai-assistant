@@ -1,44 +1,42 @@
-import Database from 'better-sqlite3'
-import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
-import { eq, and, desc, asc, sql, max, isNull, or } from 'drizzle-orm'
+import postgres from 'postgres'
+import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js'
+import { and, asc, desc, eq, isNull, max, or, sql } from 'drizzle-orm'
 import { v4 as uuid } from 'uuid'
-import { createHash } from 'crypto'
 import { encrypt, decrypt, deriveKey } from '../../lib/crypto.js'
-
-import * as schema from '../../db/schema.js'
+import * as schema from '../../db/schema-pg.js'
 import type {
   AgentRepository,
-  ItemRepository,
-  SessionRepository,
-  UserRepository,
-  ToolOutputRepository,
-  ModelRepository,
-  ApiKeyRepository,
-  SystemPromptRepository,
-  PreferenceRepository,
-  WorkflowRunRepository,
-  CreateAgentInput,
-  UpdateAgentInput,
-  CreateSessionInput,
-  UpdateSessionInput,
-  CreateUserInput,
-  CreateItemInput,
-  SaveToolOutputInput,
-  CreateModelInput,
-  UpdateModelInput,
-  CreateWorkflowRunInput,
-  UpdateWorkflowRunInput,
-  ModelRecord,
   ApiKeyRecord,
-  SystemPromptRecord,
+  ApiKeyRepository,
+  CreateAgentInput,
+  CreateItemInput,
+  CreateModelInput,
+  CreateSessionInput,
   CreateSystemPromptInput,
-  UpdateSystemPromptInput,
+  CreateUserInput,
+  CreateWorkflowRunInput,
+  ItemRepository,
   McpRepository,
+  ModelRecord,
+  ModelRepository,
+  PreferenceRepository,
+  SaveToolOutputInput,
+  SessionRepository,
   StoredMcpServer,
   StoredMcpTool,
-  TelegramRepository,
   StoredTelegramConnection,
   StoredTelegramMessageLink,
+  SystemPromptRecord,
+  SystemPromptRepository,
+  TelegramRepository,
+  ToolOutputRepository,
+  UpdateAgentInput,
+  UpdateModelInput,
+  UpdateSessionInput,
+  UpdateSystemPromptInput,
+  UpdateWorkflowRunInput,
+  UserRepository,
+  WorkflowRunRepository,
 } from '../types.js'
 import type {
   Agent,
@@ -57,9 +55,12 @@ import type {
 } from '../../domain/types.js'
 import type { WorkflowRun, WorkflowRunStatus } from '../../workflows/types.js'
 
-export type DrizzleInstance = BetterSQLite3Database<typeof schema>
+export type PgDrizzleInstance = PostgresJsDatabase<typeof schema>
+type PgClient = postgres.Sql
 
-// --- Helpers ---
+function boolValue(value: boolean | number | null | undefined): boolean {
+  return value === true || value === 1
+}
 
 function toAgent(row: typeof schema.agents.$inferSelect): Agent {
   return {
@@ -121,8 +122,8 @@ function toItem(row: typeof schema.items.$inferSelect): Item {
     arguments: row.arguments ?? null,
     output: row.output ?? null,
     contentBlocks: row.contentBlocks ? (JSON.parse(row.contentBlocks) as ItemContentBlock[]) : null,
-    isError: row.isError != null ? Boolean(row.isError) : null,
-    saveOutput: row.saveOutput != null ? Boolean(row.saveOutput) : null,
+    isError: row.isError != null ? boolValue(row.isError) : null,
+    saveOutput: row.saveOutput != null ? boolValue(row.saveOutput) : null,
     turnNumber: row.turnNumber ?? 0,
     durationMs: row.durationMs ?? null,
     createdAt: row.createdAt,
@@ -184,7 +185,7 @@ function toStoredMcpServer(row: typeof schema.mcpServers.$inferSelect): StoredMc
     cwd: row.cwd ?? null,
     url: row.url ?? null,
     bearerToken: row.bearerToken ?? null,
-    enabled: Boolean(row.enabled),
+    enabled: boolValue(row.enabled),
     status: row.status as StoredMcpServer['status'],
     error: row.error ?? null,
     createdAt: row.createdAt,
@@ -200,7 +201,7 @@ function toStoredMcpTool(row: typeof schema.mcpTools.$inferSelect): StoredMcpToo
     registeredName: row.registeredName,
     description: row.description ?? null,
     inputSchema: row.inputSchema ?? null,
-    enabledForNewSessions: Boolean(row.enabledForNewSessions),
+    enabledForNewSessions: boolValue(row.enabledForNewSessions),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
@@ -236,63 +237,53 @@ function toStoredTelegramMessageLink(row: typeof schema.telegramMessageLinks.$in
   }
 }
 
-// --- Repository factories ---
-
-function createUserRepo(db: DrizzleInstance): UserRepository {
+function createUserRepo(db: PgDrizzleInstance): UserRepository {
   return {
     async create(input: CreateUserInput): Promise<User> {
       const now = Date.now()
-      const id = uuid()
       const row = {
-        id,
+        id: uuid(),
         email: input.email ?? null,
         apiKeyHash: input.apiKeyHash,
         createdAt: now,
         updatedAt: now,
       }
-      db.insert(schema.users).values(row).run()
+      await db.insert(schema.users).values(row)
       return toUser(row)
     },
 
     async list(): Promise<User[]> {
-      return db.select().from(schema.users).orderBy(asc(schema.users.createdAt)).all().map(toUser)
+      const rows = await db.select().from(schema.users).orderBy(asc(schema.users.createdAt))
+      return rows.map(toUser)
     },
 
     async getById(id: string): Promise<User | null> {
-      const rows = db.select().from(schema.users).where(eq(schema.users.id, id)).limit(1).all()
-      return rows.length > 0 ? toUser(rows[0]) : null
+      const rows = await db.select().from(schema.users).where(eq(schema.users.id, id)).limit(1)
+      return rows[0] ? toUser(rows[0]) : null
     },
 
     async getByApiKeyHash(apiKeyHash: string): Promise<User | null> {
-      const rows = db
-        .select()
-        .from(schema.users)
-        .where(eq(schema.users.apiKeyHash, apiKeyHash))
-        .limit(1)
-        .all()
-      return rows.length > 0 ? toUser(rows[0]) : null
+      const rows = await db.select().from(schema.users).where(eq(schema.users.apiKeyHash, apiKeyHash)).limit(1)
+      return rows[0] ? toUser(rows[0]) : null
     },
 
     async setApiKeyHash(id: string, apiKeyHash: string): Promise<User> {
-      const now = Date.now()
-      db.update(schema.users)
-        .set({ apiKeyHash, updatedAt: now })
+      await db.update(schema.users)
+        .set({ apiKeyHash, updatedAt: Date.now() })
         .where(eq(schema.users.id, id))
-        .run()
-      const rows = db.select().from(schema.users).where(eq(schema.users.id, id)).limit(1).all()
-      if (rows.length === 0) throw new Error(`User not found: ${id}`)
-      return toUser(rows[0])
+      const row = await this.getById(id)
+      if (!row) throw new Error(`User not found: ${id}`)
+      return row
     },
   }
 }
 
-function createSessionRepo(db: DrizzleInstance): SessionRepository {
+function createSessionRepo(db: PgDrizzleInstance): SessionRepository {
   return {
     async create(input: CreateSessionInput): Promise<Session> {
       const now = Date.now()
-      const id = uuid()
       const row = {
-        id,
+        id: uuid(),
         userId: input.userId,
         rootAgentId: null,
         parentSessionId: input.parentSessionId ?? null,
@@ -304,33 +295,26 @@ function createSessionRepo(db: DrizzleInstance): SessionRepository {
         createdAt: now,
         updatedAt: now,
       }
-      db.insert(schema.sessions).values(row).run()
+      await db.insert(schema.sessions).values(row)
       return toSession(row)
     },
 
     async getById(id: string): Promise<Session | null> {
-      const rows = db
-        .select()
-        .from(schema.sessions)
-        .where(eq(schema.sessions.id, id))
-        .limit(1)
-        .all()
-      return rows.length > 0 ? toSession(rows[0]) : null
+      const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.id, id)).limit(1)
+      return rows[0] ? toSession(rows[0]) : null
     },
 
     async listByUser(userId: string): Promise<Session[]> {
-      const rows = db
+      const rows = await db
         .select()
         .from(schema.sessions)
         .where(eq(schema.sessions.userId, userId))
         .orderBy(desc(schema.sessions.createdAt))
-        .all()
       return rows.map(toSession)
     },
 
     async update(id: string, input: UpdateSessionInput): Promise<Session> {
-      const now = Date.now()
-      const updates: Record<string, unknown> = { updatedAt: now }
+      const updates: Record<string, unknown> = { updatedAt: Date.now() }
       if (input.rootAgentId !== undefined) updates.rootAgentId = input.rootAgentId
       if (input.parentSessionId !== undefined) updates.parentSessionId = input.parentSessionId
       if (input.forkedFromItemId !== undefined) updates.forkedFromItemId = input.forkedFromItemId
@@ -339,47 +323,39 @@ function createSessionRepo(db: DrizzleInstance): SessionRepository {
       if (input.summary !== undefined) updates.summary = input.summary
       if (input.status !== undefined) updates.status = input.status
 
-      db.update(schema.sessions).set(updates).where(eq(schema.sessions.id, id)).run()
-
-      const rows = db
-        .select()
-        .from(schema.sessions)
-        .where(eq(schema.sessions.id, id))
-        .limit(1)
-        .all()
-      if (rows.length === 0) throw new Error(`Session not found: ${id}`)
+      await db.update(schema.sessions).set(updates as any).where(eq(schema.sessions.id, id))
+      const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.id, id)).limit(1)
+      if (!rows[0]) throw new Error(`Session not found: ${id}`)
       return toSession(rows[0])
     },
 
     async delete(id: string): Promise<void> {
-      db.transaction((tx) => {
-        const agentRows = tx
+      await db.transaction(async (tx) => {
+        const agentRows = await tx
           .select({ id: schema.agents.id })
           .from(schema.agents)
           .where(eq(schema.agents.sessionId, id))
-          .all()
 
         for (const agent of agentRows) {
-          tx.delete(schema.items).where(eq(schema.items.agentId, agent.id)).run()
-          tx.delete(schema.toolOutputs).where(eq(schema.toolOutputs.agentId, agent.id)).run()
+          await tx.delete(schema.items).where(eq(schema.items.agentId, agent.id))
+          await tx.delete(schema.toolOutputs).where(eq(schema.toolOutputs.agentId, agent.id))
         }
 
-        tx.delete(schema.agents).where(eq(schema.agents.sessionId, id)).run()
-        tx.delete(schema.workflowRuns).where(eq(schema.workflowRuns.sessionId, id)).run()
-        tx.delete(schema.telegramMessageLinks).where(eq(schema.telegramMessageLinks.sessionId, id)).run()
-        tx.delete(schema.sessions).where(eq(schema.sessions.id, id)).run()
+        await tx.delete(schema.agents).where(eq(schema.agents.sessionId, id))
+        await tx.delete(schema.workflowRuns).where(eq(schema.workflowRuns.sessionId, id))
+        await tx.delete(schema.telegramMessageLinks).where(eq(schema.telegramMessageLinks.sessionId, id))
+        await tx.delete(schema.sessions).where(eq(schema.sessions.id, id))
       })
     },
   }
 }
 
-function createAgentRepo(db: DrizzleInstance): AgentRepository {
+function createAgentRepo(db: PgDrizzleInstance): AgentRepository {
   return {
     async create(input: CreateAgentInput): Promise<Agent> {
       const now = Date.now()
-      const id = uuid()
       const row = {
-        id,
+        id: uuid(),
         sessionId: input.sessionId,
         parentId: input.parentId ?? null,
         sourceCallId: input.sourceCallId ?? null,
@@ -396,18 +372,17 @@ function createAgentRepo(db: DrizzleInstance): AgentRepository {
         updatedAt: now,
         completedAt: null,
       }
-      db.insert(schema.agents).values(row).run()
+      await db.insert(schema.agents).values(row)
       return toAgent(row)
     },
 
     async getById(id: string): Promise<Agent | null> {
-      const rows = db.select().from(schema.agents).where(eq(schema.agents.id, id)).limit(1).all()
-      return rows.length > 0 ? toAgent(rows[0]) : null
+      const rows = await db.select().from(schema.agents).where(eq(schema.agents.id, id)).limit(1)
+      return rows[0] ? toAgent(rows[0]) : null
     },
 
     async update(id: string, input: UpdateAgentInput): Promise<Agent> {
-      const now = Date.now()
-      const updates: Record<string, unknown> = { updatedAt: now }
+      const updates: Record<string, unknown> = { updatedAt: Date.now() }
       if (input.status !== undefined) updates.status = input.status
       if (input.waitingFor !== undefined) updates.waitingFor = JSON.stringify(input.waitingFor)
       if (input.result !== undefined) updates.result = input.result
@@ -416,96 +391,71 @@ function createAgentRepo(db: DrizzleInstance): AgentRepository {
       if (input.plan !== undefined) updates.plan = input.plan ? JSON.stringify(input.plan) : null
       if (input.completedAt !== undefined) updates.completedAt = input.completedAt
 
-      db.update(schema.agents).set(updates).where(eq(schema.agents.id, id)).run()
-
-      const rows = db.select().from(schema.agents).where(eq(schema.agents.id, id)).limit(1).all()
-      if (rows.length === 0) throw new Error(`Agent not found: ${id}`)
+      await db.update(schema.agents).set(updates as any).where(eq(schema.agents.id, id))
+      const rows = await db.select().from(schema.agents).where(eq(schema.agents.id, id)).limit(1)
+      if (!rows[0]) throw new Error(`Agent not found: ${id}`)
       return toAgent(rows[0])
     },
 
     async failRunningOrWaiting(error: string): Promise<void> {
-      db.update(schema.agents)
-        .set({
-          status: 'failed',
-          error,
-          completedAt: Date.now(),
-          updatedAt: Date.now(),
-        })
-        .where(
-          or(
-            eq(schema.agents.status, 'running'),
-            eq(schema.agents.status, 'waiting'),
-          )!,
-        )
-        .run()
+      const now = Date.now()
+      await db.update(schema.agents)
+        .set({ status: 'failed', error, completedAt: now, updatedAt: now })
+        .where(or(eq(schema.agents.status, 'running'), eq(schema.agents.status, 'waiting'))!)
     },
 
     async findWaitingForCall(callId: string): Promise<Agent | null> {
-      const rows = db
+      const rows = await db
         .select()
         .from(schema.agents)
-        .where(
-          sql`EXISTS (SELECT 1 FROM json_each(${schema.agents.waitingFor}) WHERE json_extract(value, '$.callId') = ${callId})`
-        )
+        .where(sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${schema.agents.waitingFor}::jsonb) elem WHERE elem->>'callId' = ${callId})`)
         .limit(1)
-        .all()
-      return rows.length > 0 ? toAgent(rows[0]) : null
+      return rows[0] ? toAgent(rows[0]) : null
     },
 
     async findRootAgent(sessionId: string): Promise<Agent | null> {
-      const rows = db
+      const rows = await db
         .select()
         .from(schema.agents)
-        .where(
-          and(
-            eq(schema.agents.sessionId, sessionId),
-            isNull(schema.agents.parentId),
-          )
-        )
+        .where(and(eq(schema.agents.sessionId, sessionId), isNull(schema.agents.parentId)))
         .orderBy(desc(schema.agents.createdAt))
         .limit(1)
-        .all()
-      return rows.length > 0 ? toAgent(rows[0]) : null
+      return rows[0] ? toAgent(rows[0]) : null
     },
 
     async listBySession(sessionId: string): Promise<Agent[]> {
-      const rows = db
+      const rows = await db
         .select()
         .from(schema.agents)
         .where(eq(schema.agents.sessionId, sessionId))
         .orderBy(asc(schema.agents.createdAt))
-        .all()
       return rows.map(toAgent)
     },
 
     async listByParent(parentId: string): Promise<Agent[]> {
-      const rows = db
+      const rows = await db
         .select()
         .from(schema.agents)
         .where(eq(schema.agents.parentId, parentId))
         .orderBy(asc(schema.agents.createdAt))
-        .all()
       return rows.map(toAgent)
     },
   }
 }
 
-function createItemRepo(db: DrizzleInstance): ItemRepository {
+function createItemRepo(db: PgDrizzleInstance): ItemRepository {
   return {
     async create(input: CreateItemInput): Promise<Item> {
       const now = Date.now()
       const id = uuid()
 
-      // Atomic: SELECT MAX(sequence) + INSERT in a single transaction to avoid
-      // duplicate sequence numbers when concurrent awaits interleave on the event loop.
-      const row = db.transaction((tx) => {
-        const maxSeqResult = tx
+      const row = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.agentId}))`)
+        const maxSeqResult = await tx
           .select({ maxSeq: max(schema.items.sequence) })
           .from(schema.items)
           .where(eq(schema.items.agentId, input.agentId))
-          .all()
         const nextSequence = (maxSeqResult[0]?.maxSeq ?? -1) + 1
-
         const insertRow = {
           id,
           agentId: input.agentId,
@@ -518,13 +468,13 @@ function createItemRepo(db: DrizzleInstance): ItemRepository {
           arguments: input.arguments ?? null,
           output: input.output ?? null,
           contentBlocks: input.contentBlocks ? JSON.stringify(input.contentBlocks) : null,
-          isError: input.isError != null ? (input.isError ? 1 : 0) : null,
-          saveOutput: input.saveOutput != null ? (input.saveOutput ? 1 : 0) : null,
+          isError: input.isError ?? null,
+          saveOutput: input.saveOutput ?? null,
           turnNumber: input.turnNumber,
           durationMs: input.durationMs ?? null,
           createdAt: now,
         }
-        tx.insert(schema.items).values(insertRow).run()
+        await tx.insert(schema.items).values(insertRow)
         return insertRow
       })
 
@@ -532,161 +482,126 @@ function createItemRepo(db: DrizzleInstance): ItemRepository {
     },
 
     async getById(id: string): Promise<Item | null> {
-      const rows = db
-        .select()
-        .from(schema.items)
-        .where(eq(schema.items.id, id))
-        .limit(1)
-        .all()
-      return rows.length > 0 ? toItem(rows[0]) : null
+      const rows = await db.select().from(schema.items).where(eq(schema.items.id, id)).limit(1)
+      return rows[0] ? toItem(rows[0]) : null
     },
 
     async listByAgent(agentId: string): Promise<Item[]> {
-      const rows = db
+      const rows = await db
         .select()
         .from(schema.items)
         .where(eq(schema.items.agentId, agentId))
         .orderBy(asc(schema.items.sequence))
-        .all()
       return rows.map(toItem)
     },
 
     async listBySession(sessionId: string): Promise<Item[]> {
-      // Load items from ALL agents in the session (root + subagents),
-      // ordered by depth so root items come first, then creation time, then sequence.
-      const rows = db
+      const rows = await db
         .select({ item: schema.items })
         .from(schema.items)
         .innerJoin(schema.agents, eq(schema.items.agentId, schema.agents.id))
         .where(eq(schema.agents.sessionId, sessionId))
         .orderBy(asc(schema.agents.depth), asc(schema.agents.createdAt), asc(schema.items.sequence))
-        .all()
-      return rows.map((r) => toItem(r.item))
+      return rows.map((row) => toItem(row.item))
     },
 
     async getOutputByCallId(callId: string): Promise<Item | null> {
-      const rows = db
+      const rows = await db
         .select()
         .from(schema.items)
-        .where(
-          and(eq(schema.items.callId, callId), eq(schema.items.type, 'function_call_output'))
-        )
+        .where(and(eq(schema.items.callId, callId), eq(schema.items.type, 'function_call_output')))
         .limit(1)
-        .all()
-      return rows.length > 0 ? toItem(rows[0]) : null
+      return rows[0] ? toItem(rows[0]) : null
     },
   }
 }
 
-function createToolOutputRepo(db: DrizzleInstance): ToolOutputRepository {
+function createToolOutputRepo(db: PgDrizzleInstance): ToolOutputRepository {
   return {
     async save(input: SaveToolOutputInput): Promise<ToolOutput> {
-      const now = Date.now()
-      const id = uuid()
       const row = {
-        id,
+        id: uuid(),
         agentId: input.agentId,
         callId: input.callId,
         toolName: input.toolName,
         data: JSON.stringify(input.data),
-        createdAt: now,
+        createdAt: Date.now(),
       }
-      db.insert(schema.toolOutputs).values(row).run()
+      await db.insert(schema.toolOutputs).values(row)
       return toToolOutput(row)
     },
 
     async getById(id: string): Promise<ToolOutput | null> {
-      const rows = db
-        .select()
-        .from(schema.toolOutputs)
-        .where(eq(schema.toolOutputs.id, id))
-        .limit(1)
-        .all()
-      return rows.length > 0 ? toToolOutput(rows[0]) : null
+      const rows = await db.select().from(schema.toolOutputs).where(eq(schema.toolOutputs.id, id)).limit(1)
+      return rows[0] ? toToolOutput(rows[0]) : null
     },
 
     async listByAgent(agentId: string): Promise<ToolOutput[]> {
-      const rows = db
+      const rows = await db
         .select()
         .from(schema.toolOutputs)
         .where(eq(schema.toolOutputs.agentId, agentId))
         .orderBy(asc(schema.toolOutputs.createdAt))
-        .all()
       return rows.map(toToolOutput)
     },
 
     async getLastId(agentId: string): Promise<string | undefined> {
-      const rows = db
+      const rows = await db
         .select({ id: schema.toolOutputs.id })
         .from(schema.toolOutputs)
         .where(eq(schema.toolOutputs.agentId, agentId))
         .orderBy(desc(schema.toolOutputs.createdAt))
         .limit(1)
-        .all()
       return rows[0]?.id
     },
   }
 }
 
-function createModelRepo(db: DrizzleInstance): ModelRepository {
+function createModelRepo(db: PgDrizzleInstance): ModelRepository {
   return {
     async create(input: CreateModelInput): Promise<ModelRecord> {
-      const now = Date.now()
-      const id = input.id ?? uuid()
       const row = {
-        id,
+        id: input.id ?? uuid(),
         provider: input.provider,
         modelName: input.name,
-        enabled: 1,
-        createdAt: now,
+        enabled: true,
+        createdAt: Date.now(),
       }
-      db.insert(schema.models).values(row).run()
+      await db.insert(schema.models).values(row)
       return toModelRecord(row)
     },
 
     async list(): Promise<ModelRecord[]> {
-      const rows = db.select().from(schema.models).orderBy(asc(schema.models.createdAt)).all()
+      const rows = await db.select().from(schema.models).orderBy(asc(schema.models.createdAt))
       return rows.map(toModelRecord)
     },
 
     async getById(id: string): Promise<ModelRecord | null> {
-      const rows = db.select().from(schema.models).where(eq(schema.models.id, id)).limit(1).all()
-      return rows.length > 0 ? toModelRecord(rows[0]) : null
+      const rows = await db.select().from(schema.models).where(eq(schema.models.id, id)).limit(1)
+      return rows[0] ? toModelRecord(rows[0]) : null
     },
 
     async update(id: string, input: UpdateModelInput): Promise<ModelRecord> {
-      const updates: Record<string, unknown> = {}
-      // The schema doesn't have displayName/maxTokens/contextWindow columns,
-      // so we only update modelName if displayName is provided as a fallback
-      if (input.displayName !== undefined) updates.modelName = input.displayName
-
-      if (Object.keys(updates).length > 0) {
-        db.update(schema.models).set(updates).where(eq(schema.models.id, id)).run()
+      if (input.displayName !== undefined) {
+        await db.update(schema.models).set({ modelName: input.displayName }).where(eq(schema.models.id, id))
       }
-
-      const rows = db.select().from(schema.models).where(eq(schema.models.id, id)).limit(1).all()
-      if (rows.length === 0) throw new Error(`Model not found: ${id}`)
+      const rows = await db.select().from(schema.models).where(eq(schema.models.id, id)).limit(1)
+      if (!rows[0]) throw new Error(`Model not found: ${id}`)
       return toModelRecord(rows[0])
     },
 
     async delete(id: string): Promise<void> {
-      db.delete(schema.models).where(eq(schema.models.id, id)).run()
+      await db.delete(schema.models).where(eq(schema.models.id, id))
     },
   }
 }
 
-function createApiKeyRepo(db: DrizzleInstance, encKey: string | null): ApiKeyRepository {
+function createApiKeyRepo(db: PgDrizzleInstance, encKey: string | null): ApiKeyRepository {
   return {
     async getByProvider(provider: string): Promise<ApiKeyRecord | null> {
-      const rows = db
-        .select()
-        .from(schema.apiKeys)
-        .where(eq(schema.apiKeys.provider, provider))
-        .limit(1)
-        .all()
-      if (rows.length === 0) return null
+      const rows = await db.select().from(schema.apiKeys).where(eq(schema.apiKeys.provider, provider)).limit(1)
+      if (!rows[0]) return null
       const record = toApiKeyRecord(rows[0])
-      // Decrypt the stored key (gracefully handles legacy plaintext)
       record.encryptedKey = encKey ? decrypt(record.encryptedKey, encKey) : record.encryptedKey
       return record
     },
@@ -694,132 +609,92 @@ function createApiKeyRepo(db: DrizzleInstance, encKey: string | null): ApiKeyRep
     async upsert(provider: string, plaintextKey: string): Promise<ApiKeyRecord> {
       const now = Date.now()
       const storedValue = encKey ? encrypt(plaintextKey, encKey) : plaintextKey
+      const existing = await db.select().from(schema.apiKeys).where(eq(schema.apiKeys.provider, provider)).limit(1)
 
-      const existing = db
-        .select()
-        .from(schema.apiKeys)
-        .where(eq(schema.apiKeys.provider, provider))
-        .limit(1)
-        .all()
-
-      if (existing.length > 0) {
-        db.update(schema.apiKeys)
-          .set({ apiKey: storedValue })
-          .where(eq(schema.apiKeys.provider, provider))
-          .run()
+      if (existing[0]) {
+        await db.update(schema.apiKeys).set({ apiKey: storedValue }).where(eq(schema.apiKeys.provider, provider))
         return {
           provider,
-          encryptedKey: plaintextKey, // return plaintext to caller
+          encryptedKey: plaintextKey,
           createdAt: existing[0].createdAt,
           updatedAt: now,
         }
       }
 
-      const id = uuid()
-      const row = {
-        id,
+      await db.insert(schema.apiKeys).values({
+        id: uuid(),
         provider,
         apiKey: storedValue,
         createdAt: now,
-      }
-      db.insert(schema.apiKeys).values(row).run()
-      return {
-        provider,
-        encryptedKey: plaintextKey, // return plaintext to caller
-        createdAt: now,
-        updatedAt: now,
-      }
+      })
+      return { provider, encryptedKey: plaintextKey, createdAt: now, updatedAt: now }
     },
 
     async delete(provider: string): Promise<void> {
-      db.delete(schema.apiKeys).where(eq(schema.apiKeys.provider, provider)).run()
+      await db.delete(schema.apiKeys).where(eq(schema.apiKeys.provider, provider))
     },
   }
 }
 
-function createSystemPromptRepo(db: DrizzleInstance): SystemPromptRepository {
+function createSystemPromptRepo(db: PgDrizzleInstance): SystemPromptRepository {
   return {
     async create(input: CreateSystemPromptInput): Promise<SystemPromptRecord> {
       const now = Date.now()
-      const id = uuid()
       const row = {
-        id,
+        id: uuid(),
         name: input.name,
         content: input.content,
         createdAt: now,
         updatedAt: now,
       }
-      db.insert(schema.systemPrompts).values(row).run()
+      await db.insert(schema.systemPrompts).values(row)
       return toSystemPromptRecord(row)
     },
 
     async list(): Promise<SystemPromptRecord[]> {
-      const rows = db
-        .select()
-        .from(schema.systemPrompts)
-        .orderBy(asc(schema.systemPrompts.createdAt))
-        .all()
+      const rows = await db.select().from(schema.systemPrompts).orderBy(asc(schema.systemPrompts.createdAt))
       return rows.map(toSystemPromptRecord)
     },
 
     async getById(id: string): Promise<SystemPromptRecord | null> {
-      const rows = db
-        .select()
-        .from(schema.systemPrompts)
-        .where(eq(schema.systemPrompts.id, id))
-        .limit(1)
-        .all()
-      return rows.length > 0 ? toSystemPromptRecord(rows[0]) : null
+      const rows = await db.select().from(schema.systemPrompts).where(eq(schema.systemPrompts.id, id)).limit(1)
+      return rows[0] ? toSystemPromptRecord(rows[0]) : null
     },
 
     async update(id: string, input: UpdateSystemPromptInput): Promise<SystemPromptRecord> {
-      const now = Date.now()
-      const updates: Record<string, unknown> = { updatedAt: now }
+      const updates: Record<string, unknown> = { updatedAt: Date.now() }
       if (input.name !== undefined) updates.name = input.name
       if (input.content !== undefined) updates.content = input.content
-
-      db.update(schema.systemPrompts).set(updates).where(eq(schema.systemPrompts.id, id)).run()
-
-      const rows = db
-        .select()
-        .from(schema.systemPrompts)
-        .where(eq(schema.systemPrompts.id, id))
-        .limit(1)
-        .all()
-      if (rows.length === 0) throw new Error(`System prompt not found: ${id}`)
+      await db.update(schema.systemPrompts).set(updates as any).where(eq(schema.systemPrompts.id, id))
+      const rows = await db.select().from(schema.systemPrompts).where(eq(schema.systemPrompts.id, id)).limit(1)
+      if (!rows[0]) throw new Error(`System prompt not found: ${id}`)
       return toSystemPromptRecord(rows[0])
     },
 
     async delete(id: string): Promise<void> {
-      db.delete(schema.systemPrompts).where(eq(schema.systemPrompts.id, id)).run()
+      await db.delete(schema.systemPrompts).where(eq(schema.systemPrompts.id, id))
     },
   }
 }
 
-function createPreferenceRepo(db: DrizzleInstance): PreferenceRepository {
+function createPreferenceRepo(db: PgDrizzleInstance): PreferenceRepository {
   return {
     async get(key: string): Promise<string | null> {
-      const rows = db
-        .select()
-        .from(schema.preferences)
-        .where(eq(schema.preferences.key, key))
-        .limit(1)
-        .all()
-      return rows.length > 0 ? rows[0].value : null
+      const rows = await db.select().from(schema.preferences).where(eq(schema.preferences.key, key)).limit(1)
+      return rows[0]?.value ?? null
     },
 
     async set(key: string, value: string): Promise<void> {
-      db.insert(schema.preferences)
+      await db.insert(schema.preferences)
         .values({ key, value })
         .onConflictDoUpdate({
           target: schema.preferences.key,
           set: { value },
         })
-        .run()
     },
 
     async delete(key: string): Promise<void> {
-      db.delete(schema.preferences).where(eq(schema.preferences.key, key)).run()
+      await db.delete(schema.preferences).where(eq(schema.preferences.key, key))
     },
   }
 }
@@ -843,13 +718,12 @@ function toWorkflowRun(row: typeof schema.workflowRuns.$inferSelect): WorkflowRu
   }
 }
 
-function createWorkflowRunRepo(db: DrizzleInstance): WorkflowRunRepository {
+function createWorkflowRunRepo(db: PgDrizzleInstance): WorkflowRunRepository {
   return {
     async create(input: CreateWorkflowRunInput): Promise<WorkflowRun> {
       const now = Date.now()
-      const id = uuid()
       const row = {
-        id,
+        id: uuid(),
         workflowName: input.workflowName,
         sessionId: input.sessionId,
         triggerAgentId: input.triggerAgentId ?? null,
@@ -864,187 +738,151 @@ function createWorkflowRunRepo(db: DrizzleInstance): WorkflowRunRepository {
         createdAt: now,
         updatedAt: now,
       }
-      db.insert(schema.workflowRuns).values(row).run()
+      await db.insert(schema.workflowRuns).values(row)
       return toWorkflowRun(row)
     },
 
     async getById(id: string): Promise<WorkflowRun | null> {
-      const rows = db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, id)).limit(1).all()
-      return rows.length > 0 ? toWorkflowRun(rows[0]) : null
+      const rows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, id)).limit(1)
+      return rows[0] ? toWorkflowRun(rows[0]) : null
     },
 
     async update(id: string, input: UpdateWorkflowRunInput): Promise<WorkflowRun> {
-      const now = Date.now()
-      const updates: Record<string, unknown> = { updatedAt: now }
+      const updates: Record<string, unknown> = { updatedAt: Date.now() }
       if (input.status !== undefined) updates.status = input.status
       if (input.output !== undefined) updates.output = input.output != null ? JSON.stringify(input.output) : null
       if (input.steps !== undefined) updates.steps = JSON.stringify(input.steps)
       if (input.error !== undefined) updates.error = input.error
       if (input.startedAt !== undefined) updates.startedAt = input.startedAt
       if (input.completedAt !== undefined) updates.completedAt = input.completedAt
-
-      db.update(schema.workflowRuns).set(updates).where(eq(schema.workflowRuns.id, id)).run()
-
-      const rows = db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, id)).limit(1).all()
-      if (rows.length === 0) throw new Error(`WorkflowRun not found: ${id}`)
+      await db.update(schema.workflowRuns).set(updates as any).where(eq(schema.workflowRuns.id, id))
+      const rows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, id)).limit(1)
+      if (!rows[0]) throw new Error(`WorkflowRun not found: ${id}`)
       return toWorkflowRun(rows[0])
     },
 
     async listBySession(sessionId: string): Promise<WorkflowRun[]> {
-      const rows = db
+      const rows = await db
         .select()
         .from(schema.workflowRuns)
         .where(eq(schema.workflowRuns.sessionId, sessionId))
         .orderBy(desc(schema.workflowRuns.createdAt))
-        .all()
       return rows.map(toWorkflowRun)
     },
   }
 }
 
-function createMcpRepo(db: DrizzleInstance): McpRepository {
+function createMcpRepo(db: PgDrizzleInstance): McpRepository {
   return {
     async listEnabledServers(): Promise<StoredMcpServer[]> {
-      return db.select().from(schema.mcpServers).where(eq(schema.mcpServers.enabled, 1)).all().map(toStoredMcpServer)
+      const rows = await db.select().from(schema.mcpServers).where(eq(schema.mcpServers.enabled, true))
+      return rows.map(toStoredMcpServer)
     },
 
     async listServers(): Promise<StoredMcpServer[]> {
-      return db.select().from(schema.mcpServers).orderBy(asc(schema.mcpServers.name)).all().map(toStoredMcpServer)
+      const rows = await db.select().from(schema.mcpServers).orderBy(asc(schema.mcpServers.name))
+      return rows.map(toStoredMcpServer)
     },
 
     async getServer(id: string): Promise<StoredMcpServer | null> {
-      const row = db.select().from(schema.mcpServers).where(eq(schema.mcpServers.id, id)).limit(1).all()[0]
-      return row ? toStoredMcpServer(row) : null
+      const rows = await db.select().from(schema.mcpServers).where(eq(schema.mcpServers.id, id)).limit(1)
+      return rows[0] ? toStoredMcpServer(rows[0]) : null
     },
 
     async createServer(input): Promise<void> {
-      db.insert(schema.mcpServers).values({
-        ...input,
-        enabled: input.enabled ? 1 : 0,
-      }).run()
+      await db.insert(schema.mcpServers).values(input)
     },
 
     async updateServer(id, input): Promise<void> {
-      const updates: Record<string, unknown> = {}
-      if (input.name !== undefined) updates.name = input.name
-      if (input.transport !== undefined) updates.transport = input.transport
-      if (input.command !== undefined) updates.command = input.command
-      if (input.args !== undefined) updates.args = input.args
-      if (input.env !== undefined) updates.env = input.env
-      if (input.cwd !== undefined) updates.cwd = input.cwd
-      if (input.url !== undefined) updates.url = input.url
-      if (input.bearerToken !== undefined) updates.bearerToken = input.bearerToken
-      if (input.enabled !== undefined) updates.enabled = input.enabled ? 1 : 0
-      if (input.status !== undefined) updates.status = input.status
-      if ('error' in input) updates.error = input.error
-      updates.updatedAt = input.updatedAt ?? Date.now()
-      db.update(schema.mcpServers).set(updates).where(eq(schema.mcpServers.id, id)).run()
+      await db.update(schema.mcpServers).set({ ...input, updatedAt: input.updatedAt ?? Date.now() } as any).where(eq(schema.mcpServers.id, id))
     },
 
     async deleteServerAndTools(id: string): Promise<void> {
-      db.transaction((tx) => {
-        tx.delete(schema.mcpTools).where(eq(schema.mcpTools.serverId, id)).run()
-        tx.delete(schema.mcpServers).where(eq(schema.mcpServers.id, id)).run()
+      await db.transaction(async (tx) => {
+        await tx.delete(schema.mcpTools).where(eq(schema.mcpTools.serverId, id))
+        await tx.delete(schema.mcpServers).where(eq(schema.mcpServers.id, id))
       })
     },
 
     async listTools(serverId?: string): Promise<StoredMcpTool[]> {
       const rows = serverId
-        ? db.select().from(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId)).orderBy(asc(schema.mcpTools.remoteName)).all()
-        : db.select().from(schema.mcpTools).orderBy(asc(schema.mcpTools.remoteName)).all()
+        ? await db.select().from(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId)).orderBy(asc(schema.mcpTools.remoteName))
+        : await db.select().from(schema.mcpTools).orderBy(asc(schema.mcpTools.remoteName))
       return rows.map(toStoredMcpTool)
     },
 
     async getTool(id: string): Promise<StoredMcpTool | null> {
-      const row = db.select().from(schema.mcpTools).where(eq(schema.mcpTools.id, id)).limit(1).all()[0]
-      return row ? toStoredMcpTool(row) : null
+      const rows = await db.select().from(schema.mcpTools).where(eq(schema.mcpTools.id, id)).limit(1)
+      return rows[0] ? toStoredMcpTool(rows[0]) : null
     },
 
     async getToolByServerAndRemoteName(serverId: string, remoteName: string): Promise<StoredMcpTool | null> {
-      const row = db
+      const rows = await db
         .select()
         .from(schema.mcpTools)
         .where(and(eq(schema.mcpTools.serverId, serverId), eq(schema.mcpTools.remoteName, remoteName)))
         .limit(1)
-        .all()[0]
-      return row ? toStoredMcpTool(row) : null
+      return rows[0] ? toStoredMcpTool(rows[0]) : null
     },
 
     async createTool(input): Promise<void> {
-      db.insert(schema.mcpTools).values({
-        ...input,
-        enabledForNewSessions: input.enabledForNewSessions ? 1 : 0,
-      }).run()
+      await db.insert(schema.mcpTools).values(input)
     },
 
     async updateTool(id, input): Promise<void> {
-      const updates: Record<string, unknown> = {}
-      if (input.registeredName !== undefined) updates.registeredName = input.registeredName
-      if (input.description !== undefined) updates.description = input.description
-      if (input.inputSchema !== undefined) updates.inputSchema = input.inputSchema
-      if (input.enabledForNewSessions !== undefined) {
-        updates.enabledForNewSessions = input.enabledForNewSessions ? 1 : 0
-      }
-      updates.updatedAt = input.updatedAt ?? Date.now()
-      db.update(schema.mcpTools).set(updates).where(eq(schema.mcpTools.id, id)).run()
+      await db.update(schema.mcpTools).set({ ...input, updatedAt: input.updatedAt ?? Date.now() } as any).where(eq(schema.mcpTools.id, id))
     },
 
     async deleteToolsForServer(serverId: string): Promise<void> {
-      db.delete(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId)).run()
+      await db.delete(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId))
     },
   }
 }
 
-function createTelegramRepo(db: DrizzleInstance): TelegramRepository {
+function createTelegramRepo(db: PgDrizzleInstance): TelegramRepository {
   return {
     async listConnections(userId: string): Promise<StoredTelegramConnection[]> {
-      return db
+      const rows = await db
         .select()
         .from(schema.telegramConnections)
         .where(eq(schema.telegramConnections.userId, userId))
         .orderBy(asc(schema.telegramConnections.createdAt))
-        .all()
-        .map(toStoredTelegramConnection)
+      return rows.map(toStoredTelegramConnection)
     },
 
     async getConnection(id: string, userId?: string): Promise<StoredTelegramConnection | null> {
       const where = userId
         ? and(eq(schema.telegramConnections.id, id), eq(schema.telegramConnections.userId, userId))
         : eq(schema.telegramConnections.id, id)
-      const row = db.select().from(schema.telegramConnections).where(where).limit(1).all()[0]
-      return row ? toStoredTelegramConnection(row) : null
+      const rows = await db.select().from(schema.telegramConnections).where(where).limit(1)
+      return rows[0] ? toStoredTelegramConnection(rows[0]) : null
     },
 
     async createConnection(input): Promise<void> {
-      db.insert(schema.telegramConnections).values(input).run()
+      await db.insert(schema.telegramConnections).values(input)
     },
 
     async updateConnection(id, input): Promise<void> {
-      db.update(schema.telegramConnections)
-        .set({ ...input, updatedAt: input.updatedAt ?? Date.now() })
-        .where(eq(schema.telegramConnections.id, id))
-        .run()
+      await db.update(schema.telegramConnections).set({ ...input, updatedAt: input.updatedAt ?? Date.now() } as any).where(eq(schema.telegramConnections.id, id))
     },
 
     async deleteConnection(id: string, userId: string): Promise<boolean> {
-      const existing = db
+      const existing = await db
         .select()
         .from(schema.telegramConnections)
         .where(and(eq(schema.telegramConnections.id, id), eq(schema.telegramConnections.userId, userId)))
         .limit(1)
-        .all()[0]
-      if (!existing) return false
-
-      db.transaction((tx) => {
-        tx.delete(schema.telegramUpdateDedupe).where(eq(schema.telegramUpdateDedupe.connectionId, id)).run()
-        tx.delete(schema.telegramMessageLinks).where(eq(schema.telegramMessageLinks.connectionId, id)).run()
-        tx.delete(schema.telegramConnections).where(eq(schema.telegramConnections.id, id)).run()
+      if (!existing[0]) return false
+      await db.transaction(async (tx) => {
+        await tx.delete(schema.telegramUpdateDedupe).where(eq(schema.telegramUpdateDedupe.connectionId, id))
+        await tx.delete(schema.telegramMessageLinks).where(eq(schema.telegramMessageLinks.connectionId, id))
+        await tx.delete(schema.telegramConnections).where(eq(schema.telegramConnections.id, id))
       })
       return true
     },
 
     async hasProcessedUpdate(connectionId: string, updateId: number): Promise<boolean> {
-      const row = db
+      const rows = await db
         .select()
         .from(schema.telegramUpdateDedupe)
         .where(and(
@@ -1052,19 +890,17 @@ function createTelegramRepo(db: DrizzleInstance): TelegramRepository {
           eq(schema.telegramUpdateDedupe.telegramUpdateId, updateId),
         ))
         .limit(1)
-        .all()[0]
-      return Boolean(row)
+      return Boolean(rows[0])
     },
 
     async createUpdateDedupe(connectionId: string, updateId: number): Promise<void> {
-      db.insert(schema.telegramUpdateDedupe)
+      await db.insert(schema.telegramUpdateDedupe)
         .values({ connectionId, telegramUpdateId: updateId, createdAt: Date.now() })
         .onConflictDoNothing()
-        .run()
     },
 
     async getMessageLink(connectionId: string, chatId: string, messageId: number): Promise<StoredTelegramMessageLink | null> {
-      const row = db
+      const rows = await db
         .select()
         .from(schema.telegramMessageLinks)
         .where(and(
@@ -1073,12 +909,11 @@ function createTelegramRepo(db: DrizzleInstance): TelegramRepository {
           eq(schema.telegramMessageLinks.telegramMessageId, messageId),
         ))
         .limit(1)
-        .all()[0]
-      return row ? toStoredTelegramMessageLink(row) : null
+      return rows[0] ? toStoredTelegramMessageLink(rows[0]) : null
     },
 
     async getSessionHeadLink(connectionId: string, sessionId: string): Promise<StoredTelegramMessageLink | null> {
-      const row = db
+      const rows = await db
         .select()
         .from(schema.telegramMessageLinks)
         .where(and(
@@ -1087,49 +922,79 @@ function createTelegramRepo(db: DrizzleInstance): TelegramRepository {
         ))
         .orderBy(desc(schema.telegramMessageLinks.createdAt), desc(schema.telegramMessageLinks.telegramMessageId))
         .limit(1)
-        .all()[0]
-      return row ? toStoredTelegramMessageLink(row) : null
+      return rows[0] ? toStoredTelegramMessageLink(rows[0]) : null
     },
 
     async createMessageLink(input): Promise<void> {
-      db.insert(schema.telegramMessageLinks).values(input).run()
+      await db.insert(schema.telegramMessageLinks).values(input)
     },
   }
 }
 
-// --- Public API ---
+export async function createPgDatabase(url: string): Promise<{ db: PgDrizzleInstance; close: () => Promise<void> }> {
+  const client = postgres(url, { max: 10, onnotice: () => {} })
+  await ensurePgSchema(client)
+  const db = drizzle(client, { schema })
+  return { db, close: async () => { await client.end() } }
+}
 
-export function createDatabase(url: string): DrizzleInstance {
-  const sqlite = new Database(url)
-  sqlite.pragma('journal_mode = WAL')
-  sqlite.pragma('foreign_keys = ON')
+export class PostgresRepositories {
+  users: UserRepository
+  sessions: SessionRepository
+  agents: AgentRepository
+  items: ItemRepository
+  toolOutputs: ToolOutputRepository
+  models: ModelRepository
+  apiKeys: ApiKeyRepository
+  systemPrompts: SystemPromptRepository
+  preferences: PreferenceRepository
+  workflowRuns: WorkflowRunRepository
+  mcp: McpRepository
+  telegram: TelegramRepository
 
-  // Auto-create tables if they don't exist
-  sqlite.exec(`
+  constructor(db: PgDrizzleInstance, encryptionKey?: string) {
+    const encKey = encryptionKey ? deriveKey(encryptionKey) : null
+    this.users = createUserRepo(db)
+    this.sessions = createSessionRepo(db)
+    this.agents = createAgentRepo(db)
+    this.items = createItemRepo(db)
+    this.toolOutputs = createToolOutputRepo(db)
+    this.models = createModelRepo(db)
+    this.apiKeys = createApiKeyRepo(db, encKey)
+    this.systemPrompts = createSystemPromptRepo(db)
+    this.preferences = createPreferenceRepo(db)
+    this.workflowRuns = createWorkflowRunRepo(db)
+    this.mcp = createMcpRepo(db)
+    this.telegram = createTelegramRepo(db)
+  }
+}
+
+async function ensurePgSchema(client: PgClient): Promise<void> {
+  await client.unsafe(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE,
       api_key_hash TEXT UNIQUE NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
-      user_id TEXT REFERENCES users(id),
+      user_id TEXT,
       root_agent_id TEXT,
-      parent_session_id TEXT REFERENCES sessions(id),
-      forked_from_item_id TEXT REFERENCES items(id),
+      parent_session_id TEXT,
+      forked_from_item_id TEXT,
       source TEXT,
       title TEXT,
       summary TEXT,
       status TEXT DEFAULT 'active',
-      created_at INTEGER,
-      updated_at INTEGER
+      created_at BIGINT,
+      updated_at BIGINT
     );
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
-      session_id TEXT REFERENCES sessions(id),
-      parent_id TEXT REFERENCES agents(id),
+      session_id TEXT,
+      parent_id TEXT,
       source_call_id TEXT,
       depth INTEGER DEFAULT 0,
       task TEXT NOT NULL,
@@ -1140,13 +1005,13 @@ export function createDatabase(url: string): DrizzleInstance {
       error TEXT,
       turn_count INTEGER DEFAULT 0,
       plan TEXT,
-      created_at INTEGER,
-      updated_at INTEGER,
-      completed_at INTEGER
+      created_at BIGINT,
+      updated_at BIGINT,
+      completed_at BIGINT
     );
     CREATE TABLE IF NOT EXISTS items (
       id TEXT PRIMARY KEY,
-      agent_id TEXT REFERENCES agents(id),
+      agent_id TEXT,
       sequence INTEGER NOT NULL,
       type TEXT NOT NULL,
       role TEXT,
@@ -1155,39 +1020,40 @@ export function createDatabase(url: string): DrizzleInstance {
       name TEXT,
       arguments TEXT,
       output TEXT,
-      is_error INTEGER,
-      save_output INTEGER,
+      content_blocks TEXT,
+      is_error BOOLEAN,
+      save_output BOOLEAN,
       turn_number INTEGER,
       duration_ms INTEGER,
-      created_at INTEGER NOT NULL
+      created_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS api_keys (
       id TEXT PRIMARY KEY,
-      provider TEXT NOT NULL,
+      provider TEXT NOT NULL UNIQUE,
       api_key TEXT NOT NULL,
-      created_at INTEGER NOT NULL
+      created_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS models (
       id TEXT PRIMARY KEY,
       provider TEXT NOT NULL,
       model_name TEXT NOT NULL,
-      enabled INTEGER DEFAULT 1,
-      created_at INTEGER NOT NULL
+      enabled BOOLEAN DEFAULT TRUE,
+      created_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS system_prompts (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       content TEXT NOT NULL,
-      created_at INTEGER,
-      updated_at INTEGER
+      created_at BIGINT,
+      updated_at BIGINT
     );
     CREATE TABLE IF NOT EXISTS tool_outputs (
       id TEXT PRIMARY KEY,
-      agent_id TEXT REFERENCES agents(id),
+      agent_id TEXT,
       call_id TEXT,
       tool_name TEXT NOT NULL,
       data TEXT,
-      created_at INTEGER NOT NULL
+      created_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS preferences (
       key TEXT PRIMARY KEY,
@@ -1196,17 +1062,18 @@ export function createDatabase(url: string): DrizzleInstance {
     CREATE TABLE IF NOT EXISTS workflow_runs (
       id TEXT PRIMARY KEY,
       workflow_name TEXT NOT NULL,
-      session_id TEXT NOT NULL REFERENCES sessions(id),
-      trigger_agent_id TEXT REFERENCES agents(id),
+      session_id TEXT NOT NULL,
+      trigger_agent_id TEXT,
       trigger_call_id TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
       input TEXT,
       output TEXT,
+      steps TEXT,
       error TEXT,
-      started_at INTEGER,
-      completed_at INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      started_at BIGINT,
+      completed_at BIGINT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS mcp_servers (
       id TEXT PRIMARY KEY,
@@ -1218,26 +1085,26 @@ export function createDatabase(url: string): DrizzleInstance {
       cwd TEXT,
       url TEXT,
       bearer_token TEXT,
-      enabled INTEGER NOT NULL DEFAULT 0,
+      enabled BOOLEAN NOT NULL DEFAULT FALSE,
       status TEXT NOT NULL DEFAULT 'disabled',
       error TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS mcp_tools (
       id TEXT PRIMARY KEY,
-      server_id TEXT NOT NULL REFERENCES mcp_servers(id),
+      server_id TEXT NOT NULL,
       remote_name TEXT NOT NULL,
       registered_name TEXT NOT NULL,
       description TEXT,
       input_schema TEXT,
-      enabled_for_new_sessions INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      enabled_for_new_sessions BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS telegram_connections (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id),
+      user_id TEXT NOT NULL,
       bot_token TEXT NOT NULL,
       bot_username TEXT,
       allowed_telegram_user_id TEXT NOT NULL,
@@ -1246,23 +1113,23 @@ export function createDatabase(url: string): DrizzleInstance {
       webhook_url TEXT,
       status TEXT NOT NULL DEFAULT 'disconnected',
       last_error TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS telegram_message_links (
       id TEXT PRIMARY KEY,
-      connection_id TEXT NOT NULL REFERENCES telegram_connections(id),
+      connection_id TEXT NOT NULL,
       telegram_chat_id TEXT NOT NULL,
-      telegram_message_id INTEGER NOT NULL,
-      session_id TEXT NOT NULL REFERENCES sessions(id),
-      item_id TEXT REFERENCES items(id),
+      telegram_message_id BIGINT NOT NULL,
+      session_id TEXT NOT NULL,
+      item_id TEXT,
       sender_type TEXT NOT NULL,
-      created_at INTEGER NOT NULL
+      created_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS telegram_update_dedupe (
-      connection_id TEXT NOT NULL REFERENCES telegram_connections(id),
-      telegram_update_id INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
+      connection_id TEXT NOT NULL,
+      telegram_update_id BIGINT NOT NULL,
+      created_at BIGINT NOT NULL,
       PRIMARY KEY (connection_id, telegram_update_id)
     );
     CREATE INDEX IF NOT EXISTS agents_session_id_idx ON agents(session_id);
@@ -1281,44 +1148,4 @@ export function createDatabase(url: string): DrizzleInstance {
     CREATE INDEX IF NOT EXISTS telegram_message_links_connection_chat_message_idx
       ON telegram_message_links(connection_id, telegram_chat_id, telegram_message_id);
   `)
-
-  // Incremental migrations — ADD COLUMN IF NOT EXISTS (SQLite has no such syntax, so try/catch)
-  try { sqlite.exec(`ALTER TABLE items ADD COLUMN content_blocks TEXT;`) } catch { /* already exists */ }
-  try { sqlite.exec(`ALTER TABLE workflow_runs ADD COLUMN steps TEXT;`) } catch { /* already exists */ }
-  try { sqlite.exec(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT REFERENCES sessions(id);`) } catch { /* already exists */ }
-  try { sqlite.exec(`ALTER TABLE sessions ADD COLUMN forked_from_item_id TEXT REFERENCES items(id);`) } catch { /* already exists */ }
-  try { sqlite.exec(`ALTER TABLE sessions ADD COLUMN source TEXT;`) } catch { /* already exists */ }
-
-  return drizzle(sqlite, { schema })
-}
-
-export class SQLiteRepositories {
-  users: UserRepository
-  sessions: SessionRepository
-  agents: AgentRepository
-  items: ItemRepository
-  toolOutputs: ToolOutputRepository
-  models: ModelRepository
-  apiKeys: ApiKeyRepository
-  systemPrompts: SystemPromptRepository
-  preferences: PreferenceRepository
-  workflowRuns: WorkflowRunRepository
-  mcp: McpRepository
-  telegram: TelegramRepository
-
-  constructor(db: DrizzleInstance, encryptionKey?: string) {
-    const encKey = encryptionKey ? deriveKey(encryptionKey) : null
-    this.users = createUserRepo(db)
-    this.sessions = createSessionRepo(db)
-    this.agents = createAgentRepo(db)
-    this.items = createItemRepo(db)
-    this.toolOutputs = createToolOutputRepo(db)
-    this.models = createModelRepo(db)
-    this.apiKeys = createApiKeyRepo(db, encKey)
-    this.systemPrompts = createSystemPromptRepo(db)
-    this.preferences = createPreferenceRepo(db)
-    this.workflowRuns = createWorkflowRunRepo(db)
-    this.mcp = createMcpRepo(db)
-    this.telegram = createTelegramRepo(db)
-  }
 }

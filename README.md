@@ -40,6 +40,18 @@ cd server && bun run dev   # Server only
 bun run dev:tauri    # Tauri desktop app only (no server)
 ```
 
+### Production Backend
+
+For a networked deployment, run the server with Postgres and create a bearer token before exposing API routes:
+
+```bash
+cd server
+DB_DIALECT=postgres DATABASE_URL=postgres://user:pass@host:5432/dbname ENCRYPTION_KEY=<32-byte-secret> bun run create-key
+```
+
+In the frontend, open Settings -> Backend and save the server URL plus the generated bearer token.
+Set `TRUST_PROXY=true` only when a trusted reverse proxy or platform is setting `X-Forwarded-For`/`X-Real-IP`.
+
 ## Prerequisites
 
 - [Bun](https://bun.sh/)
@@ -63,7 +75,7 @@ server/                 # Hono backend (the real backend)
     ├── orchestrator/   # Controller loop
     ├── providers/      # LLM provider implementations
     ├── tools/          # Agent tools
-    ├── db/             # Drizzle ORM + SQLite
+    ├── db/             # Drizzle ORM schemas for SQLite and Postgres
     ├── routes/         # API routes
     └── workflows/      # Workflow definitions
 
@@ -73,7 +85,7 @@ src-tauri/              # Tauri shell (thin native wrapper)
 ## Tech Stack
 
 - **Frontend**: SvelteKit 2, Svelte 5, TypeScript, TailwindCSS, shadcn-svelte
-- **Backend**: Hono, Drizzle ORM, better-sqlite3, TypeScript
+- **Backend**: Hono, Drizzle ORM, better-sqlite3/Postgres, TypeScript
 - **Shell**: Tauri 1 (native desktop wrapper)
 - **UI**: Lucide icons, bits-ui
 

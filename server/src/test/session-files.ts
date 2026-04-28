@@ -36,8 +36,12 @@ assert.equal(
   path.join(sessionFilesRoot, sessionId, 'artifacts', 'agent', 'output.md'),
 )
 assert.equal(
-  resolveManagedFilePath('note://research.md', resolverOptions).fsPath,
+  resolveManagedFilePath('@note/research.md', resolverOptions).fsPath,
   path.join(notesDir, 'research.md'),
+)
+assert.equal(
+  resolveManagedFilePath('@note', resolverOptions).fsPath,
+  notesDir,
 )
 assert.throws(() => resolveManagedFilePath('/tmp/escape.md', resolverOptions), /Absolute paths/)
 assert.throws(() => resolveManagedFilePath('drafts/../escape.md', resolverOptions), /traversal/)
@@ -46,7 +50,7 @@ assert.throws(() => resolveManagedFilePath('https://example.com/file.md', resolv
 const registry = new ToolRegistryImpl()
 registerFileTools(registry, { sessionFilesRoot, notesDir })
 registerSearchTools(registry, { sessionFilesRoot, notesDir })
-registerNoteTools(registry, notesDir)
+registerNoteTools(registry, { notesDir, sessionFilesRoot })
 
 const writeResult = await registry.execute('files.write', {
   path: 'drafts/work.md',
@@ -95,11 +99,11 @@ assert.equal(artifactSearchOutput.matches[0].path, artifactRef)
 
 const noteSave = await registry.execute('notes.save_research_note', {
   title: 'Logical Ref Note',
-  markdown: '# Note\n\nnote needle\n',
+  markdown: '# Note\n\nnote needle\n\n## Sources\n- https://example.com/source\n',
 }, ctx)
 assert.equal(noteSave.ok, true)
 const noteRef = (noteSave.output as { path: string }).path
-assert.equal(noteRef, 'note://logical-ref-note.md')
+assert.equal(noteRef, '@note/logical-ref-note.md')
 
 const noteRead = await registry.execute('files.read', { path: noteRef }, ctx)
 assert.equal(noteRead.ok, true)

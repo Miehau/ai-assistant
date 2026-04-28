@@ -113,6 +113,9 @@ export async function prepareSessionTurn(
       : JSON.stringify(body.input)
 
     const allowedTools = body.allowedTools ?? agentDef?.tools
+    const mcpToolSnapshot = body.mcpServerIds?.length
+      ? await runtime.mcps.getNewSessionToolSnapshot(body.mcpServerIds)
+      : undefined
     const config: AgentConfig = {
       model,
       provider: extractProviderName(model),
@@ -128,9 +131,9 @@ export async function prepareSessionTurn(
           ? { system_prompt: agentDef.system_prompt }
           : {}),
       ...(allowedTools ? { allowed_tools: allowedTools } : {}),
-      ...(body.mcpServerIds?.length
+      ...(body.mcpServerIds?.length && mcpToolSnapshot
         ? {
-            tools: runtime.mcps.getNewSessionToolSnapshot(body.mcpServerIds),
+            tools: mcpToolSnapshot,
             tool_source_ids: body.mcpServerIds,
           }
         : {}),

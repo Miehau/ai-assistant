@@ -53,17 +53,20 @@ async function main() {
     const { repositories: repos, providers, tools, events } = runtime
 
     // ──────────────────────────────────────────
-    // 2. UserRepository — verify dev user exists
+    // 2. UserRepository — create + look up a test user
     // ──────────────────────────────────────────
     console.log('\n2. UserRepository')
-    const devKeyHash = createHash('sha256').update('dev-key').digest('hex')
-    const devUser = await repos.users.getByApiKeyHash(devKeyHash)
-    assert(devUser != null, 'Dev user exists after seed')
-    assert(devUser!.email === 'dev@localhost', 'Dev user email is dev@localhost')
-    assert(devUser!.apiKeyHash === devKeyHash, 'Dev user apiKeyHash matches')
+    const testKeyHash = createHash('sha256').update('e2e-test-key').digest('hex')
+    const devUser = await repos.users.create({ email: 'e2e@test.local', apiKeyHash: testKeyHash })
+    assert(devUser != null, 'Test user created')
+    assert(devUser.email === 'e2e@test.local', 'Test user email matches')
+    assert(devUser.apiKeyHash === testKeyHash, 'Test user apiKeyHash matches')
 
-    const byId = await repos.users.getById(devUser!.id)
-    assert(byId != null && byId.id === devUser!.id, 'getById returns same user')
+    const byId = await repos.users.getById(devUser.id)
+    assert(byId != null && byId.id === devUser.id, 'getById returns same user')
+
+    const byHash = await repos.users.getByApiKeyHash(testKeyHash)
+    assert(byHash != null && byHash.id === devUser.id, 'getByApiKeyHash returns same user')
 
     const missing = await repos.users.getByApiKeyHash('nonexistent-hash')
     assert(missing === null, 'getByApiKeyHash returns null for unknown hash')

@@ -1,14 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { and, asc, desc, eq, lte } from 'drizzle-orm'
-import * as schema from '../db/schema.js'
 import type { RuntimeContext } from '../lib/runtime.js'
 import { decrypt, deriveKey, encrypt } from '../lib/crypto.js'
 import { buildDeps, prepareSessionTurn } from './session-runner.js'
 import { runAgent } from '../orchestrator/runner.js'
 import type { Item } from '../domain/types.js'
+import type { StoredTelegramConnection, StoredTelegramMessageLink } from '../repositories/types.js'
 
-type TelegramConnectionRow = typeof schema.telegramConnections.$inferSelect
-type TelegramMessageLinkRow = typeof schema.telegramMessageLinks.$inferSelect
+type TelegramConnectionRow = StoredTelegramConnection
+type TelegramMessageLinkRow = StoredTelegramMessageLink
 
 export interface TelegramConnectionRecord {
   id: string
@@ -114,25 +113,20 @@ export class TelegramService {
 
   /** Return all Telegram bot connections configured by a user. */
   async listConnections(userId: string): Promise<TelegramConnectionRecord[]> {
-    const rows = this.runtime.db
-      .select()
-      .from(schema.telegramConnections)
-      .where(eq(schema.telegramConnections.userId, userId))
-      .orderBy(asc(schema.telegramConnections.createdAt))
-      .all()
+    const rows = await this.runtime.repositories.telegram.listConnections(userId)
     return rows.map((row) => this.toConnectionRecord(row))
   }
 
   /** Fetch one Telegram connection, optionally scoped to an owning user. */
   async getConnection(id: string, userId?: string): Promise<TelegramConnectionRecord | null> {
-    const row = this.getConnectionRow(id, userId)
+    const row = await this.getConnectionRow(id, userId)
     return row ? this.toConnectionRecord(row) : null
   }
 
   /** Create a bot connection and store Telegram secrets encrypted when possible. */
   async createConnection(userId: string, input: CreateTelegramConnectionInput): Promise<TelegramConnectionRecord> {
     const now = Date.now()
-    const row: typeof schema.telegramConnections.$inferInsert = {
+    const row: TelegramConnectionRow = {
       id: randomUUID(),
       userId,
       botToken: this.storeSecret(input.botToken),
@@ -146,16 +140,24 @@ export class TelegramService {
       createdAt: now,
       updatedAt: now,
     }
-    this.runtime.db.insert(schema.telegramConnections).values(row).run()
-    return this.toConnectionRecord(row as TelegramConnectionRow)
+    await this.runtime.repositories.telegram.createConnection(row)
+    return this.toConnectionRecord(row)
   }
 
   /** Update bot credentials, webhook metadata, or connection status. */
   async updateConnection(id: string, userId: string, input: UpdateTelegramConnectionInput): Promise<TelegramConnectionRecord | null> {
-    const existing = this.getConnectionRow(id, userId)
+    const existing = await this.getConnectionRow(id, userId)
     if (!existing) return null
 
-    const updates: Partial<typeof schema.telegramConnections.$inferInsert> = {
+    const updates: {
+      botToken?: string
+      allowedTelegramUserId?: string
+      webhookUrl?: string | null
+      status?: string
+      lastError?: string | null
+      botUsername?: string | null
+      updatedAt: number
+    } = {
       updatedAt: Date.now(),
     }
     if (input.botToken !== undefined && input.botToken !== null) updates.botToken = this.storeSecret(input.botToken)
@@ -165,32 +167,20 @@ export class TelegramService {
     if (input.lastError !== undefined) updates.lastError = input.lastError
     if (input.botUsername !== undefined) updates.botUsername = input.botUsername
 
-    this.runtime.db
-      .update(schema.telegramConnections)
-      .set(updates)
-      .where(eq(schema.telegramConnections.id, id))
-      .run()
+    await this.runtime.repositories.telegram.updateConnection(id, updates)
 
-    const updated = this.getConnectionRow(id, userId)
+    const updated = await this.getConnectionRow(id, userId)
     return updated ? this.toConnectionRecord(updated) : null
   }
 
   /** Delete a connection and its Telegram-specific webhook/message bookkeeping. */
   async deleteConnection(id: string, userId: string): Promise<boolean> {
-    const existing = this.getConnectionRow(id, userId)
-    if (!existing) return false
-
-    this.runtime.db.transaction((tx) => {
-      tx.delete(schema.telegramUpdateDedupe).where(eq(schema.telegramUpdateDedupe.connectionId, id)).run()
-      tx.delete(schema.telegramMessageLinks).where(eq(schema.telegramMessageLinks.connectionId, id)).run()
-      tx.delete(schema.telegramConnections).where(eq(schema.telegramConnections.id, id)).run()
-    })
-    return true
+    return this.runtime.repositories.telegram.deleteConnection(id, userId)
   }
 
   /** Verify the stored bot token by calling Telegram getMe. */
   async testConnection(id: string, userId: string): Promise<{ ok: boolean; username?: string; description?: string }> {
-    const connection = this.getConnectionRow(id, userId)
+    const connection = await this.getConnectionRow(id, userId)
     if (!connection) return { ok: false, description: 'Telegram connection not found' }
 
     const response = await this.callTelegram<TelegramGetMeResponse>(connection, 'getMe')
@@ -220,7 +210,7 @@ export class TelegramService {
     userId: string,
     webhookUrl?: string,
   ): Promise<TelegramWebhookRegistrationResult | null> {
-    const connection = this.getConnectionRow(id, userId)
+    const connection = await this.getConnectionRow(id, userId)
     if (!connection) return null
 
     const url = webhookUrl ?? connection.webhookUrl
@@ -257,7 +247,7 @@ export class TelegramService {
 
   /** Remove Telegram's webhook registration without dropping pending updates. */
   async deleteWebhook(id: string, userId: string): Promise<TelegramWebhookRegistrationResult | null> {
-    const connection = this.getConnectionRow(id, userId)
+    const connection = await this.getConnectionRow(id, userId)
     if (!connection) return null
 
     const response = await this.callTelegram<boolean>(connection, 'deleteWebhook', {
@@ -277,7 +267,7 @@ export class TelegramService {
 
   /** Read Telegram webhook status for diagnostics in the app UI. */
   async getWebhookInfo(id: string, userId: string): Promise<TelegramWebhookRegistrationResult | null> {
-    const connection = this.getConnectionRow(id, userId)
+    const connection = await this.getConnectionRow(id, userId)
     if (!connection) return null
 
     const response = await this.callTelegram<TelegramWebhookInfo>(connection, 'getWebhookInfo')
@@ -312,7 +302,7 @@ export class TelegramService {
     headerSecret: string | undefined,
     update: TelegramUpdate,
   ): Promise<TelegramWebhookProcessResult> {
-    const connection = this.getConnectionRow(connectionId)
+    const connection = await this.getConnectionRow(connectionId)
     if (!connection) {
       return { ok: false, status: 'rejected', reason: 'connection_not_found' }
     }
@@ -334,24 +324,11 @@ export class TelegramService {
       return { ok: false, status: 'rejected', reason: 'unauthorized_user' }
     }
 
-    const alreadyProcessed = this.runtime.db
-      .select()
-      .from(schema.telegramUpdateDedupe)
-      .where(and(
-        eq(schema.telegramUpdateDedupe.connectionId, connection.id),
-        eq(schema.telegramUpdateDedupe.telegramUpdateId, update.update_id),
-      ))
-      .limit(1)
-      .all()[0]
-    if (alreadyProcessed) {
+    if (await this.runtime.repositories.telegram.hasProcessedUpdate(connection.id, update.update_id)) {
       return { ok: true, status: 'ignored', reason: 'duplicate_update' }
     }
 
-    this.runtime.db.insert(schema.telegramUpdateDedupe).values({
-      connectionId: connection.id,
-      telegramUpdateId: update.update_id,
-      createdAt: Date.now(),
-    }).run()
+    await this.runtime.repositories.telegram.createUpdateDedupe(connection.id, update.update_id)
 
     const content = message.text?.trim() || message.caption?.trim() || ''
     if (!content) {
@@ -365,7 +342,7 @@ export class TelegramService {
       sessionId: resolution.sessionId,
       agent: 'planner',
       input: content,
-      instructions: 'Telegram transport: keep user-facing replies concise. For substantial research, save the final result as a markdown note and include the saved path.',
+      instructions: 'Telegram transport: keep user-facing replies concise. For substantial research, prefer returning a durable note path over a long chat answer: delegate the research, promote the returned artifact with notes.promote when available, and include the resulting @note/... path plus a short summary.',
     })
 
     if (prepared.status === 'active') {
@@ -492,7 +469,7 @@ export class TelegramService {
       return { sessionId: session.id, forked: false }
     }
 
-    const anchor = this.getMessageLink(connection.id, chatId, replyToMessageId)
+    const anchor = await this.getMessageLink(connection.id, chatId, replyToMessageId)
     if (!anchor) {
       const session = await this.runtime.repositories.sessions.create({
         userId: connection.userId,
@@ -502,7 +479,7 @@ export class TelegramService {
       return { sessionId: session.id, forked: false }
     }
 
-    const head = this.getSessionHeadLink(connection.id, anchor.sessionId)
+    const head = await this.getSessionHeadLink(connection.id, anchor.sessionId)
     if (!head || head.telegramMessageId === anchor.telegramMessageId) {
       return { sessionId: anchor.sessionId, forked: false }
     }
@@ -618,47 +595,18 @@ export class TelegramService {
   }
 
   /** Fetch the raw DB row so internal webhook secrets remain available. */
-  private getConnectionRow(id: string, userId?: string): TelegramConnectionRow | null {
-    const where = userId
-      ? and(eq(schema.telegramConnections.id, id), eq(schema.telegramConnections.userId, userId))
-      : eq(schema.telegramConnections.id, id)
-    const row = this.runtime.db
-      .select()
-      .from(schema.telegramConnections)
-      .where(where)
-      .limit(1)
-      .all()[0]
-    return row ?? null
+  private async getConnectionRow(id: string, userId?: string): Promise<TelegramConnectionRow | null> {
+    return this.runtime.repositories.telegram.getConnection(id, userId)
   }
 
   /** Find the app transcript item associated with a Telegram message. */
-  private getMessageLink(connectionId: string, chatId: string, messageId: number): TelegramMessageLinkRow | null {
-    const row = this.runtime.db
-      .select()
-      .from(schema.telegramMessageLinks)
-      .where(and(
-        eq(schema.telegramMessageLinks.connectionId, connectionId),
-        eq(schema.telegramMessageLinks.telegramChatId, chatId),
-        eq(schema.telegramMessageLinks.telegramMessageId, messageId),
-      ))
-      .limit(1)
-      .all()[0]
-    return row ?? null
+  private async getMessageLink(connectionId: string, chatId: string, messageId: number): Promise<TelegramMessageLinkRow | null> {
+    return this.runtime.repositories.telegram.getMessageLink(connectionId, chatId, messageId)
   }
 
   /** Return the newest Telegram message linked to a session. */
-  private getSessionHeadLink(connectionId: string, sessionId: string): TelegramMessageLinkRow | null {
-    const row = this.runtime.db
-      .select()
-      .from(schema.telegramMessageLinks)
-      .where(and(
-        eq(schema.telegramMessageLinks.connectionId, connectionId),
-        eq(schema.telegramMessageLinks.sessionId, sessionId),
-      ))
-      .orderBy(desc(schema.telegramMessageLinks.createdAt), desc(schema.telegramMessageLinks.telegramMessageId))
-      .limit(1)
-      .all()[0]
-    return row ?? null
+  private async getSessionHeadLink(connectionId: string, sessionId: string): Promise<TelegramMessageLinkRow | null> {
+    return this.runtime.repositories.telegram.getSessionHeadLink(connectionId, sessionId)
   }
 
   /** Persist the mapping between a Telegram message and an app session/item. */
@@ -670,10 +618,10 @@ export class TelegramService {
     itemId: string | null,
     senderType: 'user' | 'bot',
   ): Promise<void> {
-    const existing = this.getMessageLink(connectionId, String(chatId), telegramMessageId)
+    const existing = await this.getMessageLink(connectionId, String(chatId), telegramMessageId)
     if (existing) return
 
-    this.runtime.db.insert(schema.telegramMessageLinks).values({
+    await this.runtime.repositories.telegram.createMessageLink({
       id: randomUUID(),
       connectionId,
       telegramChatId: String(chatId),
@@ -682,7 +630,7 @@ export class TelegramService {
       itemId,
       senderType,
       createdAt: Date.now(),
-    }).run()
+    })
   }
 
   /** Send a plain text message through the configured bot. */

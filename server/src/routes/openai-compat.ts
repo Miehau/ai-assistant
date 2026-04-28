@@ -12,7 +12,7 @@
 
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
-import { randomUUID, createHash } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import type { RuntimeContext } from '../lib/runtime.js'
 import { runAgent } from '../orchestrator/runner.js'
 import { EVENT_TYPES } from '../events/types.js'
@@ -53,8 +53,10 @@ interface OAIResponse {
 // Route
 // ---------------------------------------------------------------------------
 
-export function openaiCompatRoutes(runtime: RuntimeContext): Hono {
-  const app = new Hono()
+type OAIAppEnv = { Variables: { userId: string } }
+
+export function openaiCompatRoutes(runtime: RuntimeContext): Hono<OAIAppEnv> {
+  const app = new Hono<OAIAppEnv>()
 
   app.post('/chat/completions', async (c) => {
     try {
@@ -65,10 +67,7 @@ export function openaiCompatRoutes(runtime: RuntimeContext): Hono {
       // is the custom backend name, not a real model identifier.
       const model = runtime.config.defaultModel
 
-      // --- Resolve dev user ---
-      const devHash = createHash('sha256').update('dev-key').digest('hex')
-      const devUser = await runtime.repositories.users.getByApiKeyHash(devHash)
-      const userId = devUser?.id ?? 'unknown'
+      const userId = c.get('userId')
 
       // --- Extract system prompt and last user message from OpenAI messages ---
       const systemParts: string[] = []

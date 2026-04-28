@@ -2,6 +2,13 @@
   import { onMount } from "svelte";
   import { ChevronLeft } from "lucide-svelte";
   import { backend } from "$lib/backend";
+  import {
+    DEFAULT_HTTP_BACKEND_SERVER_URL,
+    getHttpBackend,
+    loadStoredHttpBackendConfig,
+    normalizeHttpBackendServerUrl,
+    saveStoredHttpBackendConfig,
+  } from "$lib/backend/http-client";
   import type { ToolMetadata } from "$lib/types/tools";
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";
@@ -23,6 +30,13 @@
   let workSaving = $state(false);
   let workStatusMessage = $state("");
   let workStatusTone = $state<"idle" | "success" | "error">("idle");
+  let serverUrl = $state(DEFAULT_HTTP_BACKEND_SERVER_URL);
+  let savedServerUrl = $state(DEFAULT_HTTP_BACKEND_SERVER_URL);
+  let bearerToken = $state("");
+  let savedBearerToken = $state("");
+  let backendSaving = $state(false);
+  let backendStatusMessage = $state("");
+  let backendStatusTone = $state<"idle" | "success" | "error">("idle");
 
   let tools = $state<ToolMetadata[]>([]);
   let toolsLoading = $state(true);
@@ -33,7 +47,7 @@
   let toolApprovalError = $state<string | null>(null);
   let toolApprovalErrorTool = $state<string | null>(null);
   const isDev = import.meta.env.DEV;
-  let activeTab = $state<"tools" | "vault" | "integrations">("tools");
+  let activeTab = $state<"tools" | "backend" | "vault" | "integrations">("tools");
 
   $effect(() => {
     if (activeTab === "tools") {
@@ -46,10 +60,80 @@
   });
 
   onMount(() => {
+    loadBackendConnection();
     if (activeTab === "tools") {
       void loadTools();
     }
   });
+
+  function loadBackendConnection() {
+    const config = loadStoredHttpBackendConfig();
+    savedServerUrl = normalizeHttpBackendServerUrl(config.serverUrl);
+    serverUrl = savedServerUrl;
+    savedBearerToken = config.token ?? "";
+    bearerToken = savedBearerToken;
+    backendStatusMessage = "";
+    backendStatusTone = "idle";
+  }
+
+  function validateBackendServerUrl(): string | null {
+    const normalized = normalizeHttpBackendServerUrl(serverUrl);
+    try {
+      const parsed = new URL(normalized);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return null;
+      }
+      return normalized;
+    } catch {
+      return null;
+    }
+  }
+
+  function applyBackendConnection(token: string | null) {
+    const normalizedServerUrl = validateBackendServerUrl();
+    if (!normalizedServerUrl) {
+      backendStatusMessage = "Backend URL must be a valid HTTP or HTTPS URL.";
+      backendStatusTone = "error";
+      return false;
+    }
+
+    saveStoredHttpBackendConfig({
+      serverUrl: normalizedServerUrl,
+      token,
+    });
+    getHttpBackend({
+      serverUrl: normalizedServerUrl,
+      token,
+    });
+    savedServerUrl = normalizedServerUrl;
+    serverUrl = normalizedServerUrl;
+    savedBearerToken = token ?? "";
+    bearerToken = savedBearerToken;
+    return true;
+  }
+
+  function saveBackendConnection() {
+    backendSaving = true;
+    try {
+      const token = bearerToken.trim() || null;
+      if (!applyBackendConnection(token)) return;
+      backendStatusMessage = "Backend connection saved.";
+      backendStatusTone = "success";
+    } finally {
+      backendSaving = false;
+    }
+  }
+
+  function clearBearerToken() {
+    backendSaving = true;
+    try {
+      if (!applyBackendConnection(null)) return;
+      backendStatusMessage = "Bearer token cleared.";
+      backendStatusTone = "success";
+    } finally {
+      backendSaving = false;
+    }
+  }
 
   async function loadVaultRoot() {
     isLoading = true;
@@ -258,6 +342,16 @@
     </button>
     <button
       class={`px-3 py-1 rounded-lg transition-all ${
+        activeTab === "backend"
+          ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
+          : "text-muted-foreground/70 hover:text-foreground"
+      }`}
+      onclick={() => (activeTab = "backend")}
+    >
+      Backend
+    </button>
+    <button
+      class={`px-3 py-1 rounded-lg transition-all ${
         activeTab === "vault"
           ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
           : "text-muted-foreground/70 hover:text-foreground"
@@ -433,6 +527,79 @@
               </details>
             </div>
           {/if}
+        </div>
+      </div>
+    {:else if activeTab === "backend"}
+      <div class="grid gap-4 text-xs">
+        <div class="grid grid-cols-[160px_1fr] gap-4 items-start">
+          <div>
+            <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Backend</p>
+            <p class="text-[11px] text-muted-foreground/70 mt-1">
+              Server endpoint and bearer auth.
+            </p>
+          </div>
+          <div class="space-y-3">
+            <label class="block space-y-1.5">
+              <span class="text-[11px] text-muted-foreground/80">Server URL</span>
+              <Input
+                type="url"
+                placeholder={DEFAULT_HTTP_BACKEND_SERVER_URL}
+                bind:value={serverUrl}
+                class="h-8 text-xs bg-white/5 border-white/10"
+              />
+            </label>
+
+            <label class="block space-y-1.5">
+              <span class="text-[11px] text-muted-foreground/80">Bearer token</span>
+              <Input
+                type="password"
+                autocomplete="off"
+                placeholder="Paste API token"
+                bind:value={bearerToken}
+                class="h-8 text-xs bg-white/5 border-white/10"
+              />
+            </label>
+
+            <div class="flex flex-wrap items-center gap-2">
+              <Button size="sm" onclick={saveBackendConnection} disabled={backendSaving}>
+                {backendSaving ? "Saving..." : "Save"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                class="border-white/10"
+                onclick={clearBearerToken}
+                disabled={backendSaving || (!bearerToken && !savedBearerToken)}
+              >
+                Clear token
+              </Button>
+            </div>
+
+            <div class="grid gap-1 text-[11px] text-muted-foreground">
+              <p>
+                Current server:
+                <span class="font-mono">{savedServerUrl}</span>
+              </p>
+              <p>
+                Bearer token:
+                <span class="font-mono">{savedBearerToken ? "Configured" : "Not set"}</span>
+              </p>
+            </div>
+
+            {#if backendStatusMessage}
+              <p
+                class={`text-[11px] ${
+                  backendStatusTone === "success"
+                    ? "text-emerald-400"
+                    : backendStatusTone === "error"
+                      ? "text-red-400"
+                      : "text-muted-foreground"
+                }`}
+              >
+                {backendStatusMessage}
+              </p>
+            {/if}
+          </div>
         </div>
       </div>
     {:else if activeTab === "vault"}

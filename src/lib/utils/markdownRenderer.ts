@@ -8,6 +8,27 @@ import "prismjs/components/prism-python";
 
 let configured = false;
 let highlightEnabled: boolean | null = null;
+const GENERATED_CITATION_RE = /\uE200cite((?:\uE202[^\uE200\uE201\uE202]+)+)\uE201/g;
+const TRACKING_PARAMS = new Set([
+  "fbclid",
+  "gclid",
+  "igshid",
+  "mc_cid",
+  "mc_eid",
+  "ref",
+  "source",
+]);
+
+export interface MarkdownSource {
+  url: string;
+  domain: string;
+  label: string;
+}
+
+export interface MarkdownSourceLedger {
+  sources: MarkdownSource[];
+  unresolvedCitations: string[];
+}
 
 // Configure autoloader to load other languages on demand
 // This reduces initial bundle size while maintaining full language support
@@ -25,36 +46,112 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#039;");
 }
 
-function formatCitationLabel(id: string): string {
-  const match = id.match(/^turn(\d+)search(\d+)$/);
-  if (!match) return id;
-
-  return `ref ${Number(match[2]) + 1}`;
+function stripHtml(text: string): string {
+  return text.replace(/<[^>]*>/g, "");
 }
 
-function formatCitationTitle(id: string): string {
-  const match = id.match(/^turn(\d+)search(\d+)$/);
-  if (!match) return id;
-
-  return `Generated citation ${Number(match[2]) + 1} (${id})`;
+function cleanUrlCandidate(url: string): string {
+  return url.trim().replace(/[),.;:!?]+$/g, "");
 }
 
-function normalizeGeneratedCitations(text: string): string {
-  return text.replace(/\uE200cite((?:\uE202[^\uE200\uE201\uE202]+)+)\uE201/g, (_match, refs: string) => {
-    const ids = refs
+export function normalizeSourceUrl(rawUrl: string): string | null {
+  try {
+    const url = new URL(cleanUrlCandidate(rawUrl));
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (key.toLowerCase().startsWith("utm_") || TRACKING_PARAMS.has(key.toLowerCase())) {
+        url.searchParams.delete(key);
+      }
+    }
+
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRenderedHref(rawHref: string | null | undefined): string {
+  if (!rawHref) return "#";
+
+  const sourceUrl = normalizeSourceUrl(rawHref);
+  if (sourceUrl) return sourceUrl;
+
+  const href = rawHref.trim();
+  if (
+    href.startsWith("#") ||
+    href.startsWith("/") ||
+    href.startsWith("./") ||
+    href.startsWith("../") ||
+    href.startsWith("mailto:")
+  ) {
+    return href;
+  }
+
+  return "#";
+}
+
+function generatedCitationIds(text: string): string[] {
+  const ids: string[] = [];
+  text.replace(GENERATED_CITATION_RE, (_match, refs: string) => {
+    ids.push(...refs
       .split("\uE202")
       .filter(Boolean)
       .map((ref) => ref.trim())
-      .filter(Boolean);
-
-    const labels = ids.map((id) => escapeHtml(formatCitationLabel(id)));
-    if (labels.length === 0) return "";
-
-    const title = ids.map((id) => escapeHtml(formatCitationTitle(id))).join(", ");
-    return `<sup class="generated-citation" title="${title}" aria-label="${title}">${labels
-      .map((label) => `<span>${label}</span>`)
-      .join("")}</sup>`;
+      .filter(Boolean));
+    return "";
   });
+  return Array.from(new Set(ids));
+}
+
+function stripGeneratedCitations(text: string): string {
+  return text
+    .replace(GENERATED_CITATION_RE, "")
+    .replace(/\s+([,.;:!?])/g, "$1");
+}
+
+function sourceLabel(text: string, url: string): string {
+  const parsed = new URL(url);
+  const cleaned = stripHtml(text)
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (cleaned && !/^https?:\/\//i.test(cleaned) && cleaned !== parsed.hostname) {
+    return cleaned.length > 90 ? `${cleaned.slice(0, 87)}...` : cleaned;
+  }
+
+  return parsed.hostname.replace(/^www\./, "");
+}
+
+export function extractMarkdownSources(text: string): MarkdownSourceLedger {
+  const sourcesByUrl = new Map<string, MarkdownSource>();
+  const addSource = (rawUrl: string, labelText: string) => {
+    const url = normalizeSourceUrl(rawUrl);
+    if (!url || sourcesByUrl.has(url)) return;
+
+    const parsed = new URL(url);
+    sourcesByUrl.set(url, {
+      url,
+      domain: parsed.hostname.replace(/^www\./, ""),
+      label: sourceLabel(labelText, url),
+    });
+  };
+
+  const markdownLinkRe = /(!?)\[([^\]]+)\]\(([^)\s]+)(?:\s+["'][^)]*["'])?\)/g;
+  const textWithoutMarkdownLinks = text.replace(markdownLinkRe, (match, imagePrefix: string, label: string, url: string) => {
+    if (!imagePrefix) addSource(url, label);
+    return " ";
+  });
+
+  const bareUrlRe = /\bhttps?:\/\/[^\s<>"']+/g;
+  for (const match of textWithoutMarkdownLinks.matchAll(bareUrlRe)) {
+    addSource(match[0], match[0]);
+  }
+
+  return {
+    sources: Array.from(sourcesByUrl.values()),
+    unresolvedCitations: generatedCitationIds(text),
+  };
 }
 
 function configureMarkdown(enableHighlight: boolean) {
@@ -102,8 +199,9 @@ function configureMarkdown(enableHighlight: boolean) {
 
   // Make links open in a new window
   renderer.link = function ({ href, title, text }) {
-    const titleAttr = title ? ` title="${title}"` : "";
-    return `<a href="${href}" target="_blank" rel="noopener noreferrer"${titleAttr}>${text}</a>`;
+    const safeHref = escapeHtml(normalizeRenderedHref(href));
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+    return `<a href="${safeHref}" target="_blank" rel="noopener noreferrer"${titleAttr}>${text}</a>`;
   };
 
   marked.setOptions({
@@ -118,5 +216,5 @@ function configureMarkdown(enableHighlight: boolean) {
 
 export function renderMarkdown(text: string, options: { enableHighlight: boolean }): string {
   configureMarkdown(options.enableHighlight);
-  return marked(normalizeGeneratedCitations(text));
+  return marked(stripGeneratedCitations(text));
 }
