@@ -9,6 +9,7 @@
     normalizeHttpBackendServerUrl,
     saveStoredHttpBackendConfig,
   } from "$lib/backend/http-client";
+  import { loadMcpServers, loadModels, loadSystemPrompts } from "$lib/stores/chat";
   import type { ToolMetadata } from "$lib/types/tools";
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";
@@ -112,23 +113,39 @@
     return true;
   }
 
-  function saveBackendConnection() {
+  async function refreshBackendDependentData() {
+    backend.clearCache();
+    await Promise.all([
+      loadModels({ force: true }),
+      loadMcpServers(),
+      loadSystemPrompts({ force: true }),
+      loadTools(),
+    ]);
+  }
+
+  async function saveBackendConnection() {
     backendSaving = true;
     try {
       const token = bearerToken.trim() || null;
       if (!applyBackendConnection(token)) return;
-      backendStatusMessage = "Backend connection saved.";
+      backendStatusMessage = "Backend connection saved. Refreshing app data...";
+      backendStatusTone = "idle";
+      await refreshBackendDependentData();
+      backendStatusMessage = "Backend connection saved. App data refreshed.";
       backendStatusTone = "success";
     } finally {
       backendSaving = false;
     }
   }
 
-  function clearBearerToken() {
+  async function clearBearerToken() {
     backendSaving = true;
     try {
       if (!applyBackendConnection(null)) return;
-      backendStatusMessage = "Bearer token cleared.";
+      backendStatusMessage = "Bearer token cleared. Refreshing app data...";
+      backendStatusTone = "idle";
+      await refreshBackendDependentData();
+      backendStatusMessage = "Bearer token cleared. App data refreshed.";
       backendStatusTone = "success";
     } finally {
       backendSaving = false;
