@@ -264,6 +264,7 @@ async function deliverApprovalLocked(
     agent_id: agentId,
     session_id: agent.sessionId,
     signal: AbortSignal.timeout(agent.config.tool_execution_timeout_ms),
+    events: deps.events,
   })
   const durationMs = Date.now() - startMs
 

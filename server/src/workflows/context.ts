@@ -64,6 +64,7 @@ export function buildWorkflowContext<TInput>(deps: ContextDeps): WorkflowContext
         agent_id: deps.runId, // use runId as agent_id for scoping
         session_id: deps.sessionId,
         signal: deps.signal,
+        events: deps.events,
       })
       if (!result.ok) {
         throw new Error(`Tool ${name} failed: ${result.error ?? 'unknown error'}`)

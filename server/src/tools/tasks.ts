@@ -1,10 +1,23 @@
 import { randomUUID } from 'node:crypto'
 import type { ToolHandler, ToolResult } from './types.js'
-import type { TaskPriority, TaskStatus, CreateTaskInput } from '../tasks/types.js'
+import type { AgentDefinitionRegistry } from '../agents/registry.js'
+import type { TaskOutputProfile, TaskPriority, TaskStatus, CreateTaskInput } from '../tasks/types.js'
 import { listTasks, createTask, updateTask } from '../tasks/storage.js'
+import { EVENT_TYPES } from '../events/types.js'
 
 const VALID_PRIORITIES: TaskPriority[] = ['high', 'medium', 'low']
-const VALID_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done', 'blocked']
+const VALID_STATUSES: TaskStatus[] = [
+  'open',
+  'in_progress',
+  'queued',
+  'running',
+  'callback_pending',
+  'done',
+  'blocked',
+  'failed',
+  'cancelled',
+]
+const VALID_OUTPUT_PROFILES: TaskOutputProfile[] = ['generic', 'research']
 
 function slugify(text: string): string {
   return text
@@ -21,6 +34,7 @@ export function registerTaskTools(
   registry: { register: (h: ToolHandler) => void },
   tasksDir: string,
   workspaceDir: string,
+  agentDefinitions?: AgentDefinitionRegistry,
 ): void {
   // -------------------------------------------------------------------------
   // tasks.create — create a single task file
@@ -104,6 +118,117 @@ export function registerTaskTools(
     },
     preview(args) {
       return { summary: `Create task: ${args.title}` }
+    },
+  })
+
+  // -------------------------------------------------------------------------
+  // tasks.enqueue — create executable background work
+  // -------------------------------------------------------------------------
+  registry.register({
+    metadata: {
+      name: 'tasks.enqueue',
+      description:
+        'Queue a durable background task as a Markdown file. The single task runner will execute the owner agent, persist output as a note, and callback the creating agent when done. Use for substantial work that should continue in the background.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Short human-readable task title' },
+          owner: {
+            type: 'string',
+            description: 'Name of the agent responsible for executing the task',
+          },
+          priority: {
+            type: 'string',
+            enum: VALID_PRIORITIES,
+            description: 'Task priority. Defaults to medium.',
+          },
+          depends_on: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'IDs of tasks that must complete before this one',
+          },
+          output_profile: {
+            type: 'string',
+            enum: VALID_OUTPUT_PROFILES,
+            description: 'Validation profile for the persisted note. Defaults to generic; use research when source URLs are required.',
+          },
+          body: {
+            type: 'string',
+            description: 'Complete executable brief with success criteria and expected output format',
+          },
+        },
+        required: ['title', 'owner', 'body'],
+      },
+      requires_approval: false,
+    },
+    async handle(args, ctx): Promise<ToolResult> {
+      const title = String(args.title ?? '').trim()
+      const owner = String(args.owner ?? '').trim()
+      const body = String(args.body ?? '').trim()
+
+      if (!title || !owner || !body) {
+        return { ok: false, error: 'title, owner, and body are required' }
+      }
+      if (agentDefinitions && !agentDefinitions.get(owner)) {
+        const available = agentDefinitions.list().map((d) => d.name).join(', ')
+        return { ok: false, error: `Unknown owner agent "${owner}". Available agents: ${available}` }
+      }
+
+      const priority = VALID_PRIORITIES.includes(args.priority as TaskPriority)
+        ? (args.priority as TaskPriority)
+        : 'medium'
+      const outputProfile = VALID_OUTPUT_PROFILES.includes(args.output_profile as TaskOutputProfile)
+        ? (args.output_profile as TaskOutputProfile)
+        : 'generic'
+      const dependsOn = Array.isArray(args.depends_on)
+        ? (args.depends_on as unknown[]).filter((x): x is string => typeof x === 'string')
+        : []
+
+      const task = await createTask(tasksDir, {
+        id: makeTaskId(title),
+        title,
+        owner,
+        priority,
+        status: 'queued',
+        kind: 'background',
+        dependsOn,
+        outputProfile,
+        callbackAgentId: ctx.agent_id,
+        callbackSessionId: ctx.session_id,
+        body,
+        createdBy: 'agent',
+      })
+
+      ctx.events?.emit({
+        type: EVENT_TYPES.TASK_QUEUED,
+        agent_id: ctx.agent_id,
+        session_id: ctx.session_id,
+        payload: {
+          taskId: task.frontmatter.id,
+          title: task.frontmatter.title,
+          status: task.frontmatter.status,
+          callbackAgentId: task.frontmatter.callback_agent_id,
+          callbackSessionId: task.frontmatter.callback_session_id,
+        },
+        timestamp: Date.now(),
+      })
+
+      return {
+        ok: true,
+        output: {
+          id: task.frontmatter.id,
+          path: task.path,
+          status: task.frontmatter.status,
+          owner: task.frontmatter.owner,
+          output_profile: task.frontmatter.output_profile,
+          callback_agent_id: task.frontmatter.callback_agent_id,
+          callback_session_id: task.frontmatter.callback_session_id,
+          workspace_dir: workspaceDir,
+        },
+      }
+    },
+    preview(args) {
+      return { summary: `Queue background task: ${args.title}` }
     },
   })
 
@@ -249,10 +374,20 @@ export function registerTaskTools(
         path: t.path,
         ...(t.frontmatter.completion_note ? { completion_note: t.frontmatter.completion_note } : {}),
         ...(t.frontmatter.blocked_reason ? { blocked_reason: t.frontmatter.blocked_reason } : {}),
+        ...(t.frontmatter.kind ? { kind: t.frontmatter.kind } : {}),
+        ...(t.frontmatter.output_note ? { output_note: t.frontmatter.output_note } : {}),
+        ...(t.frontmatter.output_artifact ? { output_artifact: t.frontmatter.output_artifact } : {}),
+        ...(t.frontmatter.output_profile ? { output_profile: t.frontmatter.output_profile } : {}),
+        ...(t.frontmatter.error ? { error: t.frontmatter.error } : {}),
+        ...(t.frontmatter.callback_agent_id ? { callback_agent_id: t.frontmatter.callback_agent_id } : {}),
+        ...(t.frontmatter.callback_session_id ? { callback_session_id: t.frontmatter.callback_session_id } : {}),
+        ...(t.frontmatter.telegram_accepted_message_id ? { telegram_accepted_message_id: t.frontmatter.telegram_accepted_message_id } : {}),
       }))
 
       // Also include status counts
-      const counts: Record<string, number> = { open: 0, in_progress: 0, done: 0, blocked: 0 }
+      const counts: Record<string, number> = Object.fromEntries(
+        VALID_STATUSES.map((status) => [status, 0]),
+      )
       for (const t of tasks) {
         counts[t.frontmatter.status] = (counts[t.frontmatter.status] ?? 0) + 1
       }
@@ -292,6 +427,14 @@ export function registerTaskTools(
             type: 'string',
             description: 'Why the task is blocked (set when marking blocked)',
           },
+          output_note: {
+            type: 'string',
+            description: 'Durable note reference produced by the task, such as @note/result.md',
+          },
+          output_artifact: {
+            type: 'string',
+            description: 'Managed artifact reference produced by the task',
+          },
           body: {
             type: 'string',
             description: 'Replace the task body (optional, use for plan revisions)',
@@ -315,6 +458,8 @@ export function registerTaskTools(
           body: args.body !== undefined ? String(args.body) : undefined,
           completion_note: args.completion_note !== undefined ? String(args.completion_note) : undefined,
           blocked_reason: args.blocked_reason !== undefined ? String(args.blocked_reason) : undefined,
+          output_note: args.output_note !== undefined ? String(args.output_note) : undefined,
+          output_artifact: args.output_artifact !== undefined ? String(args.output_artifact) : undefined,
         })
         return {
           ok: true,

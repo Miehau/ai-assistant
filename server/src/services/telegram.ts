@@ -374,19 +374,15 @@ export class TelegramService {
     )
 
     await this.sendChatAction(connection, message.chat.id, 'typing')
-    const ackMessageId = await this.sendBotMessage(connection, message.chat.id, 'Working on it...')
-    if (ackMessageId != null) {
-      await this.createMessageLink(
-        connection.id,
-        message.chat.id,
-        ackMessageId,
-        prepared.sessionId,
-        null,
-        'bot',
-      )
-    }
 
-    this.runPreparedTelegramAgent(connection, message.chat.id, prepared.agent.id, prepared.sessionId, prepared.model)
+    this.runPreparedTelegramAgent(
+      connection,
+      message.chat.id,
+      message.message_id,
+      prepared.agent.id,
+      prepared.sessionId,
+      prepared.model,
+    )
 
     return {
       ok: true,
@@ -405,6 +401,7 @@ export class TelegramService {
   private runPreparedTelegramAgent(
     connection: TelegramConnectionRow,
     chatId: number,
+    originalMessageId: number,
     agentId: string,
     sessionId: string,
     model: string,
@@ -435,6 +432,13 @@ export class TelegramService {
             lastAssistant?.id ?? null,
             'bot',
           )
+          await this.runtime.telegramTaskBridge?.attachAcceptance({
+            callbackSessionId: sessionId,
+            connectionId: connection.id,
+            chatId,
+            originalMessageId,
+            acceptedMessageId: outboundMessageId,
+          })
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)

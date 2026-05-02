@@ -2,6 +2,8 @@ import fs from 'fs/promises'
 import path from 'path'
 import type {
   TaskFrontmatter,
+  TaskKind,
+  TaskOutputProfile,
   TaskRecord,
   TaskStatus,
   TaskPriority,
@@ -12,8 +14,20 @@ import type {
 // Frontmatter serialization (mirrors agents/loader.ts convention — no deps)
 // ---------------------------------------------------------------------------
 
-const VALID_STATUSES: TaskStatus[] = ['open', 'in_progress', 'done', 'blocked']
+const VALID_STATUSES: TaskStatus[] = [
+  'open',
+  'in_progress',
+  'queued',
+  'running',
+  'callback_pending',
+  'done',
+  'blocked',
+  'failed',
+  'cancelled',
+]
 const VALID_PRIORITIES: TaskPriority[] = ['high', 'medium', 'low']
+const VALID_KINDS: TaskKind[] = ['planning', 'background']
+const VALID_OUTPUT_PROFILES: TaskOutputProfile[] = ['generic', 'research']
 
 function asStatus(v: unknown): TaskStatus {
   return VALID_STATUSES.includes(v as TaskStatus) ? (v as TaskStatus) : 'open'
@@ -21,6 +35,19 @@ function asStatus(v: unknown): TaskStatus {
 
 function asPriority(v: unknown): TaskPriority {
   return VALID_PRIORITIES.includes(v as TaskPriority) ? (v as TaskPriority) : 'medium'
+}
+
+function asKind(v: unknown): TaskKind | undefined {
+  return VALID_KINDS.includes(v as TaskKind) ? (v as TaskKind) : undefined
+}
+
+function asOutputProfile(v: unknown): TaskOutputProfile | undefined {
+  return VALID_OUTPUT_PROFILES.includes(v as TaskOutputProfile) ? (v as TaskOutputProfile) : undefined
+}
+
+function asOptionalString(v: unknown): string | undefined {
+  if (v === undefined || v === null || v === '') return undefined
+  return String(v)
 }
 
 function asStringArray(v: unknown): string[] {
@@ -52,18 +79,32 @@ function normalizeFrontmatter(
     id: String(data.id ?? slug),
     title: String(data.title ?? slug),
     status: asStatus(data.status),
+    kind: asKind(data.kind),
     owner: String(data.owner ?? 'unassigned'),
     priority: asPriority(data.priority),
     depends_on: typeof data.depends_on === 'string'
       ? parseYamlArray(data.depends_on)
       : asStringArray(data.depends_on),
-    output_path: data.output_path ? String(data.output_path) : undefined,
-    blocked_reason: data.blocked_reason ? String(data.blocked_reason) : undefined,
-    completion_note: data.completion_note ? String(data.completion_note) : undefined,
+    output_path: asOptionalString(data.output_path),
+    callback_agent_id: asOptionalString(data.callback_agent_id),
+    callback_session_id: asOptionalString(data.callback_session_id),
+    execution_session_id: asOptionalString(data.execution_session_id),
+    execution_agent_id: asOptionalString(data.execution_agent_id),
+    output_note: asOptionalString(data.output_note),
+    output_artifact: asOptionalString(data.output_artifact),
+    output_profile: asOutputProfile(data.output_profile),
+    error: asOptionalString(data.error),
+    telegram_connection_id: asOptionalString(data.telegram_connection_id),
+    telegram_chat_id: asOptionalString(data.telegram_chat_id),
+    telegram_original_message_id: asOptionalString(data.telegram_original_message_id),
+    telegram_accepted_message_id: asOptionalString(data.telegram_accepted_message_id),
+    telegram_completion_message_id: asOptionalString(data.telegram_completion_message_id),
+    blocked_reason: asOptionalString(data.blocked_reason),
+    completion_note: asOptionalString(data.completion_note),
     created_by: String(data.created_by ?? 'system'),
     created_at: String(data.created_at ?? now),
     updated_at: String(data.updated_at ?? now),
-    completed_at: data.completed_at ? String(data.completed_at) : undefined,
+    completed_at: asOptionalString(data.completed_at),
   }
 }
 
@@ -137,10 +178,24 @@ function serializeTask(task: TaskRecord): string {
   lines.push(`id: ${fm.id}`)
   lines.push(`title: ${yamlValue(fm.title)}`)
   lines.push(`status: ${fm.status}`)
+  if (fm.kind) lines.push(`kind: ${fm.kind}`)
   lines.push(`owner: ${fm.owner}`)
   lines.push(`priority: ${fm.priority}`)
   lines.push(`depends_on: ${serializeYamlArray(fm.depends_on)}`)
   if (fm.output_path) lines.push(`output_path: ${yamlValue(fm.output_path)}`)
+  if (fm.callback_agent_id) lines.push(`callback_agent_id: ${yamlValue(fm.callback_agent_id)}`)
+  if (fm.callback_session_id) lines.push(`callback_session_id: ${yamlValue(fm.callback_session_id)}`)
+  if (fm.execution_session_id) lines.push(`execution_session_id: ${yamlValue(fm.execution_session_id)}`)
+  if (fm.execution_agent_id) lines.push(`execution_agent_id: ${yamlValue(fm.execution_agent_id)}`)
+  if (fm.output_note) lines.push(`output_note: ${yamlValue(fm.output_note)}`)
+  if (fm.output_artifact) lines.push(`output_artifact: ${yamlValue(fm.output_artifact)}`)
+  if (fm.output_profile) lines.push(`output_profile: ${fm.output_profile}`)
+  if (fm.error) lines.push(`error: ${yamlValue(fm.error)}`)
+  if (fm.telegram_connection_id) lines.push(`telegram_connection_id: ${yamlValue(fm.telegram_connection_id)}`)
+  if (fm.telegram_chat_id) lines.push(`telegram_chat_id: ${yamlValue(fm.telegram_chat_id)}`)
+  if (fm.telegram_original_message_id) lines.push(`telegram_original_message_id: ${yamlValue(fm.telegram_original_message_id)}`)
+  if (fm.telegram_accepted_message_id) lines.push(`telegram_accepted_message_id: ${yamlValue(fm.telegram_accepted_message_id)}`)
+  if (fm.telegram_completion_message_id) lines.push(`telegram_completion_message_id: ${yamlValue(fm.telegram_completion_message_id)}`)
   if (fm.blocked_reason) lines.push(`blocked_reason: ${yamlValue(fm.blocked_reason)}`)
   if (fm.completion_note) lines.push(`completion_note: ${yamlValue(fm.completion_note)}`)
   lines.push(`created_by: ${fm.created_by}`)
@@ -210,11 +265,15 @@ export async function createTask(
     frontmatter: {
       id: input.id,
       title: input.title,
-      status: 'open',
+      status: input.status ?? 'open',
+      kind: input.kind,
       owner: input.owner,
       priority: input.priority,
       depends_on: input.dependsOn ?? [],
       output_path: input.outputPath,
+      output_profile: input.outputProfile,
+      callback_agent_id: input.callbackAgentId,
+      callback_session_id: input.callbackSessionId,
       created_by: input.createdBy,
       created_at: now,
       updated_at: now,
@@ -234,6 +293,16 @@ export async function updateTask(
     body?: string
     blocked_reason?: string
     completion_note?: string
+    error?: string
+    execution_session_id?: string
+    execution_agent_id?: string
+    output_note?: string
+    output_artifact?: string
+    telegram_connection_id?: string
+    telegram_chat_id?: string
+    telegram_original_message_id?: string
+    telegram_accepted_message_id?: string
+    telegram_completion_message_id?: string
   },
 ): Promise<TaskRecord> {
   const task = await findTaskById(tasksDir, id)
@@ -243,10 +312,20 @@ export async function updateTask(
   if (patch.body !== undefined) task.body = patch.body
   if (patch.blocked_reason !== undefined) task.frontmatter.blocked_reason = patch.blocked_reason
   if (patch.completion_note !== undefined) task.frontmatter.completion_note = patch.completion_note
+  if (patch.error !== undefined) task.frontmatter.error = patch.error
+  if (patch.execution_session_id !== undefined) task.frontmatter.execution_session_id = patch.execution_session_id
+  if (patch.execution_agent_id !== undefined) task.frontmatter.execution_agent_id = patch.execution_agent_id
+  if (patch.output_note !== undefined) task.frontmatter.output_note = patch.output_note
+  if (patch.output_artifact !== undefined) task.frontmatter.output_artifact = patch.output_artifact
+  if (patch.telegram_connection_id !== undefined) task.frontmatter.telegram_connection_id = patch.telegram_connection_id
+  if (patch.telegram_chat_id !== undefined) task.frontmatter.telegram_chat_id = patch.telegram_chat_id
+  if (patch.telegram_original_message_id !== undefined) task.frontmatter.telegram_original_message_id = patch.telegram_original_message_id
+  if (patch.telegram_accepted_message_id !== undefined) task.frontmatter.telegram_accepted_message_id = patch.telegram_accepted_message_id
+  if (patch.telegram_completion_message_id !== undefined) task.frontmatter.telegram_completion_message_id = patch.telegram_completion_message_id
 
   task.frontmatter.updated_at = new Date().toISOString()
 
-  if (patch.status === 'done') {
+  if (patch.status === 'done' || patch.status === 'failed' || patch.status === 'cancelled') {
     task.frontmatter.completed_at = task.frontmatter.updated_at
   }
 

@@ -28,6 +28,9 @@ async function main() {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'e2e-test-'))
   const dbPath = path.join(tmpDir, 'test.db')
   process.env.DATABASE_URL = dbPath
+  process.env.TASKS_DIR = path.join(tmpDir, 'tasks')
+  process.env.WORKSPACE_DIR = path.join(tmpDir, 'workspace')
+  process.env.SESSION_FILES_DIR = path.join(tmpDir, 'sessions')
   process.env.ENCRYPTION_KEY = 'test-encryption-key'
 
   // Clear provider keys so none are registered
@@ -410,6 +413,7 @@ async function main() {
     providers.register('openrouter', stubProvider)
 
     let sentMessageId = 1000
+    const sentMessages: Array<Record<string, unknown>> = []
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string'
         ? input
@@ -427,6 +431,7 @@ async function main() {
 
       if (method === 'sendMessage') {
         sentMessageId += 1
+        sentMessages.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
         return new Response(JSON.stringify({
           ok: true,
           result: {
@@ -528,7 +533,7 @@ async function main() {
     assert(first.status === 'processed' && first.sessionId != null, 'Telegram free message starts a session')
 
     const firstSessionId = first.sessionId!
-    await waitForTelegramBotReplies(runtime, firstSessionId, 2)
+    await waitForTelegramBotReplies(runtime, firstSessionId, 1)
     const firstSession = await repos.sessions.getById(firstSessionId)
     assert(firstSession?.source === 'telegram', 'Telegram-created session is marked with telegram source')
 
@@ -574,7 +579,7 @@ async function main() {
       },
     )
     assert(second.sessionId === firstSessionId && !second.forked, 'Replying to current head continues the same Telegram session')
-    await waitForTelegramBotReplies(runtime, firstSessionId, 4)
+    await waitForTelegramBotReplies(runtime, firstSessionId, 2)
 
     const secondSessionLinks = runtime.db
       .select()

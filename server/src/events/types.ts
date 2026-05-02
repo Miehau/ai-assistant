@@ -36,6 +36,12 @@ export type AgentEvent =
   | WorkflowProgressEvent
   | WorkflowDiscussionStartedEvent
   | WorkflowDiscussionTurnEvent
+  | TaskQueuedEvent
+  | TaskRunningEvent
+  | TaskCallbackPendingEvent
+  | TaskCompletedEvent
+  | TaskFailedEvent
+  | TaskMetadataUpdatedEvent
 
 interface BaseEvent {
   agent_id: string
@@ -155,6 +161,48 @@ export interface WorkflowDiscussionTurnEvent extends BaseEvent {
   payload: { runId: string; workflowName: string; role: 'user' | 'assistant'; content: string }
 }
 
+// --- Task events ---
+
+export interface TaskEventPayload {
+  taskId: string
+  title: string
+  status: string
+  callbackAgentId?: string
+  callbackSessionId?: string
+  outputNote?: string
+  outputArtifact?: string
+}
+
+export interface TaskQueuedEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.TASK_QUEUED
+  payload: TaskEventPayload
+}
+
+export interface TaskRunningEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.TASK_RUNNING
+  payload: TaskEventPayload
+}
+
+export interface TaskCallbackPendingEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.TASK_CALLBACK_PENDING
+  payload: TaskEventPayload
+}
+
+export interface TaskCompletedEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.TASK_COMPLETED
+  payload: TaskEventPayload
+}
+
+export interface TaskFailedEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.TASK_FAILED
+  payload: TaskEventPayload & { error?: string }
+}
+
+export interface TaskMetadataUpdatedEvent extends BaseEvent {
+  type: typeof EVENT_TYPES.TASK_METADATA_UPDATED
+  payload: TaskEventPayload
+}
+
 // ---------------------------------------------------------------------------
 // Event filter
 // ---------------------------------------------------------------------------
@@ -189,4 +237,10 @@ export const EVENT_TYPES = {
   WORKFLOW_PROGRESS: 'workflow:progress',
   WORKFLOW_DISCUSSION_STARTED: 'workflow:discussion_started',
   WORKFLOW_DISCUSSION_TURN: 'workflow:discussion_turn',
+  TASK_QUEUED: 'task:queued',
+  TASK_RUNNING: 'task:running',
+  TASK_CALLBACK_PENDING: 'task:callback_pending',
+  TASK_COMPLETED: 'task:completed',
+  TASK_FAILED: 'task:failed',
+  TASK_METADATA_UPDATED: 'task:metadata_updated',
 } as const

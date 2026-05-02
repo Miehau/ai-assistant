@@ -492,6 +492,7 @@ async function executePendingApprovedTools(ctx: RunContext): Promise<void> {
       agent_id: ctx.agent.id,
       session_id: ctx.agent.sessionId,
       signal: ctx.signal,
+      events: ctx.events,
     })
     const durationMs = Date.now() - startMs
 
@@ -811,6 +812,7 @@ async function executeTool(
     agent_id: ctx.agent.id,
     session_id: ctx.agent.sessionId,
     signal: ctx.signal,
+    events: ctx.events,
   })
   const durationMs = Date.now() - startMs
 

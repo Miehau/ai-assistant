@@ -22,6 +22,8 @@ import { loadAgentDefinitions } from '../agents/loader.js'
 import { AgentDefinitionRegistryImpl } from '../agents/registry.js'
 import type { AgentDefinitionRegistry } from '../agents/registry.js'
 import { registerTaskTools } from '../tools/tasks.js'
+import { TaskRunner } from '../tasks/runner.js'
+import { TelegramTaskBridge } from '../services/telegram-task-bridge.js'
 import { registerThinkTool } from '../tools/think.js'
 import { logger } from './logger.js'
 import type { AppConfig } from './config.js'
@@ -68,6 +70,8 @@ export interface RuntimeContext {
   events: EventSink & EventSource
   config: AppConfig
   sessionFilesRoot: string
+  tasksDir: string
+  notesDir: string
   inlineOutputLimitBytes: number
   db: DrizzleInstance
   closeDatabase: () => Promise<void>
@@ -84,6 +88,10 @@ export interface RuntimeContext {
   shutdownController: AbortController
   /** Per-agent AbortControllers — keyed by agent ID, used to cancel individual runs. */
   agentAbortControllers: Map<string, AbortController>
+  /** Single-process local Markdown task runner. */
+  taskRunner: TaskRunner | null
+  /** Telegram adapter for task acceptance anchors and completion replies. */
+  telegramTaskBridge: TelegramTaskBridge | null
 }
 
 export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
@@ -146,7 +154,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   registerThinkTool(tools)
 
   // Task management tools — files stored in data/tasks/, outputs in data/workspace/
-  registerTaskTools(tools, tasksDir, workspaceDir)
+  registerTaskTools(tools, tasksDir, workspaceDir, agentDefinitions)
   registerNoteTools(tools, { notesDir, sessionFilesRoot })
 
   // Intercept handlers — populated by register*Tools functions that provide orchestrator_intercept tools
@@ -227,7 +235,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   }
 
   // 8. Return RuntimeContext
-  return {
+  const runtime: RuntimeContext = {
     repositories: {
       users: repos.users,
       sessions: repos.sessions,
@@ -247,6 +255,8 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     events,
     config,
     sessionFilesRoot,
+    tasksDir,
+    notesDir,
     inlineOutputLimitBytes: config.inlineOutputLimitBytes,
     db,
     closeDatabase: opened.close,
@@ -255,13 +265,24 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     workflows,
     shutdownController: new AbortController(),
     agentAbortControllers: new Map(),
+    taskRunner: null,
+    telegramTaskBridge: null,
   }
+
+  runtime.taskRunner = new TaskRunner(runtime, { tasksDir, notesDir })
+  await runtime.taskRunner.start()
+  runtime.telegramTaskBridge = new TelegramTaskBridge(runtime, { tasksDir })
+  runtime.telegramTaskBridge.start()
+
+  return runtime
 }
 
 export async function shutdownRuntime(runtime: RuntimeContext): Promise<void> {
   logger.info('Shutting down runtime — aborting in-flight agents')
 
   // Abort in-flight workflow runs
+  runtime.telegramTaskBridge?.stop()
+  runtime.taskRunner?.stop()
   runtime.workflows?.executor.abortAll()
   await runtime.mcps.shutdown()
 

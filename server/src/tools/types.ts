@@ -1,3 +1,5 @@
+import type { EventSink } from '../events/types.js'
+
 export interface ToolExecutor {
   execute(
     name: string,
@@ -25,6 +27,7 @@ export interface ToolContext {
   agent_id: string
   session_id: string
   signal: AbortSignal
+  events?: EventSink
 }
 
 export interface ToolResult {
