@@ -119,6 +119,12 @@ export interface TelegramUpdate {
   message?: TelegramMessage
 }
 
+interface TelegramCommand {
+  content: string
+  startsNewSession: boolean
+  commandOnly: boolean
+}
+
 export class TelegramService {
   private readonly encKey: string | null
 
@@ -419,13 +425,42 @@ export class TelegramService {
 
     await this.runtime.repositories.telegram.createUpdateDedupe(connection.id, update.update_id)
 
-    const content = message.text?.trim() || message.caption?.trim() || ''
-    if (!content) {
-      await this.sendBotMessage(connection, message.chat.id, 'Only text messages are supported right now.')
+    const rawContent = message.text?.trim() || message.caption?.trim() || ''
+    if (!rawContent) {
+      await this.sendBotMessage(connection, message.chat.id, 'Only text messages are supported right now.', message.message_id)
       return { ok: true, status: 'ignored', reason: 'unsupported_message_type' }
     }
 
-    const resolution = await this.resolveSession(connection, message, content)
+    const command = this.parseCommand(rawContent)
+    if (command.commandOnly) {
+      const session = await this.createTelegramSession(connection, 'Telegram session')
+      await this.createMessageLink(
+        connection.id,
+        message.chat.id,
+        message.message_id,
+        session.id,
+        null,
+        'user',
+      )
+      const note = await this.sendBotMessage(
+        connection,
+        message.chat.id,
+        'New Telegram session started. Send the next message to continue it.',
+        message.message_id,
+      )
+      if (note != null) {
+        await this.createMessageLink(connection.id, message.chat.id, note, session.id, null, 'bot')
+      }
+      return {
+        ok: true,
+        status: 'processed',
+        sessionId: session.id,
+        forked: false,
+      }
+    }
+
+    const content = command.content
+    const resolution = await this.resolveSession(connection, message, content, command.startsNewSession)
     const prepared = await prepareSessionTurn(this.runtime, {
       userId: connection.userId,
       sessionId: resolution.sessionId,
@@ -438,7 +473,8 @@ export class TelegramService {
       const note = await this.sendBotMessage(
         connection,
         message.chat.id,
-        'That thread is still running. Reply after it finishes, or send a free message to start a new session.',
+        'That thread is still running. Try again after it finishes, or send /new to start a new session.',
+        message.message_id,
       )
       if (note != null) {
         await this.createMessageLink(connection.id, message.chat.id, note, prepared.sessionId, null, 'bot')
@@ -511,7 +547,7 @@ export class TelegramService {
         )
 
         const responseText = this.formatTelegramCompletion(lastAssistant?.content ?? result.result ?? '', result)
-        const outboundMessageId = await this.sendBotMessageWithRetry(connection, chatId, responseText)
+        const outboundMessageId = await this.sendBotMessageWithRetry(connection, chatId, responseText, originalMessageId)
         if (outboundMessageId != null) {
           await this.createMessageLink(
             connection.id,
@@ -531,7 +567,7 @@ export class TelegramService {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        await this.sendBotMessageWithRetry(connection, chatId, this.formatTelegramFailure(message))
+        await this.sendBotMessageWithRetry(connection, chatId, this.formatTelegramFailure(message), originalMessageId)
       } finally {
         this.runtime.agentAbortControllers.delete(agentId)
       }
@@ -541,114 +577,64 @@ export class TelegramService {
   /**
    * Choose which app session a Telegram message belongs to.
    *
-   * Free messages start new sessions. Replies to the current bot head continue
-   * the same session. Replies to older bot messages fork the transcript at that
-   * point so Telegram can branch conversations naturally.
+   * /new starts a fresh Telegram session. Ordinary non-reply messages continue
+   * the current chat session, while replies explicitly select the session linked
+   * to the replied-to Telegram message.
    */
   private async resolveSession(
     connection: TelegramConnectionRow,
     message: TelegramMessage,
     content: string,
+    startsNewSession: boolean = false,
   ): Promise<{ sessionId: string; forked: boolean }> {
     const chatId = String(message.chat.id)
     const replyToMessageId = message.reply_to_message?.message_id
 
+    if (startsNewSession) {
+      const session = await this.createTelegramSession(connection, content)
+      return { sessionId: session.id, forked: false }
+    }
+
     if (!replyToMessageId) {
-      const session = await this.runtime.repositories.sessions.create({
-        userId: connection.userId,
-        title: content.slice(0, 100),
-        source: 'telegram',
-      })
+      const head = await this.getChatHeadLink(connection.id, chatId)
+      if (head) {
+        return { sessionId: head.sessionId, forked: false }
+      }
+      const session = await this.createTelegramSession(connection, content)
       return { sessionId: session.id, forked: false }
     }
 
     const anchor = await this.getMessageLink(connection.id, chatId, replyToMessageId)
-    if (!anchor) {
-      const session = await this.runtime.repositories.sessions.create({
-        userId: connection.userId,
-        title: content.slice(0, 100),
-        source: 'telegram',
-      })
-      return { sessionId: session.id, forked: false }
-    }
-
-    const head = await this.getSessionHeadLink(connection.id, anchor.sessionId)
-    if (!head || head.telegramMessageId === anchor.telegramMessageId) {
+    if (anchor) {
       return { sessionId: anchor.sessionId, forked: false }
     }
 
-    if (!anchor.itemId) {
-      const session = await this.runtime.repositories.sessions.create({
-        userId: connection.userId,
-        title: content.slice(0, 100),
-        source: 'telegram',
-      })
-      return { sessionId: session.id, forked: false }
+    const session = await this.createTelegramSession(connection, content)
+    return { sessionId: session.id, forked: false }
+  }
+
+  /** Parse Telegram slash commands that affect session routing. */
+  private parseCommand(content: string): TelegramCommand {
+    const match = content.match(/^\/new(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/)
+    if (!match) {
+      return { content, startsNewSession: false, commandOnly: false }
     }
 
-    const sessionId = await this.forkSessionFromAnchor(anchor, content)
+    const nextContent = match[1]?.trim() ?? ''
     return {
-      sessionId,
-      forked: true,
+      content: nextContent,
+      startsNewSession: true,
+      commandOnly: nextContent.length === 0,
     }
   }
 
-  /** Copy a session transcript up to an anchored Telegram message and append the new branch message. */
-  private async forkSessionFromAnchor(anchor: TelegramMessageLinkRow, content: string): Promise<string> {
-    const sourceSession = await this.runtime.repositories.sessions.getById(anchor.sessionId)
-    if (!sourceSession) {
-      throw new Error(`Source session not found for Telegram fork: ${anchor.sessionId}`)
-    }
-    const sourceRootAgent = await this.runtime.repositories.agents.findRootAgent(anchor.sessionId)
-    if (!sourceRootAgent) {
-      throw new Error(`Root agent not found for Telegram fork: ${anchor.sessionId}`)
-    }
-    const anchorItem = await this.runtime.repositories.items.getById(anchor.itemId!)
-    if (!anchorItem) {
-      throw new Error(`Anchor item not found for Telegram fork: ${anchor.itemId}`)
-    }
-
-    const forkedSession = await this.runtime.repositories.sessions.create({
-      userId: sourceSession.userId,
-      title: content.slice(0, 100) || sourceSession.title,
-      parentSessionId: sourceSession.id,
-      forkedFromItemId: anchorItem.id,
+  /** Create an app session owned by this Telegram connection. */
+  private async createTelegramSession(connection: TelegramConnectionRow, title: string) {
+    return this.runtime.repositories.sessions.create({
+      userId: connection.userId,
+      title: title.slice(0, 100) || 'Telegram session',
       source: 'telegram',
     })
-    const forkedRootAgent = await this.runtime.repositories.agents.create({
-      sessionId: forkedSession.id,
-      task: sourceRootAgent.task,
-      config: sourceRootAgent.config,
-    })
-    await this.runtime.repositories.sessions.update(forkedSession.id, {
-      rootAgentId: forkedRootAgent.id,
-    })
-
-    const sourceItems = await this.runtime.repositories.items.listByAgent(sourceRootAgent.id)
-    const copiedItems = sourceItems.filter((item) => item.sequence <= anchorItem.sequence)
-    for (const item of copiedItems) {
-      await this.runtime.repositories.items.create({
-        agentId: forkedRootAgent.id,
-        type: item.type,
-        role: item.role,
-        content: item.content,
-        callId: item.callId,
-        name: item.name,
-        arguments: item.arguments,
-        output: item.output,
-        contentBlocks: item.contentBlocks,
-        isError: item.isError,
-        saveOutput: item.saveOutput,
-        turnNumber: item.turnNumber,
-        durationMs: item.durationMs,
-      })
-    }
-    const lastTurn = copiedItems.reduce((maxTurn, item) => Math.max(maxTurn, item.turnNumber), 0)
-    await this.runtime.repositories.agents.update(forkedRootAgent.id, {
-      turnCount: lastTurn,
-    })
-
-    return forkedSession.id
   }
 
   /** Return the most recent user or assistant message item for link bookkeeping. */
@@ -697,9 +683,9 @@ export class TelegramService {
     return this.runtime.repositories.telegram.getMessageLink(connectionId, chatId, messageId)
   }
 
-  /** Return the newest Telegram message linked to a session. */
-  private async getSessionHeadLink(connectionId: string, sessionId: string): Promise<TelegramMessageLinkRow | null> {
-    return this.runtime.repositories.telegram.getSessionHeadLink(connectionId, sessionId)
+  /** Return the newest Telegram message linked in a chat. */
+  private async getChatHeadLink(connectionId: string, chatId: string): Promise<TelegramMessageLinkRow | null> {
+    return this.runtime.repositories.telegram.getChatHeadLink(connectionId, chatId)
   }
 
   /** Persist the mapping between a Telegram message and an app session/item. */
@@ -727,11 +713,21 @@ export class TelegramService {
   }
 
   /** Send a plain text message through the configured bot. */
-  private async sendBotMessage(connection: TelegramConnectionRow, chatId: number, text: string): Promise<number | null> {
-    const response = await this.callTelegram<TelegramSendMessageResponse>(connection, 'sendMessage', {
+  private async sendBotMessage(
+    connection: TelegramConnectionRow,
+    chatId: number,
+    text: string,
+    replyToMessageId?: number,
+  ): Promise<number | null> {
+    const payload: Record<string, unknown> = {
       chat_id: chatId,
       text,
-    })
+    }
+    if (replyToMessageId != null) {
+      payload.reply_to_message_id = replyToMessageId
+      payload.allow_sending_without_reply = true
+    }
+    const response = await this.callTelegram<TelegramSendMessageResponse>(connection, 'sendMessage', payload)
     return response.ok && response.result ? response.result.message_id : null
   }
 
@@ -740,10 +736,11 @@ export class TelegramService {
     connection: TelegramConnectionRow,
     chatId: number,
     text: string,
+    replyToMessageId?: number,
     attempts: number = 3,
   ): Promise<number | null> {
     for (let attempt = 1; attempt <= attempts; attempt++) {
-      const messageId = await this.sendBotMessage(connection, chatId, text)
+      const messageId = await this.sendBotMessage(connection, chatId, text, replyToMessageId)
       if (messageId != null) return messageId
       if (attempt < attempts) {
         await this.delay(250 * attempt)

@@ -912,6 +912,19 @@ function createTelegramRepo(db: PgDrizzleInstance): TelegramRepository {
       return rows[0] ? toStoredTelegramMessageLink(rows[0]) : null
     },
 
+    async getChatHeadLink(connectionId: string, chatId: string): Promise<StoredTelegramMessageLink | null> {
+      const rows = await db
+        .select()
+        .from(schema.telegramMessageLinks)
+        .where(and(
+          eq(schema.telegramMessageLinks.connectionId, connectionId),
+          eq(schema.telegramMessageLinks.telegramChatId, chatId),
+        ))
+        .orderBy(desc(schema.telegramMessageLinks.createdAt), desc(schema.telegramMessageLinks.telegramMessageId))
+        .limit(1)
+      return rows[0] ? toStoredTelegramMessageLink(rows[0]) : null
+    },
+
     async getSessionHeadLink(connectionId: string, sessionId: string): Promise<StoredTelegramMessageLink | null> {
       const rows = await db
         .select()

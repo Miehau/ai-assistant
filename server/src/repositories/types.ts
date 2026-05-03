@@ -386,6 +386,7 @@ export interface TelegramRepository {
   hasProcessedUpdate(connectionId: string, updateId: number): Promise<boolean>
   createUpdateDedupe(connectionId: string, updateId: number): Promise<void>
   getMessageLink(connectionId: string, chatId: string, messageId: number): Promise<StoredTelegramMessageLink | null>
+  getChatHeadLink(connectionId: string, chatId: string): Promise<StoredTelegramMessageLink | null>
   getSessionHeadLink(connectionId: string, sessionId: string): Promise<StoredTelegramMessageLink | null>
   createMessageLink(input: CreateStoredTelegramMessageLinkInput): Promise<void>
 }

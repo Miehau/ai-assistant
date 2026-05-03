@@ -1077,6 +1077,20 @@ function createTelegramRepo(db: DrizzleInstance): TelegramRepository {
       return row ? toStoredTelegramMessageLink(row) : null
     },
 
+    async getChatHeadLink(connectionId: string, chatId: string): Promise<StoredTelegramMessageLink | null> {
+      const row = db
+        .select()
+        .from(schema.telegramMessageLinks)
+        .where(and(
+          eq(schema.telegramMessageLinks.connectionId, connectionId),
+          eq(schema.telegramMessageLinks.telegramChatId, chatId),
+        ))
+        .orderBy(desc(schema.telegramMessageLinks.createdAt), desc(schema.telegramMessageLinks.telegramMessageId))
+        .limit(1)
+        .all()[0]
+      return row ? toStoredTelegramMessageLink(row) : null
+    },
+
     async getSessionHeadLink(connectionId: string, sessionId: string): Promise<StoredTelegramMessageLink | null> {
       const row = db
         .select()

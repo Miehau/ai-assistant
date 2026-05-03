@@ -534,6 +534,7 @@ async function main() {
 
     const firstSessionId = first.sessionId!
     await waitForTelegramBotReplies(runtime, firstSessionId, 1)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 10), 'Telegram bot replies to the inbound message')
     const firstSession = await repos.sessions.getById(firstSessionId)
     assert(firstSession?.source === 'telegram', 'Telegram-created session is marked with telegram source')
 
@@ -574,12 +575,12 @@ async function main() {
           text: 'continue same thread',
           from: { id: 42 },
           chat: { id: 500, type: 'private' },
-          reply_to_message: { message_id: firstBotReplyId! },
         },
       },
     )
-    assert(second.sessionId === firstSessionId && !second.forked, 'Replying to current head continues the same Telegram session')
+    assert(second.sessionId === firstSessionId && !second.forked, 'Telegram free message continues the current chat session')
     await waitForTelegramBotReplies(runtime, firstSessionId, 2)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 11), 'Telegram continuation reply is anchored to the inbound message')
 
     const secondSessionLinks = runtime.db
       .select()
@@ -589,7 +590,7 @@ async function main() {
       .sort((a, b) => a.createdAt - b.createdAt)
     const secondBotReplyId = secondSessionLinks[secondSessionLinks.length - 1]?.telegramMessageId
 
-    const forked = await telegram.processWebhook(
+    const newFromReply = await telegram.processWebhook(
       telegramConn.id,
       telegramConnRow.webhookPathSecret,
       telegramConnRow.webhookHeaderSecret,
@@ -597,32 +598,105 @@ async function main() {
         update_id: 4,
         message: {
           message_id: 12,
-          text: 'branch from earlier point',
+          text: '/new separate topic',
           from: { id: 42 },
           chat: { id: 500, type: 'private' },
           reply_to_message: { message_id: firstBotReplyId! },
         },
       },
     )
-    assert(forked.status === 'processed' && forked.forked === true, 'Replying to older Telegram message forks a new session')
-    assert(forked.sessionId != null && forked.sessionId !== firstSessionId, 'Telegram fork creates a distinct session')
+    assert(newFromReply.status === 'processed' && newFromReply.sessionId != null, '/new with text is processed')
+    assert(newFromReply.sessionId !== firstSessionId && !newFromReply.forked, '/new with text starts a new session even when sent as a reply')
+    await waitForTelegramBotReplies(runtime, newFromReply.sessionId!, 1)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 12), '/new with text replies to the command message')
 
-    const forkedSession = await repos.sessions.getById(forked.sessionId!)
-    assert(forkedSession?.parentSessionId === firstSessionId, 'Forked Telegram session links back to its parent session')
-    assert(forkedSession?.forkedFromItemId != null, 'Forked Telegram session records the anchor item')
+    const continuedNew = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 5,
+        message: {
+          message_id: 13,
+          text: 'continue separate topic without replying',
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+        },
+      },
+    )
+    assert(continuedNew.sessionId === newFromReply.sessionId && !continuedNew.forked, 'Telegram free message after /new continues that new session')
+    await waitForTelegramBotReplies(runtime, newFromReply.sessionId!, 2)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 13), 'Telegram reply after /new continuation is anchored to the inbound message')
 
-    const forkedRootAgent = await repos.agents.findRootAgent(forked.sessionId!)
-    const forkedItems = await repos.items.listByAgent(forkedRootAgent!.id)
-    const forkedMessages = forkedItems
-      .filter((item) => item.type === 'message')
-      .map((item) => `${item.role}:${item.content}`)
-    assert(forkedMessages.includes('user:first thread'), 'Forked Telegram session copies transcript up to the anchor point')
-    assert(forkedMessages.includes('assistant:Stubbed Telegram reply'), 'Forked Telegram session includes the anchored assistant reply')
-    assert(!forkedMessages.includes('user:continue same thread'), 'Forked Telegram session excludes messages after the fork point')
-    assert(forkedMessages.includes('user:branch from earlier point'), 'Forked Telegram session appends the new branch message')
+    const commandOnly = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 6,
+        message: {
+          message_id: 14,
+          text: '/new',
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+        },
+      },
+    )
+    assert(commandOnly.status === 'processed' && commandOnly.sessionId != null, '/new command-only creates a Telegram session')
+    assert(commandOnly.sessionId !== firstSessionId && !commandOnly.forked, '/new command-only advances the current chat session')
+    assert(sentMessages.some((payload) => (
+      payload.reply_to_message_id === 14 &&
+      payload.text === 'New Telegram session started. Send the next message to continue it.'
+    )), '/new command-only acknowledgement is anchored to the command message')
+
+    const commandOnlyLinks = runtime.db
+      .select()
+      .from(schema.telegramMessageLinks)
+      .where(eq(schema.telegramMessageLinks.sessionId, commandOnly.sessionId!))
+      .all()
+      .sort((a, b) => (a.createdAt - b.createdAt) || (a.telegramMessageId - b.telegramMessageId))
+    const commandOnlyAnchorId = commandOnlyLinks.find((link) => link.senderType === 'bot')?.telegramMessageId
+    assert(typeof commandOnlyAnchorId === 'number', '/new command-only stores a bot anchor message')
+
+    const resumedNew = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 7,
+        message: {
+          message_id: 15,
+          text: 'first prompt after command-only new',
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+        },
+      },
+    )
+    assert(resumedNew.sessionId === commandOnly.sessionId && !resumedNew.forked, 'Free message after /new command-only continues that new session')
+    await waitForTelegramBotReplies(runtime, commandOnly.sessionId!, 2)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 15), 'Telegram reply after /new command-only is anchored to the inbound message')
+
+    const resumedFirst = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 8,
+        message: {
+          message_id: 16,
+          text: 'back to first session',
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+          reply_to_message: { message_id: firstBotReplyId! },
+        },
+      },
+    )
+    assert(resumedFirst.sessionId === firstSessionId && !resumedFirst.forked, 'Replying to an earlier message brings that Telegram session back into scope')
+    await waitForTelegramBotReplies(runtime, firstSessionId, 3)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 16), 'Telegram resumed-session reply is anchored to the inbound reply')
 
     const sessionCountAfterTelegram = (await repos.sessions.listByUser(devUser!.id)).length
-    assert(sessionCountAfterTelegram === sessionCountBeforeTelegram + 2, 'Telegram tests created one new session and one forked session')
+    assert(sessionCountAfterTelegram === sessionCountBeforeTelegram + 3, 'Telegram tests created one initial session and two /new sessions')
     assert(secondBotReplyId !== firstBotReplyId, 'Continuing the Telegram thread advances the head message id')
 
     // ──────────────────────────────────────────
