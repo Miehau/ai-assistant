@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import type { RuntimeContext } from '../lib/runtime.js'
 import {
   TelegramService,
-  type CreateTelegramConnectionInput,
+  type TelegramConnectInput,
   type UpdateTelegramConnectionInput,
   type TelegramUpdate,
 } from '../services/telegram.js'
@@ -23,11 +23,12 @@ export function telegramRoutes(runtime: RuntimeContext): Hono<TelegramEnv> {
     }
   })
 
-  app.post('/', async (c) => {
+  app.post('/connect', async (c) => {
     try {
       const userId = c.get('userId') as string
-      const body = await c.req.json<CreateTelegramConnectionInput>()
-      return c.json(await telegram.createConnection(userId, body), 201)
+      const body = await c.req.json<TelegramConnectInput>()
+      const result = await telegram.connectBot(userId, body)
+      return c.json(result, result.test.ok && result.webhook?.ok ? 201 : 400)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, 400)
@@ -90,8 +91,7 @@ export function telegramRoutes(runtime: RuntimeContext): Hono<TelegramEnv> {
     try {
       const userId = c.get('userId') as string
       const { id } = c.req.param()
-      const body = await c.req.json<{ webhookUrl?: string }>().catch(() => undefined)
-      const result = await telegram.registerWebhook(id, userId, body?.webhookUrl)
+      const result = await telegram.registerWebhook(id, userId)
       if (!result) return c.json({ error: `Telegram connection not found: ${id}` }, 404)
       return c.json(result, result.ok ? 200 : 400)
     } catch (err) {

@@ -28,6 +28,11 @@ export interface CreateTelegramConnectionInput {
   webhookUrl?: string | null
 }
 
+export interface TelegramConnectInput {
+  botToken: string
+  allowedTelegramUserId: string
+}
+
 export interface UpdateTelegramConnectionInput {
   botToken?: string | null
   allowedTelegramUserId?: string
@@ -45,6 +50,16 @@ export interface TelegramWebhookRegistrationResult {
   pendingUpdateCount?: number
   lastErrorDate?: number
   lastErrorMessage?: string
+}
+
+export interface TelegramConnectResult {
+  connection: TelegramConnectionRecord | null
+  test: {
+    ok: boolean
+    username?: string
+    description?: string
+  }
+  webhook: TelegramWebhookRegistrationResult | null
 }
 
 export interface TelegramWebhookProcessResult {
@@ -144,6 +159,68 @@ export class TelegramService {
     return this.toConnectionRecord(row)
   }
 
+  /** Create, verify, and register a Telegram bot webhook in one operation. */
+  async connectBot(userId: string, input: TelegramConnectInput): Promise<TelegramConnectResult> {
+    const tokenCheck = await this.callTelegramWithToken<TelegramGetMeResponse>(input.botToken, 'getMe')
+    const existing = await this.findReusableConnection(
+      userId,
+      input.allowedTelegramUserId,
+      tokenCheck.result?.username ?? null,
+    )
+
+    if (!tokenCheck.ok || !tokenCheck.result) {
+      const test = { ok: false, description: tokenCheck.description }
+      if (existing) {
+        await this.updateConnection(existing.id, userId, {
+          botToken: input.botToken,
+          status: 'error',
+          lastError: tokenCheck.description ?? 'Telegram getMe failed',
+        })
+      }
+      return {
+        connection: existing ? await this.getConnection(existing.id, userId) : null,
+        test,
+        webhook: null,
+      }
+    }
+
+    const connection = existing
+      ? await this.updateConnection(existing.id, userId, {
+        botToken: input.botToken,
+        allowedTelegramUserId: input.allowedTelegramUserId,
+        botUsername: tokenCheck.result.username ?? null,
+        status: 'connected',
+        lastError: null,
+      })
+      : await this.createConnection(userId, {
+        botToken: input.botToken,
+        allowedTelegramUserId: input.allowedTelegramUserId,
+      })
+
+    if (!connection) {
+      throw new Error('Telegram connection could not be created or updated')
+    }
+
+    const connectionId = connection.id
+    const test = existing
+      ? { ok: true, username: tokenCheck.result.username, description: tokenCheck.description }
+      : await this.testConnection(connectionId, userId)
+    if (!test.ok) {
+      return {
+        connection: await this.getConnection(connectionId, userId) ?? connection,
+        test,
+        webhook: null,
+      }
+    }
+
+    const webhook = await this.registerWebhook(connectionId, userId)
+    return {
+      connection: await this.getConnection(connectionId, userId) ?? connection,
+      test,
+      webhook,
+    }
+  }
+
   /** Update bot credentials, webhook metadata, or connection status. */
   async updateConnection(id: string, userId: string, input: UpdateTelegramConnectionInput): Promise<TelegramConnectionRecord | null> {
     const existing = await this.getConnectionRow(id, userId)
@@ -176,6 +253,18 @@ export class TelegramService {
   /** Delete a connection and its Telegram-specific webhook/message bookkeeping. */
   async deleteConnection(id: string, userId: string): Promise<boolean> {
     return this.runtime.repositories.telegram.deleteConnection(id, userId)
+  }
+
+  private async findReusableConnection(
+    userId: string,
+    allowedTelegramUserId: string,
+    botUsername: string | null,
+  ): Promise<TelegramConnectionRow | null> {
+    const connections = await this.runtime.repositories.telegram.listConnections(userId)
+    return connections.find((connection) => (
+      connection.allowedTelegramUserId === allowedTelegramUserId &&
+      (!botUsername || connection.botUsername === null || connection.botUsername === botUsername)
+    )) ?? null
   }
 
   /** Verify the stored bot token by calling Telegram getMe. */
@@ -213,9 +302,9 @@ export class TelegramService {
     const connection = await this.getConnectionRow(id, userId)
     if (!connection) return null
 
-    const url = webhookUrl ?? connection.webhookUrl
+    const url = webhookUrl ?? this.buildWebhookUrl(connection) ?? connection.webhookUrl
     if (!url) {
-      throw new Error('webhookUrl is required to register Telegram webhook')
+      throw new Error('webhookUrl is required to register Telegram webhook. Set PUBLIC_BASE_URL or pass webhookUrl explicitly.')
     }
 
     const response = await this.callTelegram<boolean>(connection, 'setWebhook', {
@@ -683,6 +772,14 @@ export class TelegramService {
     payload?: Record<string, unknown>,
   ): Promise<TelegramApiResponse<T>> {
     const token = this.readSecret(connection.botToken)
+    return this.callTelegramWithToken<T>(token, method, payload)
+  }
+
+  private async callTelegramWithToken<T>(
+    token: string,
+    method: string,
+    payload?: Record<string, unknown>,
+  ): Promise<TelegramApiResponse<T>> {
     const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method: 'POST',
       headers: {
@@ -726,5 +823,11 @@ export class TelegramService {
   /** Decrypt stored secrets when ENCRYPTION_KEY is configured. */
   private readSecret(value: string): string {
     return this.encKey ? decrypt(value, this.encKey) : value
+  }
+
+  private buildWebhookUrl(connection: TelegramConnectionRow): string | null {
+    const base = this.runtime.config.publicBaseUrl?.trim().replace(/\/+$/, '')
+    if (!base) return null
+    return `${base}/telegram/webhook/${connection.id}/${connection.webhookPathSecret}`
   }
 }
