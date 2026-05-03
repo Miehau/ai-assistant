@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { RuntimeContext } from '../lib/runtime.js'
+import { splitModelId } from '../lib/model.js'
 import { decrypt, deriveKey, encrypt } from '../lib/crypto.js'
 import { buildDeps, prepareSessionTurn } from './session-runner.js'
 import { runAgent } from '../orchestrator/runner.js'
@@ -107,11 +108,20 @@ interface TelegramMessage {
   message_id: number
   text?: string
   caption?: string
+  voice?: TelegramVoice
   from?: TelegramUser
   chat: TelegramChat
   reply_to_message?: {
     message_id: number
   }
+}
+
+interface TelegramVoice {
+  file_id: string
+  file_unique_id: string
+  duration: number
+  mime_type?: string
+  file_size?: number
 }
 
 export interface TelegramUpdate {
@@ -124,6 +134,15 @@ interface TelegramCommand {
   startsNewSession: boolean
   commandOnly: boolean
 }
+
+interface TelegramFile {
+  file_id: string
+  file_unique_id: string
+  file_size?: number
+  file_path?: string
+}
+
+const MAX_TELEGRAM_VOICE_BYTES = 20 * 1024 * 1024
 
 export class TelegramService {
   private readonly encKey: string | null
@@ -425,8 +444,11 @@ export class TelegramService {
 
     await this.runtime.repositories.telegram.createUpdateDedupe(connection.id, update.update_id)
 
-    const rawContent = message.text?.trim() || message.caption?.trim() || ''
+    const rawContent = await this.extractMessageContent(connection, message)
     if (!rawContent) {
+      if (message.voice) {
+        return { ok: true, status: 'ignored', reason: 'voice_transcription_failed' }
+      }
       await this.sendBotMessage(connection, message.chat.id, 'Only text messages are supported right now.', message.message_id)
       return { ok: true, status: 'ignored', reason: 'unsupported_message_type' }
     }
@@ -613,6 +635,109 @@ export class TelegramService {
     return { sessionId: session.id, forked: false }
   }
 
+  /** Convert Telegram text/caption/voice input into the text command the agent sees. */
+  private async extractMessageContent(connection: TelegramConnectionRow, message: TelegramMessage): Promise<string> {
+    const textContent = message.text?.trim() || message.caption?.trim() || ''
+    if (!message.voice) return textContent
+
+    try {
+      await this.sendChatAction(connection, message.chat.id, 'typing')
+      const transcript = await this.transcribeTelegramVoice(connection, message.voice)
+      if (!transcript) return textContent
+      const transcriptBlock = `[Telegram voice transcript]\n${transcript}`
+      return textContent ? `${textContent}\n\n${transcriptBlock}` : transcriptBlock
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      await this.sendBotMessage(
+        connection,
+        message.chat.id,
+        `I couldn't transcribe that voice message: ${this.truncateForTelegram(detail, 700)}`,
+        message.message_id,
+      )
+      return textContent
+    }
+  }
+
+  /** Download a Telegram voice file and transcribe it with the configured STT model. */
+  private async transcribeTelegramVoice(connection: TelegramConnectionRow, voice: TelegramVoice): Promise<string> {
+    const transcriptionModel = this.runtime.config.telegramTranscriptionModel?.trim()
+    if (!transcriptionModel) {
+      throw new Error('TELEGRAM_TRANSCRIPTION_MODEL is not configured')
+    }
+
+    if (voice.file_size != null && voice.file_size > MAX_TELEGRAM_VOICE_BYTES) {
+      throw new Error(`voice message is too large (${voice.file_size} bytes)`)
+    }
+
+    const fileResponse = await this.callTelegram<TelegramFile>(connection, 'getFile', {
+      file_id: voice.file_id,
+    })
+    if (!fileResponse.ok || !fileResponse.result?.file_path) {
+      throw new Error(fileResponse.description ?? 'Telegram getFile failed')
+    }
+
+    if (fileResponse.result.file_size != null && fileResponse.result.file_size > MAX_TELEGRAM_VOICE_BYTES) {
+      throw new Error(`voice message is too large (${fileResponse.result.file_size} bytes)`)
+    }
+
+    const audioBytes = await this.downloadTelegramFile(connection, fileResponse.result.file_path)
+    const { provider, model } = splitModelId(transcriptionModel)
+    const transcriptionProvider = this.runtime.providers.resolve(transcriptionModel)
+    if (!transcriptionProvider.transcribeAudio) {
+      throw new Error(`Provider "${provider}" does not support audio transcription`)
+    }
+
+    const response = await transcriptionProvider.transcribeAudio({
+      model,
+      input_audio: {
+        data: Buffer.from(audioBytes).toString('base64'),
+        format: this.inferAudioFormat(voice.mime_type, fileResponse.result.file_path),
+      },
+      signal: this.runtime.shutdownController.signal,
+    })
+
+    return response.text.trim()
+  }
+
+  /** Download file bytes through Telegram's file endpoint with a hard size cap. */
+  private async downloadTelegramFile(connection: TelegramConnectionRow, filePath: string): Promise<ArrayBuffer> {
+    const token = this.readSecret(connection.botToken)
+    const response = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`)
+    if (!response.ok) {
+      throw new Error(`Telegram file download failed (${response.status})`)
+    }
+
+    const contentLength = response.headers.get('content-length')
+    if (contentLength && Number(contentLength) > MAX_TELEGRAM_VOICE_BYTES) {
+      throw new Error(`voice message is too large (${contentLength} bytes)`)
+    }
+
+    const bytes = await response.arrayBuffer()
+    if (bytes.byteLength > MAX_TELEGRAM_VOICE_BYTES) {
+      throw new Error(`voice message is too large (${bytes.byteLength} bytes)`)
+    }
+    return bytes
+  }
+
+  /** Map Telegram MIME/path metadata to OpenRouter's transcription format string. */
+  private inferAudioFormat(mimeType: string | undefined, filePath: string): string {
+    const normalizedMime = mimeType?.toLowerCase() ?? ''
+    if (normalizedMime.includes('ogg')) return 'ogg'
+    if (normalizedMime.includes('webm')) return 'webm'
+    if (normalizedMime.includes('mpeg') || normalizedMime.includes('mp3')) return 'mp3'
+    if (normalizedMime.includes('mp4') || normalizedMime.includes('m4a')) return 'm4a'
+    if (normalizedMime.includes('aac')) return 'aac'
+    if (normalizedMime.includes('flac')) return 'flac'
+    if (normalizedMime.includes('wav')) return 'wav'
+
+    const extension = filePath.toLowerCase().split('.').pop()
+    if (extension === 'oga') return 'ogg'
+    if (extension && ['ogg', 'webm', 'mp3', 'm4a', 'aac', 'flac', 'wav'].includes(extension)) {
+      return extension
+    }
+    return 'ogg'
+  }
+
   /** Parse Telegram slash commands that affect session routing. */
   private parseCommand(content: string): TelegramCommand {
     const match = content.match(/^\/new(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/)
@@ -667,10 +792,14 @@ export class TelegramService {
   /** Convert background execution failures into a concise Telegram-safe error message. */
   private formatTelegramFailure(message: string): string {
     const maxDetailLength = 1200
-    const detail = message.length > maxDetailLength
-      ? `${message.slice(0, maxDetailLength).trimEnd()}...`
-      : message
+    const detail = this.truncateForTelegram(message, maxDetailLength)
     return `Telegram session failed: ${detail}`
+  }
+
+  private truncateForTelegram(message: string, maxLength: number): string {
+    return message.length > maxLength
+      ? `${message.slice(0, maxLength).trimEnd()}...`
+      : message
   }
 
   /** Fetch the raw DB row so internal webhook secrets remain available. */

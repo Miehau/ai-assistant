@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict'
-import { buildRequestBody, preflightRequestBody } from '../providers/openrouter.js'
+import {
+  buildAudioTranscriptionRequestBody,
+  buildRequestBody,
+  preflightAudioTranscriptionRequestBody,
+  preflightRequestBody,
+} from '../providers/openrouter.js'
 import type { LLMRequest } from '../providers/types.js'
 
 const request: LLMRequest = {
@@ -44,6 +49,33 @@ assert.throws(
     tools: [{ type: 'web_search' }],
   }),
   /unsupported tools\[0\] shape/,
+)
+
+const transcriptionBody = buildAudioTranscriptionRequestBody({
+  model: 'openai/whisper-1',
+  input_audio: {
+    data: Buffer.from('audio-bytes').toString('base64'),
+    format: 'ogg',
+  },
+})
+preflightAudioTranscriptionRequestBody(transcriptionBody)
+assert.deepEqual(transcriptionBody, {
+  model: 'openai/whisper-1',
+  input_audio: {
+    data: Buffer.from('audio-bytes').toString('base64'),
+    format: 'ogg',
+  },
+})
+
+assert.throws(
+  () => preflightAudioTranscriptionRequestBody({
+    model: 'openai/whisper-1',
+    input_audio: {
+      data: 'data:audio/ogg;base64,abc123',
+      format: 'ogg',
+    },
+  }),
+  /must be raw base64/,
 )
 
 console.log('OpenRouter provider payload tests passed')

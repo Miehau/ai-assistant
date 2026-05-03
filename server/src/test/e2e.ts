@@ -32,6 +32,7 @@ async function main() {
   process.env.WORKSPACE_DIR = path.join(tmpDir, 'workspace')
   process.env.SESSION_FILES_DIR = path.join(tmpDir, 'sessions')
   process.env.ENCRYPTION_KEY = 'test-encryption-key'
+  process.env.TELEGRAM_TRANSCRIPTION_MODEL = 'openrouter:openai/whisper-1'
 
   // Clear provider keys so none are registered
   delete process.env.ANTHROPIC_API_KEY
@@ -408,6 +409,12 @@ async function main() {
           },
         }
       },
+      async transcribeAudio() {
+        return {
+          text: 'voice note transcript from OpenRouter',
+          usage: { input_tokens: 1, output_tokens: 4 },
+        }
+      },
     }
     providers.register('stub', stubProvider)
     providers.register('openrouter', stubProvider)
@@ -421,6 +428,16 @@ async function main() {
           ? input.toString()
           : input.url
       const method = url.split('/').pop() ?? ''
+
+      if (url.startsWith('https://api.telegram.org/file/')) {
+        return new Response(Buffer.from('fake-ogg-audio'), {
+          status: 200,
+          headers: {
+            'content-type': 'audio/ogg',
+            'content-length': String(Buffer.byteLength('fake-ogg-audio')),
+          },
+        })
+      }
 
       if (method === 'sendChatAction') {
         return new Response(JSON.stringify({ ok: true, result: true }), {
@@ -450,6 +467,21 @@ async function main() {
             id: 123,
             is_bot: true,
             username: 'test_bot',
+          },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      if (method === 'getFile') {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: {
+            file_id: 'voice-file',
+            file_unique_id: 'voice-file-unique',
+            file_size: 14,
+            file_path: 'voice/file_123.ogg',
           },
         }), {
           status: 200,
@@ -694,6 +726,38 @@ async function main() {
     assert(resumedFirst.sessionId === firstSessionId && !resumedFirst.forked, 'Replying to an earlier message brings that Telegram session back into scope')
     await waitForTelegramBotReplies(runtime, firstSessionId, 3)
     assert(sentMessages.some((payload) => payload.reply_to_message_id === 16), 'Telegram resumed-session reply is anchored to the inbound reply')
+
+    const voice = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 9,
+        message: {
+          message_id: 17,
+          voice: {
+            file_id: 'voice-file',
+            file_unique_id: 'voice-file-unique',
+            duration: 3,
+            mime_type: 'audio/ogg',
+            file_size: 14,
+          },
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+        },
+      },
+    )
+    assert(voice.sessionId === firstSessionId && !voice.forked, 'Telegram voice message is transcribed and continues the active session')
+    await waitForTelegramBotReplies(runtime, firstSessionId, 4)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 17), 'Telegram voice reply is anchored to the inbound message')
+
+    const firstSessionAgents = await repos.agents.listBySession(firstSessionId)
+    const firstRootAgent = firstSessionAgents.find((agent) => agent.parentId === null)
+    const firstRootItems = firstRootAgent ? await repos.items.listByAgent(firstRootAgent.id) : []
+    assert(
+      firstRootItems.some((item) => item.role === 'user' && item.content?.includes('voice note transcript from OpenRouter')),
+      'Telegram voice transcript is persisted as the user turn text',
+    )
 
     const sessionCountAfterTelegram = (await repos.sessions.listByUser(devUser!.id)).length
     assert(sessionCountAfterTelegram === sessionCountBeforeTelegram + 3, 'Telegram tests created one initial session and two /new sessions')

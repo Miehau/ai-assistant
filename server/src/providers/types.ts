@@ -1,6 +1,7 @@
 export interface LLMProvider {
   generate(request: LLMRequest): Promise<LLMResponse>
   stream(request: LLMRequest): AsyncIterable<LLMStreamEvent>
+  transcribeAudio?(request: LLMAudioTranscriptionRequest): Promise<LLMAudioTranscriptionResponse>
 }
 
 export interface LLMRequest {
@@ -11,6 +12,20 @@ export interface LLMRequest {
   temperature?: number
   max_tokens?: number
   signal?: AbortSignal
+}
+
+export interface LLMAudioTranscriptionRequest {
+  model: string
+  input_audio: {
+    data: string
+    format: string
+  }
+  signal?: AbortSignal
+}
+
+export interface LLMAudioTranscriptionResponse {
+  text: string
+  usage?: unknown
 }
 
 export interface LLMMessage {

@@ -6,9 +6,12 @@ import type {
   LLMStreamEvent,
   LLMToolCall,
   LLMToolDefinition,
+  LLMAudioTranscriptionRequest,
+  LLMAudioTranscriptionResponse,
 } from './types.js'
 
 const BASE_URL = 'https://openrouter.ai/api/v1/chat/completions'
+const AUDIO_TRANSCRIPTIONS_URL = 'https://openrouter.ai/api/v1/audio/transcriptions'
 const DEFAULT_MAX_TOKENS = 12_000
 
 function buildTokenLimit(model: string, maxTokens?: number): Record<string, number> {
@@ -34,6 +37,38 @@ export class OpenRouterProvider implements LLMProvider {
 
   constructor(apiKey: string) {
     this.apiKey = apiKey
+  }
+
+  async transcribeAudio(request: LLMAudioTranscriptionRequest): Promise<LLMAudioTranscriptionResponse> {
+    const body = buildAudioTranscriptionRequestBody(request)
+    preflightAudioTranscriptionRequestBody(body)
+
+    const res = await fetch(AUDIO_TRANSCRIPTIONS_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://ai-frontend.app',
+        'X-Title': 'AI Frontend',
+      },
+      body: JSON.stringify(body),
+      signal: request.signal,
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`OpenRouter transcription ${res.status}: ${err}`)
+    }
+
+    const json = await res.json() as OpenRouterTranscriptionResponse
+    if (typeof json.text !== 'string') {
+      throw new Error('OpenRouter transcription response missing text')
+    }
+
+    return {
+      text: json.text,
+      usage: json.usage,
+    }
   }
 
   async generate(request: LLMRequest): Promise<LLMResponse> {
@@ -254,6 +289,16 @@ function parseOpenRouterSSEBlock(block: string): ChatCompletionChunk | '[DONE]' 
   return JSON.parse(data) as ChatCompletionChunk
 }
 
+export function buildAudioTranscriptionRequestBody(request: LLMAudioTranscriptionRequest): Record<string, unknown> {
+  return {
+    model: request.model,
+    input_audio: {
+      data: request.input_audio.data,
+      format: request.input_audio.format,
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Request building
 // ---------------------------------------------------------------------------
@@ -427,6 +472,28 @@ export function preflightRequestBody(body: Record<string, unknown>): void {
   }
 }
 
+export function preflightAudioTranscriptionRequestBody(body: Record<string, unknown>): void {
+  if (typeof body.model !== 'string' || !body.model) {
+    throw new Error('Invalid OpenRouter transcription request: model is required')
+  }
+
+  const inputAudio = body.input_audio
+  if (!inputAudio || typeof inputAudio !== 'object') {
+    throw new Error('Invalid OpenRouter transcription request: input_audio is required')
+  }
+
+  const audio = inputAudio as Record<string, unknown>
+  if (typeof audio.data !== 'string' || audio.data.length === 0) {
+    throw new Error('Invalid OpenRouter transcription request: input_audio.data is required')
+  }
+  if (audio.data.startsWith('data:')) {
+    throw new Error('Invalid OpenRouter transcription request: input_audio.data must be raw base64')
+  }
+  if (typeof audio.format !== 'string' || audio.format.length === 0) {
+    throw new Error('Invalid OpenRouter transcription request: input_audio.format is required')
+  }
+}
+
 function isFunctionToolPayload(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false
   const fn = value as Record<string, unknown>
@@ -515,4 +582,9 @@ interface ChatCompletionChunk {
     finish_reason?: string | null
   }>
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+}
+
+interface OpenRouterTranscriptionResponse {
+  text?: string
+  usage?: unknown
 }
