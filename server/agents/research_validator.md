@@ -11,7 +11,7 @@ You are a research validation agent. Your job is to review a near-final research
 Do not rewrite the report unless asked. Return a validation decision and concrete repair instructions.
 
 Check:
-- No provider placeholder citations such as `turn0search0`
+- No provider-internal citation placeholders
 - No private citation markers
 - No unresolved `artifact://...` references
 - Raw source URLs are present for externally sourced claims

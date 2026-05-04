@@ -9,6 +9,7 @@ import "prismjs/components/prism-python";
 let configured = false;
 let highlightEnabled: boolean | null = null;
 const GENERATED_CITATION_RE = /\uE200cite((?:\uE202[^\uE200\uE201\uE202]+)+)\uE201/g;
+const PROVIDER_PLACEHOLDER_ID_RE = /\bturn\d+(?:search|fetch|open|view)\d+\b/gi;
 const TRACKING_PARAMS = new Set([
   "fbclid",
   "gclid",
@@ -107,6 +108,11 @@ function generatedCitationIds(text: string): string[] {
 function stripGeneratedCitations(text: string): string {
   return text
     .replace(GENERATED_CITATION_RE, "")
+    .replace(PROVIDER_PLACEHOLDER_ID_RE, "")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\[\s*\]/g, "")
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
     .replace(/\s+([,.;:!?])/g, "$1");
 }
 

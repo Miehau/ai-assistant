@@ -20,21 +20,35 @@ export function truncateTelegram(text: string, maxLength = TELEGRAM_MAX_LENGTH):
     : text
 }
 
+export function splitTelegramText(text: string, maxLength = TELEGRAM_MAX_LENGTH): string[] {
+  if (text.length <= maxLength) return [text]
+
+  const chunks: string[] = []
+  let remaining = text
+  while (remaining.length > maxLength) {
+    const splitAt = findTelegramSplitPoint(remaining, maxLength)
+    chunks.push(remaining.slice(0, splitAt).trimEnd())
+    remaining = remaining.slice(splitAt).replace(/^\s+/, '')
+  }
+
+  if (remaining) chunks.push(remaining)
+  return chunks.length > 0 ? chunks : ['']
+}
+
 export function formatTelegramHtml(text: string): string {
-  const truncated = truncateTelegram(text)
   let html = ''
   let index = 0
   const tagPattern = /<\/?[A-Za-z][A-Za-z0-9]*(?:\s+[^<>]*)?>/g
 
-  for (const match of truncated.matchAll(tagPattern)) {
+  for (const match of text.matchAll(tagPattern)) {
     const rawTag = match[0]
     const start = match.index ?? 0
-    html += escapeTelegramHtml(truncated.slice(index, start))
+    html += escapeTelegramHtml(text.slice(index, start))
     html += renderTelegramTag(rawTag) ?? escapeTelegramHtml(rawTag)
     index = start + rawTag.length
   }
 
-  html += escapeTelegramHtml(truncated.slice(index))
+  html += escapeTelegramHtml(text.slice(index))
   return html
 }
 
@@ -76,6 +90,20 @@ function escapeTelegramHtml(text: string): string {
 
 function escapeTelegramAttribute(text: string): string {
   return escapeTelegramHtml(text).replace(/"/g, '&quot;')
+}
+
+function findTelegramSplitPoint(text: string, maxLength: number): number {
+  const search = text.slice(0, maxLength)
+  const paragraphBreak = search.lastIndexOf('\n\n')
+  if (paragraphBreak > maxLength * 0.4) return paragraphBreak + 2
+
+  const lineBreak = search.lastIndexOf('\n')
+  if (lineBreak > maxLength * 0.4) return lineBreak + 1
+
+  const space = search.lastIndexOf(' ')
+  if (space > maxLength * 0.4) return space + 1
+
+  return maxLength
 }
 
 function decodeTelegramEntities(text: string): string {

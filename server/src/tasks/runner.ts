@@ -8,6 +8,7 @@ import { getSessionFilesDir } from '../tools/path-policy.js'
 import { listTasks, updateTask } from './storage.js'
 import type { TaskRecord } from './types.js'
 import { EVENT_TYPES } from '../events/types.js'
+import { containsProviderCitationArtifacts } from '../lib/provider-citations.js'
 
 interface TaskRunnerOptions {
   tasksDir: string
@@ -17,8 +18,6 @@ interface TaskRunnerOptions {
 
 const NOTE_REF_RE = /@note\/[^\s)\]>"']+/i
 const URL_RE = /https?:\/\/[^\s)\]>"']+/i
-const PLACEHOLDER_RE = /\bturn\d+(?:search|fetch|open|view)\d+\b/i
-const PRIVATE_CITATION_RE = /[\uE000-\uF8FF]/
 const ARTIFACT_RE = /artifact:\/\//i
 
 export class TaskRunner {
@@ -334,8 +333,7 @@ export class TaskRunner {
 function validateNoteMarkdown(markdown: string, profile: 'generic' | 'research'): string[] {
   const errors: string[] = []
   if (!markdown.trim()) errors.push('output is empty')
-  if (PLACEHOLDER_RE.test(markdown)) errors.push('replace provider placeholder citations with raw source URLs')
-  if (PRIVATE_CITATION_RE.test(markdown)) errors.push('remove private citation markers')
+  if (containsProviderCitationArtifacts(markdown)) errors.push('replace provider citation artifacts with raw source URLs')
   if (ARTIFACT_RE.test(markdown)) errors.push('resolve artifact references before saving the final note')
   if (profile === 'research' && !URL_RE.test(markdown)) errors.push('include at least one raw http(s) source URL')
   return errors

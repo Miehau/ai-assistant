@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import { logger } from '../lib/logger.js'
+import { ProviderCitationStreamSanitizer, sanitizeProviderCitations } from '../lib/provider-citations.js'
 import type {
   LLMProvider,
   LLMRequest,
@@ -247,6 +248,7 @@ export class OpenAIProvider implements LLMProvider {
     let finishReason = ''
     let completionTokens = 0
     let promptTokens = 0
+    const textSanitizer = new ProviderCitationStreamSanitizer()
 
     for await (const chunk of stream as AsyncIterable<OpenAI.ChatCompletionChunk>) {
       // Track usage if provided (some providers include it in chunks)
@@ -267,7 +269,8 @@ export class OpenAIProvider implements LLMProvider {
       // Text content
       if (delta?.content) {
         fullText += delta.content
-        yield { type: 'text_delta', text: delta.content }
+        const text = textSanitizer.push(delta.content)
+        if (text) yield { type: 'text_delta', text }
       }
 
       // Reasoning models (GPT-5, o-series) may stream thinking via reasoning_content
@@ -275,7 +278,8 @@ export class OpenAIProvider implements LLMProvider {
       const reasoningChunk = (delta as Record<string, unknown>)?.reasoning_content as string | undefined
       if (reasoningChunk) {
         fullText += reasoningChunk
-        yield { type: 'text_delta', text: reasoningChunk }
+        const text = textSanitizer.push(reasoningChunk)
+        if (text) yield { type: 'text_delta', text }
       }
 
       // Tool call deltas
@@ -325,9 +329,12 @@ export class OpenAIProvider implements LLMProvider {
       }
     }
 
+    const finalTextDelta = textSanitizer.flush()
+    if (finalTextDelta) yield { type: 'text_delta', text: finalTextDelta }
+
     // Emit final events
     if (fullText) {
-      yield { type: 'text_done', text: fullText }
+      yield { type: 'text_done', text: sanitizeProviderCitations(fullText) }
     }
 
     const toolCalls: LLMToolCall[] = Object.values(toolCallBuffers).map((buf) => ({
@@ -336,10 +343,11 @@ export class OpenAIProvider implements LLMProvider {
       arguments: buf.args ? JSON.parse(buf.args) : {},
     }))
 
+    const sanitizedText = sanitizeProviderCitations(fullText)
     const streamResponse: LLMResponse = {
-      content: fullText,
+      content: sanitizedText,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-      companion_text: toolCalls.length > 0 && fullText ? fullText : undefined,
+      companion_text: toolCalls.length > 0 && sanitizedText ? sanitizedText : undefined,
       usage: { input_tokens: promptTokens, output_tokens: completionTokens },
       finish_reason: finishReason || 'stop',
     }
@@ -366,9 +374,9 @@ function mapOpenAIResponse(response: OpenAI.ChatCompletion): LLMResponse {
 
   // Reasoning models (GPT-5, o-series) may put output in reasoning_content
   const rawMessage = choice.message as unknown as Record<string, unknown>
-  const text = choice.message.content
+  const text = sanitizeProviderCitations(choice.message.content
     ?? (rawMessage.reasoning_content as string | undefined)
-    ?? ''
+    ?? '')
 
   const toolCalls: LLMToolCall[] = (choice.message.tool_calls ?? []).map((tc) => ({
     call_id: tc.id,

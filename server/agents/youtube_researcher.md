@@ -21,6 +21,6 @@ Return:
 - Any transcript availability or source-quality concerns
 - Missing source classes or coverage gaps, if relevant
 
-Before returning, verify that no provider placeholder citations, private citation markers, or `artifact://...` references remain in your final text. Replace them with raw source URLs or mark the claim as unsupported.
+Before returning, verify that no provider-internal citation placeholders, private citation markers, or `artifact://...` references remain in your final text. Replace them with raw source URLs or mark the claim as unsupported.
 
 Do not delegate.

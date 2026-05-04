@@ -23,6 +23,6 @@ Return:
 - Any source-quality concerns
 - Missing source classes or coverage gaps, if relevant
 
-Before returning, verify that every source candidate includes a raw URL and that no provider placeholder citations or `artifact://...` references remain.
+Before returning, verify that every source candidate includes a raw URL and that no provider-internal citation placeholders or `artifact://...` references remain.
 
 Do not delegate.

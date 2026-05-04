@@ -46,7 +46,15 @@ const rejectedPlaceholderCitation = await registry.execute('notes.save_research_
 }, ctx)
 
 assert.equal(rejectedPlaceholderCitation.ok, false)
-assert.match(String(rejectedPlaceholderCitation.error), /placeholder citations/)
+assert.match(String(rejectedPlaceholderCitation.error), /citation artifacts/)
+
+const rejectedPrivateCitation = await registry.execute('notes.save_research_note', {
+  title: 'Private Citation',
+  markdown: '# Findings\n\n- Source-backed result \uE200cite\uE202turn0search0\uE201\n\n## Sources\n- https://example.com/source',
+}, ctx)
+
+assert.equal(rejectedPrivateCitation.ok, false)
+assert.match(String(rejectedPrivateCitation.error), /citation artifacts/)
 
 const rejectedArtifact = await registry.execute('notes.save_research_note', {
   title: 'Artifact Leak',

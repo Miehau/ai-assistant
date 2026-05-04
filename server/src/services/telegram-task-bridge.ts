@@ -4,7 +4,7 @@ import { decrypt, deriveKey } from '../lib/crypto.js'
 import { logger } from '../lib/logger.js'
 import { listTasks, updateTask } from '../tasks/storage.js'
 import { EVENT_TYPES } from '../events/types.js'
-import { formatTelegramHtml, telegramHtmlToPlainText, truncateTelegram } from './telegram-format.js'
+import { formatTelegramHtml, splitTelegramText, telegramHtmlToPlainText } from './telegram-format.js'
 
 interface TelegramTaskBridgeOptions {
   tasksDir: string
@@ -132,7 +132,7 @@ export class TelegramTaskBridge {
           .reverse()
           .find((item) => item.type === 'message' && item.role === 'assistant')
         : null
-      const text = truncateTelegram(lastAssistant?.content ?? fm.completion_note ?? `Task completed: ${fm.id}`)
+      const text = lastAssistant?.content ?? fm.completion_note ?? `Task completed: ${fm.id}`
       const messageId = await this.sendTelegramMessage(connection.botToken, Number(fm.telegram_chat_id), text, Number(fm.telegram_accepted_message_id))
       if (messageId == null) return
 
@@ -160,6 +160,23 @@ export class TelegramTaskBridge {
   }
 
   private async sendTelegramMessage(
+    botToken: string,
+    chatId: number,
+    text: string,
+    replyToMessageId: number,
+  ): Promise<number | null> {
+    let lastMessageId: number | null = null
+    let nextReplyToMessageId = replyToMessageId
+    for (const chunk of splitTelegramText(text)) {
+      const messageId = await this.sendSingleTelegramMessage(botToken, chatId, chunk, nextReplyToMessageId)
+      if (messageId == null) return null
+      lastMessageId = messageId
+      nextReplyToMessageId = messageId
+    }
+    return lastMessageId
+  }
+
+  private async sendSingleTelegramMessage(
     botToken: string,
     chatId: number,
     text: string,

@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { logger } from '../lib/logger.js'
+import { ProviderCitationStreamSanitizer, sanitizeProviderCitations } from '../lib/provider-citations.js'
 import type {
   LLMProvider,
   LLMRequest,
@@ -302,6 +303,7 @@ export class AnthropicProvider implements LLMProvider {
     let cacheReadTokens = 0
     let cacheCreationTokens = 0
     let stopReason = ''
+    const textSanitizer = new ProviderCitationStreamSanitizer()
 
     for await (const event of stream as AsyncIterable<Anthropic.MessageStreamEvent>) {
       switch (event.type) {
@@ -338,7 +340,8 @@ export class AnthropicProvider implements LLMProvider {
         case 'content_block_delta':
           if (event.delta.type === 'text_delta') {
             fullText += event.delta.text
-            yield { type: 'text_delta', text: event.delta.text }
+            const text = textSanitizer.push(event.delta.text)
+            if (text) yield { type: 'text_delta', text }
           } else if (event.delta.type === 'input_json_delta') {
             const tracked = toolCallArgs[event.index]
             if (tracked) {
@@ -372,14 +375,15 @@ export class AnthropicProvider implements LLMProvider {
             arguments: tc.args ? JSON.parse(tc.args) : {},
           }))
 
+          const sanitizedText = sanitizeProviderCitations(fullText)
           const response: LLMResponse = {
             content: request.structured_output && toolCalls.length > 0
-              ? toolCalls.find((tc) => tc.name === '_structured_output')?.arguments ?? fullText
-              : fullText,
+              ? toolCalls.find((tc) => tc.name === '_structured_output')?.arguments ?? sanitizedText
+              : sanitizedText,
             tool_calls: toolCalls.filter((tc) => tc.name !== '_structured_output').length > 0
               ? toolCalls.filter((tc) => tc.name !== '_structured_output')
               : undefined,
-            companion_text: toolCalls.length > 0 && fullText ? fullText : undefined,
+            companion_text: toolCalls.length > 0 && sanitizedText ? sanitizedText : undefined,
             usage: {
               input_tokens: inputTokens,
               output_tokens: outputTokens,
@@ -391,8 +395,11 @@ export class AnthropicProvider implements LLMProvider {
 
           logger.debug({ provider: 'anthropic', model: request.model, raw: response }, 'Raw LLM response (stream)')
 
+          const finalTextDelta = textSanitizer.flush()
+          if (finalTextDelta) yield { type: 'text_delta', text: finalTextDelta }
+
           if (fullText) {
-            yield { type: 'text_done', text: fullText }
+            yield { type: 'text_done', text: sanitizedText }
           }
           yield { type: 'done', response }
           break
@@ -434,7 +441,7 @@ function mapAnthropicResponse(
     if (structuredCall) {
       return {
         content: structuredCall.arguments,
-        companion_text: text || undefined,
+        companion_text: sanitizeProviderCitations(text) || undefined,
         tool_calls: toolCalls.filter((tc) => tc.name !== '_structured_output').length > 0
           ? toolCalls.filter((tc) => tc.name !== '_structured_output')
           : undefined,
@@ -445,8 +452,8 @@ function mapAnthropicResponse(
   }
 
   return {
-    content: text,
-    companion_text: toolCalls.length > 0 && text ? text : undefined,
+    content: sanitizeProviderCitations(text),
+    companion_text: toolCalls.length > 0 && text ? sanitizeProviderCitations(text) : undefined,
     tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     usage,
     finish_reason: response.stop_reason ?? 'end_turn',

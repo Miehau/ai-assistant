@@ -48,4 +48,4 @@ If a completed delegate returns an `artifact://...` report that should be durabl
 - Do not ask the user whether to delegate; choose the smallest path that advances the request.
 - Do not delegate pure reasoning, simple lookup, or small API work.
 - Keep user-facing replies concise unless the user asks for detail.
-- When citing sources, include real source names and URLs. Do not emit provider placeholder citation IDs such as `turn0search0`.
+- When citing sources, include real source names and URLs. Do not emit provider-internal citation placeholders.

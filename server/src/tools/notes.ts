@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import type { ToolHandler, ToolResult, ToolContext } from './types.js'
 import { resolveManagedFilePath } from './path-policy.js'
+import { containsProviderCitationArtifacts } from '../lib/provider-citations.js'
 
 export interface NoteToolOptions {
   notesDir: string
@@ -185,11 +186,8 @@ function validateResearchNoteMarkdown(markdown: string): string[] {
 function validateNoteMarkdown(markdown: string, opts: { requireSourceUrl: boolean }): string[] {
   const errors: string[] = []
 
-  if (/\bturn\d+(?:search|fetch|open|view)\d+\b/i.test(markdown)) {
-    errors.push('replace provider placeholder citations such as turn0search0 with raw source URLs')
-  }
-  if (/[\uE000-\uF8FF]/.test(markdown)) {
-    errors.push('remove private citation markers and replace them with raw source URLs')
+  if (containsProviderCitationArtifacts(markdown)) {
+    errors.push('replace provider citation artifacts such as turn0search0 with raw source URLs')
   }
   if (/artifact:\/\//i.test(markdown)) {
     errors.push('resolve artifact references before saving the final note')

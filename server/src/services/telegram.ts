@@ -5,6 +5,7 @@ import { decrypt, deriveKey, encrypt } from '../lib/crypto.js'
 import { buildDeps, prepareSessionTurn } from './session-runner.js'
 import {
   formatTelegramHtml,
+  splitTelegramText,
   telegramHtmlToPlainText,
   truncateTelegram,
 } from './telegram-format.js'
@@ -892,6 +893,23 @@ export class TelegramService {
     text: string,
     replyToMessageId?: number,
   ): Promise<number | null> {
+    let lastMessageId: number | null = null
+    let nextReplyToMessageId = replyToMessageId
+    for (const chunk of splitTelegramText(text)) {
+      const messageId = await this.sendSingleBotMessage(connection, chatId, chunk, nextReplyToMessageId)
+      if (messageId == null) return null
+      lastMessageId = messageId
+      nextReplyToMessageId = messageId
+    }
+    return lastMessageId
+  }
+
+  private async sendSingleBotMessage(
+    connection: TelegramConnectionRow,
+    chatId: number,
+    text: string,
+    replyToMessageId?: number,
+  ): Promise<number | null> {
     const htmlText = formatTelegramHtml(text)
     const payload: Record<string, unknown> = {
       chat_id: chatId,
@@ -925,14 +943,22 @@ export class TelegramService {
     replyToMessageId?: number,
     attempts: number = 3,
   ): Promise<number | null> {
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-      const messageId = await this.sendBotMessage(connection, chatId, text, replyToMessageId)
-      if (messageId != null) return messageId
-      if (attempt < attempts) {
-        await this.delay(250 * attempt)
+    let lastMessageId: number | null = null
+    let nextReplyToMessageId = replyToMessageId
+    for (const chunk of splitTelegramText(text)) {
+      let chunkMessageId: number | null = null
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        chunkMessageId = await this.sendSingleBotMessage(connection, chatId, chunk, nextReplyToMessageId)
+        if (chunkMessageId != null) break
+        if (attempt < attempts) {
+          await this.delay(250 * attempt)
+        }
       }
+      if (chunkMessageId == null) return null
+      lastMessageId = chunkMessageId
+      nextReplyToMessageId = chunkMessageId
     }
-    return null
+    return lastMessageId
   }
 
   /** Sleep helper used by Telegram retry paths. */

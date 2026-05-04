@@ -1,4 +1,5 @@
 import { logger } from '../lib/logger.js'
+import { ProviderCitationStreamSanitizer, sanitizeProviderCitations } from '../lib/provider-citations.js'
 import type {
   LLMProvider,
   LLMRequest,
@@ -136,6 +137,7 @@ export class OpenRouterProvider implements LLMProvider {
     let finishReason = ''
     let completionTokens = 0
     let promptTokens = 0
+    const textSanitizer = new ProviderCitationStreamSanitizer()
 
     for await (const chunk of parseOpenRouterSSE(res.body)) {
       if (chunk.usage) {
@@ -155,13 +157,15 @@ export class OpenRouterProvider implements LLMProvider {
 
       if (typeof delta.content === 'string' && delta.content.length > 0) {
         fullText += delta.content
-        yield { type: 'text_delta', text: delta.content }
+        const text = textSanitizer.push(delta.content)
+        if (text) yield { type: 'text_delta', text }
       }
 
       const reasoningChunk = delta.reasoning_content
       if (typeof reasoningChunk === 'string' && reasoningChunk.length > 0) {
         fullText += reasoningChunk
-        yield { type: 'text_delta', text: reasoningChunk }
+        const text = textSanitizer.push(reasoningChunk)
+        if (text) yield { type: 'text_delta', text }
       }
 
       if (delta.tool_calls) {
@@ -213,8 +217,11 @@ export class OpenRouterProvider implements LLMProvider {
       }
     }
 
+    const finalTextDelta = textSanitizer.flush()
+    if (finalTextDelta) yield { type: 'text_delta', text: finalTextDelta }
+
     if (fullText) {
-      yield { type: 'text_done', text: fullText }
+      yield { type: 'text_done', text: sanitizeProviderCitations(fullText) }
     }
 
     const toolCalls: LLMToolCall[] = Object.values(toolCallBuffers).map((buf) => ({
@@ -223,10 +230,11 @@ export class OpenRouterProvider implements LLMProvider {
       arguments: buf.args ? JSON.parse(buf.args) : {},
     }))
 
+    const sanitizedText = sanitizeProviderCitations(fullText)
     const response: LLMResponse = {
-      content: fullText,
+      content: sanitizedText,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-      companion_text: toolCalls.length > 0 && fullText ? fullText : undefined,
+      companion_text: toolCalls.length > 0 && sanitizedText ? sanitizedText : undefined,
       usage: {
         input_tokens: promptTokens,
         output_tokens: completionTokens,
@@ -521,7 +529,7 @@ function mapResponse(json: ChatCompletionResponse): LLMResponse {
     }
   }
 
-  const text = choice.message.content ?? choice.message.reasoning_content ?? ''
+  const text = sanitizeProviderCitations(choice.message.content ?? choice.message.reasoning_content ?? '')
 
   const toolCalls: LLMToolCall[] = (choice.message.tool_calls ?? []).map((tc) => ({
     call_id: tc.id,

@@ -46,7 +46,7 @@ Rules:
 - Preserve citations and URLs from the research brief.
 - Do not invent sources.
 - If the brief lacks citations, say that in `## Uncertainty` and do not invent citations.
-- Before saving, verify that the note includes raw source URLs and contains no provider placeholder citations such as `turn0search0`, private citation markers, or unresolved `artifact://...` references.
+- Before saving, verify that the note includes raw source URLs and contains no provider-internal citation placeholders, private citation markers, or unresolved `artifact://...` references.
 - Use `notes.save_research_note` exactly once after drafting the note.
 
 After saving, return only the saved `@note/...` path and a one-sentence summary.

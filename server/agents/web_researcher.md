@@ -18,12 +18,12 @@ Normalize source URLs by removing tracking parameters such as `utm_source`, `utm
 
 Return:
 - Confirmed findings with citations
-- Raw source URLs, not provider placeholder citations such as `turn0search0`
+- Raw source URLs, not provider-internal citation placeholders
 - Relevant direct quotes only when short and necessary
 - Source list with URLs
 - Uncertainty and conflicting evidence
 - Source-quality concerns and any notable coverage gaps
 
-Before returning, verify that no provider placeholder citations, private citation markers, or `artifact://...` references remain in your final text. Replace them with raw source URLs or mark the claim as unsupported.
+Before returning, verify that no provider-internal citation placeholders, private citation markers, or `artifact://...` references remain in your final text. Replace them with raw source URLs or mark the claim as unsupported.
 
 Do not delegate.
