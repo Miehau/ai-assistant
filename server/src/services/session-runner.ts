@@ -1,5 +1,5 @@
 import type { RuntimeContext } from '../lib/runtime.js'
-import type { AgentConfig, Item } from '../domain/types.js'
+import type { AgentConfig, AgentResponseFormat, Item } from '../domain/types.js'
 import type { OrchestratorDeps } from '../orchestrator/types.js'
 
 export interface PrepareSessionTurnInput {
@@ -10,6 +10,7 @@ export interface PrepareSessionTurnInput {
   input: string | Item[]
   instructions?: string
   systemPrompt?: string
+  responseFormat?: AgentResponseFormat
   mcpServerIds?: string[]
   allowedTools?: string[]
   maxTokens?: number
@@ -50,6 +51,10 @@ export function buildDeps(runtime: RuntimeContext, model: string): OrchestratorD
 }
 
 const DEFAULT_ROOT_AGENT = 'planner'
+
+function normalizeResponseFormat(format: AgentResponseFormat | undefined): AgentResponseFormat {
+  return format === 'telegram_html' ? 'telegram_html' : 'markdown'
+}
 
 export function formatAssistantOutput(items: Item[]): Item[] {
   return items.filter((i) => i.type === 'message' && i.role === 'assistant')
@@ -127,6 +132,7 @@ export async function prepareSessionTurn(
         : {}),
       max_tool_calls_per_step: 10,
       tool_execution_timeout_ms: 60_000,
+      response_format: normalizeResponseFormat(body.responseFormat),
       ...(body.systemPrompt
         ? { system_prompt: body.systemPrompt }
         : agentDef?.system_prompt

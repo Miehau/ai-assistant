@@ -4,6 +4,7 @@ import { decrypt, deriveKey } from '../lib/crypto.js'
 import { logger } from '../lib/logger.js'
 import { listTasks, updateTask } from '../tasks/storage.js'
 import { EVENT_TYPES } from '../events/types.js'
+import { formatTelegramHtml, telegramHtmlToPlainText, truncateTelegram } from './telegram-format.js'
 
 interface TelegramTaskBridgeOptions {
   tasksDir: string
@@ -165,17 +166,31 @@ export class TelegramTaskBridge {
     replyToMessageId: number,
   ): Promise<number | null> {
     const token = this.loadSecret(botToken)
+    const htmlText = formatTelegramHtml(text)
     const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
-        text,
+        text: htmlText,
+        parse_mode: 'HTML',
         reply_to_message_id: replyToMessageId,
       }),
     })
     const json = await response.json() as { ok?: boolean; result?: { message_id?: number } }
-    return json.ok && typeof json.result?.message_id === 'number' ? json.result.message_id : null
+    if (json.ok && typeof json.result?.message_id === 'number') return json.result.message_id
+
+    const fallback = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: telegramHtmlToPlainText(htmlText),
+        reply_to_message_id: replyToMessageId,
+      }),
+    })
+    const fallbackJson = await fallback.json() as { ok?: boolean; result?: { message_id?: number } }
+    return fallbackJson.ok && typeof fallbackJson.result?.message_id === 'number' ? fallbackJson.result.message_id : null
   }
 
   private loadSecret(value: string): string {
@@ -183,11 +198,4 @@ export class TelegramTaskBridge {
     if (!this.encKey) throw new Error('Encrypted Telegram token cannot be decrypted without ENCRYPTION_KEY')
     return decrypt(value, this.encKey)
   }
-}
-
-function truncateTelegram(text: string): string {
-  const maxLength = 3900
-  return text.length > maxLength
-    ? `${text.slice(0, maxLength - 40).trimEnd()}\n\n[truncated]`
-    : text
 }

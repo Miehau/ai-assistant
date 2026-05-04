@@ -130,6 +130,7 @@ try {
   assert.equal(sentMessages[0]?.chat_id, 12345)
   assert.equal(sentMessages[0]?.reply_to_message_id, 101)
   assert.equal(sentMessages[0]?.text, 'Completion for creator-agent')
+  assert.equal(sentMessages[0]?.parse_mode, 'HTML')
   assert.equal(messageLinks[0]?.sessionId, 'creator-session')
   assert.equal(messageLinks[0]?.itemId, 'assistant-creator-agent')
 

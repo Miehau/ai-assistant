@@ -145,6 +145,7 @@ export async function runAgent(
         useNativeFunctionCalling: useNativeTools,
         agentTask: ctx.agent.task,
         customSystemPrompt: ctx.agent.config.system_prompt,
+        responseFormat: ctx.agent.config.response_format ?? 'markdown',
       })
 
       // 2. Call LLM provider

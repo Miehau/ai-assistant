@@ -4,6 +4,7 @@ export type WaitType = 'tool' | 'approval' | 'agent' | 'human' | 'workflow'
 export type ItemType = 'message' | 'function_call' | 'function_call_output' | 'reasoning'
 export type ItemRole = 'system' | 'user' | 'assistant'
 export type SessionStatus = 'active' | 'archived'
+export type AgentResponseFormat = 'markdown' | 'telegram_html'
 
 export interface WaitingFor {
   callId: CallId
@@ -20,6 +21,8 @@ export interface AgentConfig {
   max_output_tokens?: number
   max_tool_calls_per_step: number
   tool_execution_timeout_ms: number
+  /** User-facing response formatting contract for the final transport. */
+  response_format?: AgentResponseFormat
   system_prompt?: string
   /** If set, only these tool names are visible to the LLM. Orchestrator-intercept tools (e.g. delegate) are always included. */
   allowed_tools?: string[]

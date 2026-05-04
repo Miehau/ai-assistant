@@ -143,9 +143,12 @@ export class TaskRunner {
         input: task.body,
         instructions: [
           `Background task ID: ${task.frontmatter.id}`,
-          'Complete the assigned task. Return the final result as markdown.',
+          callbackSession.source === 'telegram'
+            ? 'Complete the assigned task. Return the final result using the configured response format.'
+            : 'Complete the assigned task. Return the final result as markdown.',
           'If you save a durable note yourself, include the @note/... path in the final response.',
         ].join('\n'),
+        responseFormat: callbackSession.source === 'telegram' ? 'telegram_html' : 'markdown',
       })
 
       await updateTask(this.options.tasksDir, task.frontmatter.id, {

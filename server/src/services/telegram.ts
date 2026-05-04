@@ -3,6 +3,11 @@ import type { RuntimeContext } from '../lib/runtime.js'
 import { splitModelId } from '../lib/model.js'
 import { decrypt, deriveKey, encrypt } from '../lib/crypto.js'
 import { buildDeps, prepareSessionTurn } from './session-runner.js'
+import {
+  formatTelegramHtml,
+  telegramHtmlToPlainText,
+  truncateTelegram,
+} from './telegram-format.js'
 import { runAgent } from '../orchestrator/runner.js'
 import type { Item } from '../domain/types.js'
 import type { StoredTelegramConnection, StoredTelegramMessageLink } from '../repositories/types.js'
@@ -510,7 +515,7 @@ export class TelegramService {
       sessionId: resolution.sessionId,
       agent: 'planner',
       input: content,
-      instructions: 'Telegram transport: keep user-facing replies concise. For substantial research, prefer returning a durable note path over a long chat answer: delegate the research, promote the returned artifact with notes.promote when available, and include the resulting @note/... path plus a short summary.',
+      responseFormat: 'telegram_html',
     })
 
     if (prepared.status === 'active') {
@@ -827,10 +832,7 @@ export class TelegramService {
       responseText = 'No assistant response was produced.'
     }
 
-    const maxLength = 3900
-    return responseText.length > maxLength
-      ? `${responseText.slice(0, maxLength - 40).trimEnd()}\n\n[truncated]`
-      : responseText
+    return truncateTelegram(responseText)
   }
 
   /** Convert background execution failures into a concise Telegram-safe error message. */
@@ -841,9 +843,7 @@ export class TelegramService {
   }
 
   private truncateForTelegram(message: string, maxLength: number): string {
-    return message.length > maxLength
-      ? `${message.slice(0, maxLength).trimEnd()}...`
-      : message
+    return truncateTelegram(message, maxLength)
   }
 
   /** Fetch the raw DB row so internal webhook secrets remain available. */
@@ -885,23 +885,36 @@ export class TelegramService {
     })
   }
 
-  /** Send a plain text message through the configured bot. */
+  /** Send a message through the configured bot using Telegram Bot API HTML. */
   private async sendBotMessage(
     connection: TelegramConnectionRow,
     chatId: number,
     text: string,
     replyToMessageId?: number,
   ): Promise<number | null> {
+    const htmlText = formatTelegramHtml(text)
     const payload: Record<string, unknown> = {
       chat_id: chatId,
-      text,
+      text: htmlText,
+      parse_mode: 'HTML',
     }
     if (replyToMessageId != null) {
       payload.reply_to_message_id = replyToMessageId
       payload.allow_sending_without_reply = true
     }
     const response = await this.callTelegram<TelegramSendMessageResponse>(connection, 'sendMessage', payload)
-    return response.ok && response.result ? response.result.message_id : null
+    if (response.ok && response.result) return response.result.message_id
+
+    const fallbackPayload: Record<string, unknown> = {
+      chat_id: chatId,
+      text: telegramHtmlToPlainText(htmlText),
+    }
+    if (replyToMessageId != null) {
+      fallbackPayload.reply_to_message_id = replyToMessageId
+      fallbackPayload.allow_sending_without_reply = true
+    }
+    const fallback = await this.callTelegram<TelegramSendMessageResponse>(connection, 'sendMessage', fallbackPayload)
+    return fallback.ok && fallback.result ? fallback.result.message_id : null
   }
 
   /** Retry final Telegram sends because background results are otherwise easy to lose on transient API failures. */

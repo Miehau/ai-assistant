@@ -101,6 +101,7 @@ export function openaiCompatRoutes(runtime: RuntimeContext): Hono<OAIAppEnv> {
           ...(body.max_tokens ? { max_output_tokens: body.max_tokens } : {}),
           max_tool_calls_per_step: 10,
           tool_execution_timeout_ms: 60_000,
+          response_format: 'markdown',
         },
       })
 

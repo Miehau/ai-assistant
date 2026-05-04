@@ -1,5 +1,5 @@
 import type { LLMMessage, LLMContentBlock } from '../providers/types.js'
-import type { Item } from '../domain/types.js'
+import type { AgentResponseFormat, Item } from '../domain/types.js'
 
 // ---------------------------------------------------------------------------
 // Base prompt — uses JSON markers for providers without native tool calling
@@ -182,6 +182,39 @@ function itemToMessages(items: Item[]): LLMMessage[] {
   return messages
 }
 
+function extraPromptInstructions(items: Item[]): string[] {
+  const seen = new Set<string>()
+  const instructions: string[] = []
+
+  for (const item of items) {
+    if (item.type !== 'message' || item.role !== 'system') continue
+    const content = item.content?.trim()
+    if (!content || seen.has(content)) continue
+    seen.add(content)
+    instructions.push(content)
+  }
+
+  return instructions
+}
+
+function responseFormatInstruction(format: AgentResponseFormat = 'markdown'): string {
+  switch (format) {
+    case 'telegram_html':
+      return [
+        'Response format: Telegram Bot API HTML.',
+        'Keep user-facing replies concise. When formatting helps readability, use only these HTML tags: <b>, <i>, <u>, <s>, <code>, <pre>, and <a href="https://example.com">label</a>.',
+        'Do not use Markdown tables, Markdown headings, or fenced code blocks. Use short paragraphs, compact bullet lists, inline <code>...</code>, or <pre>...</pre> for code.',
+        'For substantial research, prefer returning a durable note path over a long chat answer: delegate the research, promote the returned artifact with notes.promote when available, and include the resulting @note/... path plus a short summary.',
+      ].join('\n')
+    case 'markdown':
+    default:
+      return [
+        'Response format: Markdown.',
+        'Use GitHub-flavored Markdown when formatting helps readability. Use fenced code blocks for code, Markdown links for URLs with labels, and compact lists or tables when useful.',
+      ].join('\n')
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Build the full controller message array
 // ---------------------------------------------------------------------------
@@ -190,6 +223,7 @@ export interface BuildMessagesConfig {
   useNativeFunctionCalling: boolean
   agentTask: string
   customSystemPrompt?: string
+  responseFormat?: AgentResponseFormat
 }
 
 export function buildControllerMessages(
@@ -211,8 +245,13 @@ export function buildControllerMessages(
     systemContent += `\n\n## Available Tools\n${toolList}`
   }
 
-  if (config.customSystemPrompt) {
-    systemContent += `\n\n## Additional Instructions\n${config.customSystemPrompt}`
+  const additionalInstructions = [
+    responseFormatInstruction(config.responseFormat),
+    ...(config.customSystemPrompt ? [config.customSystemPrompt] : []),
+    ...extraPromptInstructions(history),
+  ]
+  if (additionalInstructions.length > 0) {
+    systemContent += `\n\n## Additional Instructions\n${additionalInstructions.join('\n\n')}`
   }
 
   messages.push({ role: 'system', content: systemContent })

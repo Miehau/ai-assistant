@@ -392,9 +392,14 @@ async function main() {
     // ──────────────────────────────────────────
     console.log('\n14. Telegram integration')
     let providerGenerateCalls = 0
+    const telegramProviderSystemPrompts: string[] = []
     const stubProvider = {
-      async generate() {
+      async generate(request: { messages: Array<{ role: string; content: unknown }> }) {
         providerGenerateCalls++
+        const systemMessage = request.messages.find((message) => message.role === 'system')
+        if (typeof systemMessage?.content === 'string') {
+          telegramProviderSystemPrompts.push(systemMessage.content)
+        }
         return {
           content: 'Stubbed Telegram reply',
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -552,8 +557,9 @@ async function main() {
     assert(providerGenerateCalls === 0, 'Telegram greeting does not invoke the planner LLM')
     assert(sentMessages.some((payload) => (
       payload.reply_to_message_id === 100 &&
-      payload.text === 'Hey. What should I work on?'
-    )), 'Telegram greeting receives a direct bot reply')
+      payload.text === 'Hey. What should I work on?' &&
+      payload.parse_mode === 'HTML'
+    )), 'Telegram greeting receives a direct HTML bot reply')
 
     const invalidHeader = await telegram.processWebhook(
       telegramConn.id,
@@ -590,8 +596,18 @@ async function main() {
     const firstSessionId = first.sessionId!
     await waitForTelegramBotReplies(runtime, firstSessionId, 1)
     assert(sentMessages.some((payload) => payload.reply_to_message_id === 10), 'Telegram bot replies to the inbound message')
+    assert(
+      telegramProviderSystemPrompts.some((content) => (
+        content.includes('## Additional Instructions') &&
+        content.includes('Response format: Telegram Bot API HTML')
+      )),
+      'Telegram prompt includes HTML formatting instructions as additional instructions',
+    )
     const firstSession = await repos.sessions.getById(firstSessionId)
     assert(firstSession?.source === 'telegram', 'Telegram-created session is marked with telegram source')
+    const firstSessionAgentsAfterStart = await repos.agents.listBySession(firstSessionId)
+    const firstRootAfterStart = firstSessionAgentsAfterStart.find((agent) => agent.parentId === null)
+    assert(firstRootAfterStart?.config.response_format === 'telegram_html', 'Telegram root agent stores telegram_html response format')
 
     const duplicate = await telegram.processWebhook(
       telegramConn.id,

@@ -103,6 +103,7 @@ export function buildWorkflowContext<TInput>(deps: ContextDeps): WorkflowContext
           ...(agentDef?.max_output_tokens ? { max_output_tokens: agentDef.max_output_tokens } : {}),
           max_tool_calls_per_step: 5,
           tool_execution_timeout_ms: 60_000,
+          response_format: 'markdown',
           ...(agentDef?.system_prompt ? { system_prompt: agentDef.system_prompt } : {}),
           ...(agentDef?.tools ? { allowed_tools: agentDef.tools } : {}),
         },

@@ -3,7 +3,7 @@ import { streamSSE } from 'hono/streaming'
 import { randomUUID } from 'node:crypto'
 import { logger } from '../lib/logger.js'
 import type { RuntimeContext } from '../lib/runtime.js'
-import type { Item } from '../domain/types.js'
+import type { AgentResponseFormat, Item } from '../domain/types.js'
 import { runAgent } from '../orchestrator/runner.js'
 import { deliverResult, deliverApproval } from '../orchestrator/delivery.js'
 import { EVENT_TYPES } from '../events/types.js'
@@ -33,6 +33,8 @@ export function chatRoutes(runtime: RuntimeContext) {
         input: string | Item[]
         instructions?: string
         systemPrompt?: string
+        responseFormat?: AgentResponseFormat
+        response_format?: AgentResponseFormat
         tools?: string[]
         mcpServerIds?: string[]
         stream?: boolean
@@ -49,6 +51,7 @@ export function chatRoutes(runtime: RuntimeContext) {
         input: body.input,
         instructions: body.instructions,
         systemPrompt: body.systemPrompt,
+        responseFormat: body.responseFormat ?? body.response_format ?? 'markdown',
         mcpServerIds: body.mcpServerIds,
         allowedTools: body.tools,
         maxTokens: body.maxTokens,
