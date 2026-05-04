@@ -8,11 +8,11 @@ export function registerToolOutputTools(
   registry.register({
     metadata: {
       name: 'tool_outputs.read',
-      description: 'Read a persisted tool output by ID.',
+      description: 'Read persisted tool output.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Tool output ID' },
+          id: { type: 'string', description: 'Output ID' },
         },
         required: ['id'],
       },
@@ -31,7 +31,7 @@ export function registerToolOutputTools(
   registry.register({
     metadata: {
       name: 'tool_outputs.list',
-      description: 'List all persisted tool outputs for an agent.',
+      description: 'List persisted tool outputs for an agent.',
       parameters: {
         type: 'object',
         properties: {
@@ -59,11 +59,11 @@ export function registerToolOutputTools(
   registry.register({
     metadata: {
       name: 'tool_outputs.stats',
-      description: 'Get summary statistics for a persisted tool output (type, size, keys).',
+      description: 'Summarize persisted tool output.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Tool output ID' },
+          id: { type: 'string', description: 'Output ID' },
         },
         required: ['id'],
       },
@@ -105,13 +105,12 @@ export function registerToolOutputTools(
   registry.register({
     metadata: {
       name: 'tool_outputs.extract',
-      description:
-        'Extract a value from a persisted tool output using dot-notation path (e.g. "data.items.0.name").',
+      description: 'Extract value by dot path from persisted output.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Tool output ID' },
-          path: { type: 'string', description: 'Dot-notation path to extract' },
+          id: { type: 'string', description: 'Output ID' },
+          path: { type: 'string', description: 'Dot path' },
         },
         required: ['id', 'path'],
       },
@@ -138,12 +137,12 @@ export function registerToolOutputTools(
   registry.register({
     metadata: {
       name: 'tool_outputs.count',
-      description: 'Count elements at a path in a persisted tool output.',
+      description: 'Count array/object items in persisted output.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Tool output ID' },
-          path: { type: 'string', description: 'Dot-notation path (optional, counts root if empty)' },
+          id: { type: 'string', description: 'Output ID' },
+          path: { type: 'string', description: 'Dot path' },
         },
         required: ['id'],
       },
@@ -179,13 +178,12 @@ export function registerToolOutputTools(
   registry.register({
     metadata: {
       name: 'tool_outputs.sample',
-      description:
-        'Sample N items from an array in a persisted tool output. Returns first, middle, and last items.',
+      description: 'Sample items from array output.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Tool output ID' },
-          n: { type: 'integer', description: 'Number of items to sample (default: 3)' },
+          id: { type: 'string', description: 'Output ID' },
+          n: { type: 'integer', description: 'Default: 3' },
         },
         required: ['id'],
       },

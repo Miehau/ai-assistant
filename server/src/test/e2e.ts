@@ -391,8 +391,10 @@ async function main() {
     // 14. Telegram integration
     // ──────────────────────────────────────────
     console.log('\n14. Telegram integration')
+    let providerGenerateCalls = 0
     const stubProvider = {
       async generate() {
+        providerGenerateCalls++
         return {
           content: 'Stubbed Telegram reply',
           usage: { input_tokens: 1, output_tokens: 1 },
@@ -531,6 +533,27 @@ async function main() {
     assert(testConnection.ok, 'Telegram testConnection succeeds with mocked getMe')
 
     const sessionCountBeforeTelegram = (await repos.sessions.listByUser(devUser!.id)).length
+
+    const greeting = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 100,
+        message: {
+          message_id: 100,
+          text: 'hey',
+          from: { id: 42 },
+          chat: { id: 501, type: 'private' },
+        },
+      },
+    )
+    assert(greeting.status === 'processed' && greeting.sessionId != null, 'Telegram greeting is processed')
+    assert(providerGenerateCalls === 0, 'Telegram greeting does not invoke the planner LLM')
+    assert(sentMessages.some((payload) => (
+      payload.reply_to_message_id === 100 &&
+      payload.text === 'Hey. What should I work on?'
+    )), 'Telegram greeting receives a direct bot reply')
 
     const invalidHeader = await telegram.processWebhook(
       telegramConn.id,
@@ -760,7 +783,7 @@ async function main() {
     )
 
     const sessionCountAfterTelegram = (await repos.sessions.listByUser(devUser!.id)).length
-    assert(sessionCountAfterTelegram === sessionCountBeforeTelegram + 3, 'Telegram tests created one initial session and two /new sessions')
+    assert(sessionCountAfterTelegram === sessionCountBeforeTelegram + 4, 'Telegram tests created one direct greeting session, one initial session, and two /new sessions')
     assert(secondBotReplyId !== firstBotReplyId, 'Continuing the Telegram thread advances the head message id')
 
     // ──────────────────────────────────────────

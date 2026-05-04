@@ -18,14 +18,12 @@ export function registerDelegateTools(
   agentDefs: AgentDefinitionRegistry,
   interceptHandlers?: Map<string, InterceptHandler>,
 ): void {
-  const named = agentDefs.list().filter((d) => d.name !== 'default')
+  const named = agentDefs.list().filter((d) => !['default', 'planner'].includes(d.name))
 
-  let description =
-    'Delegate a subtask to a child agent. Good for: multi-step research, searches that produce large outputs, or independent subtasks that would pollute your context. Not for: single API calls, simple web fetches, or any operation you can accomplish in one tool call — do those directly.'
+  let description = 'Delegate substantial or specialist work to a child agent. Do not use for simple lookups or single tool calls.'
 
   if (named.length > 0) {
-    const lines = named.map((d) => `- ${d.name}: ${d.description ?? 'no description'}`)
-    description += `\n\nAvailable named agents (pass via the "agent" parameter):\n${lines.join('\n')}`
+    description += ` Agents: ${named.map((d) => d.name).join(', ')}.`
   }
 
   const agentNames = named.map((d) => d.name)
@@ -39,14 +37,14 @@ export function registerDelegateTools(
         properties: {
           task: {
             type: 'string',
-            description: 'Clear description of what the child agent should accomplish',
+            description: 'Self-contained task brief',
           },
           ...(agentNames.length > 0
             ? {
                 agent: {
                   type: 'string',
                   enum: agentNames,
-                  description: `Named agent to use. If omitted, the default general-purpose agent is used. Available: ${agentNames.join(', ')}`,
+                  description: 'Specialist agent name',
                 },
               }
             : {}),

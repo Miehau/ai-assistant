@@ -7,12 +7,12 @@ export function registerWebTools(registry: { register: (h: ToolHandler) => void 
   registry.register({
     metadata: {
       name: 'web.fetch',
-      description: 'HTTP GET request. Returns raw text or JSON response (max 200KB).',
+      description: 'HTTP GET request.',
       parameters: {
         type: 'object',
         properties: {
           url: { type: 'string', description: 'URL to fetch' },
-          headers: { type: 'object', description: 'Optional HTTP headers' },
+          headers: { type: 'object', description: 'Headers' },
         },
         required: ['url'],
       },
@@ -54,7 +54,7 @@ export function registerWebTools(registry: { register: (h: ToolHandler) => void 
   registry.register({
     metadata: {
       name: 'web.cookies.clear',
-      description: 'Clear all stored cookies for the current session.',
+      description: 'Clear session cookies.',
       parameters: { type: 'object', properties: {} },
       requires_approval: false,
     },
@@ -68,18 +68,18 @@ export function registerWebTools(registry: { register: (h: ToolHandler) => void 
   registry.register({
     metadata: {
       name: 'web.request',
-      description: 'HTTP request with any method. Cookies are automatically saved from responses and sent on subsequent requests (session-scoped).',
+      description: 'HTTP request with session cookies.',
       parameters: {
         type: 'object',
         properties: {
-          method: { type: 'string', description: 'HTTP method: GET, POST, PUT, DELETE, or PATCH' },
-          url: { type: 'string', description: 'URL to request' },
+          method: { type: 'string', description: 'GET, POST, PUT, DELETE, or PATCH' },
+          url: { type: 'string', description: 'URL' },
           headers: {
             type: 'object',
-            description: 'HTTP headers as key-value pairs',
+            description: 'Headers',
             additionalProperties: { type: 'string' },
           },
-          body: { type: 'string', description: 'Raw request body string (e.g. JSON payload)' },
+          body: { type: 'string', description: 'Raw body' },
         },
         required: ['method', 'url'],
       },
@@ -124,19 +124,19 @@ export function registerWebTools(registry: { register: (h: ToolHandler) => void 
   registry.register({
     metadata: {
       name: 'web.post_form',
-      description: 'POST form data (application/x-www-form-urlencoded). Use for login forms, HTML form submissions, and APIs expecting form-encoded bodies. Cookies are automatically saved and sent.',
+      description: 'POST form data with session cookies.',
       parameters: {
         type: 'object',
         properties: {
-          url: { type: 'string', description: 'URL to POST to' },
+          url: { type: 'string', description: 'URL' },
           fields: {
             type: 'object',
-            description: 'Form fields as key-value string pairs, e.g. {"username":"john","password":"secret"}',
+            description: 'Form fields',
             additionalProperties: { type: 'string' },
           },
           headers: {
             type: 'object',
-            description: 'Extra HTTP headers (Content-Type is set automatically)',
+            description: 'Headers',
             additionalProperties: { type: 'string' },
           },
         },

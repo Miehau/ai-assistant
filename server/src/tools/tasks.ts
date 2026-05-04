@@ -42,34 +42,32 @@ export function registerTaskTools(
   registry.register({
     metadata: {
       name: 'tasks.create',
-      description:
-        'Create a new task as a Markdown file on disk. Returns the task ID and file path. ' +
-        'Use this to plan subtasks before delegating them to agents.',
+      description: 'Create a Markdown task file. Returns task ID and path.',
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'Short human-readable task title' },
+          title: { type: 'string', description: 'Short title' },
           owner: {
             type: 'string',
-            description: 'Name of the agent responsible (must match an agent definition name)',
+            description: 'Agent name',
           },
           priority: {
             type: 'string',
             enum: VALID_PRIORITIES,
-            description: 'Task priority. Defaults to medium.',
+            description: 'Default: medium',
           },
           depends_on: {
             type: 'array',
             items: { type: 'string' },
-            description: 'IDs of tasks that must complete before this one',
+            description: 'Dependency task IDs',
           },
           output_path: {
             type: 'string',
-            description: 'Path where the task output should be written (optional)',
+            description: 'Optional output path',
           },
           body: {
             type: 'string',
-            description: 'Full task description with steps, success criteria, and expected output format',
+            description: 'Task brief',
           },
         },
         required: ['title', 'owner', 'body'],
@@ -127,34 +125,33 @@ export function registerTaskTools(
   registry.register({
     metadata: {
       name: 'tasks.enqueue',
-      description:
-        'Queue a durable background task as a Markdown file. The single task runner will execute the owner agent, persist output as a note, and callback the creating agent when done. Use for substantial work that should continue in the background.',
+      description: 'Queue substantial background work for a specialist agent.',
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'Short human-readable task title' },
+          title: { type: 'string', description: 'Short title' },
           owner: {
             type: 'string',
-            description: 'Name of the agent responsible for executing the task',
+            description: 'Agent name',
           },
           priority: {
             type: 'string',
             enum: VALID_PRIORITIES,
-            description: 'Task priority. Defaults to medium.',
+            description: 'Default: medium',
           },
           depends_on: {
             type: 'array',
             items: { type: 'string' },
-            description: 'IDs of tasks that must complete before this one',
+            description: 'Dependency task IDs',
           },
           output_profile: {
             type: 'string',
             enum: VALID_OUTPUT_PROFILES,
-            description: 'Validation profile for the persisted note. Defaults to generic; use research when source URLs are required.',
+            description: 'generic or research',
           },
           body: {
             type: 'string',
-            description: 'Complete executable brief with success criteria and expected output format',
+            description: 'Executable brief',
           },
         },
         required: ['title', 'owner', 'body'],
@@ -238,9 +235,7 @@ export function registerTaskTools(
   registry.register({
     metadata: {
       name: 'tasks.create_batch',
-      description:
-        'Create multiple tasks at once. Use for initial plan decomposition. ' +
-        'All tasks are validated before any are written — if one fails validation, none are created.',
+      description: 'Create multiple task files atomically.',
       parameters: {
         type: 'object',
         properties: {
@@ -258,7 +253,7 @@ export function registerTaskTools(
               },
               required: ['title', 'owner', 'body'],
             },
-            description: 'Array of task definitions to create',
+            description: 'Task definitions',
           },
         },
         required: ['tasks'],
@@ -341,16 +336,14 @@ export function registerTaskTools(
   registry.register({
     metadata: {
       name: 'tasks.list',
-      description:
-        'List all tasks with their status, owner, priority, and path. ' +
-        'Optionally filter by status. Returns a summary — use files.read to see full task body.',
+      description: 'List tasks with status, owner, priority, and path.',
       parameters: {
         type: 'object',
         properties: {
           status: {
             type: 'string',
             enum: [...VALID_STATUSES, 'all'],
-            description: 'Filter by status. Defaults to "all".',
+            description: 'Default: all',
           },
         },
         required: [],
@@ -408,36 +401,35 @@ export function registerTaskTools(
   registry.register({
     metadata: {
       name: 'tasks.update',
-      description:
-        'Update a task\'s status, body, or notes. Use after a delegate call returns to mark the task done or blocked.',
+      description: 'Update task status, body, or output references.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'Task ID (from tasks.create output)' },
+          id: { type: 'string', description: 'Task ID' },
           status: {
             type: 'string',
             enum: VALID_STATUSES,
-            description: 'New status for the task',
+            description: 'New status',
           },
           completion_note: {
             type: 'string',
-            description: 'Summary of what was accomplished (set when marking done)',
+            description: 'Completion summary',
           },
           blocked_reason: {
             type: 'string',
-            description: 'Why the task is blocked (set when marking blocked)',
+            description: 'Block reason',
           },
           output_note: {
             type: 'string',
-            description: 'Durable note reference produced by the task, such as @note/result.md',
+            description: 'Durable note ref',
           },
           output_artifact: {
             type: 'string',
-            description: 'Managed artifact reference produced by the task',
+            description: 'Artifact ref',
           },
           body: {
             type: 'string',
-            description: 'Replace the task body (optional, use for plan revisions)',
+            description: 'Replacement body',
           },
         },
         required: ['id'],

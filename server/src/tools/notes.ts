@@ -18,15 +18,15 @@ export function registerNoteTools(
   registry.register({
     metadata: {
       name: 'notes.save_research_note',
-      description: 'Save a completed research report as a markdown note under the managed research-notes directory.',
+      description: 'Save a completed research report as a durable note.',
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'Human-readable title for the research note' },
-          markdown: { type: 'string', description: 'Complete markdown note body to save' },
+          title: { type: 'string', description: 'Note title' },
+          markdown: { type: 'string', description: 'Markdown body' },
           filename: {
             type: 'string',
-            description: 'Optional relative markdown filename. Absolute paths are rejected.',
+            description: 'Optional relative filename',
           },
         },
         required: ['title', 'markdown'],
@@ -70,19 +70,19 @@ export function registerNoteTools(
   registry.register({
     metadata: {
       name: 'notes.promote',
-      description: 'Promote existing managed markdown content into the durable notes directory without re-sending the full content. Reads from a relative session workspace path, artifact://..., or @note/....',
+      description: 'Promote existing managed markdown to a durable note.',
       parameters: {
         type: 'object',
         properties: {
-          from: { type: 'string', description: 'Managed source path to promote: relative session workspace path, artifact://..., or @note/...' },
-          title: { type: 'string', description: 'Human-readable title for the note' },
+          from: { type: 'string', description: 'Managed source path' },
+          title: { type: 'string', description: 'Note title' },
           filename: {
             type: 'string',
-            description: 'Optional relative markdown filename. Absolute paths are rejected.',
+            description: 'Optional relative filename',
           },
           profile: {
             type: 'string',
-            description: 'Optional validation profile. Use "research" to require at least one raw http(s) source URL.',
+            description: 'generic or research',
           },
         },
         required: ['from', 'title'],

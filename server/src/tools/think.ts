@@ -4,25 +4,18 @@ export function registerThinkTool(registry: { register: (h: ToolHandler) => void
   registry.register({
     metadata: {
       name: 'think',
-      description:
-        "Pause and reason through what you know, what you're assuming, and what's missing. " +
-        "Use this BEFORE acting to formulate an approach, and AFTER receiving results to reflect " +
-        "on what worked, what failed, and what to try next. Essential for multi-step problem solving.",
+      description: 'Reason privately before choosing the next action.',
       parameters: {
         type: 'object',
         properties: {
           questions: {
             type: 'array',
             items: { type: 'string' },
-            description:
-              "Questions you're genuinely asking yourself — what you don't know, what you're assuming, " +
-              "what you're curious about, what might be worth reconsidering.",
+            description: 'Questions to resolve',
           },
           reflection: {
             type: 'string',
-            description:
-              "When reflecting on a previous attempt: what did you observe? What worked, what failed, " +
-              "and what does that tell you about the next approach? Leave empty on first use.",
+            description: 'Observations from prior result',
           },
         },
         required: ['questions'],

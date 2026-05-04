@@ -49,6 +49,8 @@ export function buildDeps(runtime: RuntimeContext, model: string): OrchestratorD
   }
 }
 
+const DEFAULT_ROOT_AGENT = 'planner'
+
 export function formatAssistantOutput(items: Item[]): Item[] {
   return items.filter((i) => i.type === 'message' && i.role === 'assistant')
 }
@@ -59,7 +61,7 @@ export async function prepareSessionTurn(
 ): Promise<PreparedSessionTurn> {
   await runtime.agentDefinitions.reload()
 
-  const requestedAgent = body.agent ?? 'planner'
+  const requestedAgent = body.agent?.trim() || DEFAULT_ROOT_AGENT
   const agentDef = runtime.agentDefinitions.get(requestedAgent)
 
   if (!agentDef) {

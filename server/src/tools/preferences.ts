@@ -8,11 +8,11 @@ export function registerPreferenceTools(
   registry.register({
     metadata: {
       name: 'preferences.get',
-      description: 'Get a preference value by key.',
+      description: 'Get preference.',
       parameters: {
         type: 'object',
         properties: {
-          key: { type: 'string', description: 'Preference key' },
+          key: { type: 'string', description: 'Key' },
         },
         required: ['key'],
       },
@@ -31,12 +31,12 @@ export function registerPreferenceTools(
   registry.register({
     metadata: {
       name: 'preferences.set',
-      description: 'Set a preference value.',
+      description: 'Set preference.',
       parameters: {
         type: 'object',
         properties: {
-          key: { type: 'string', description: 'Preference key' },
-          value: { type: 'string', description: 'Preference value' },
+          key: { type: 'string', description: 'Key' },
+          value: { type: 'string', description: 'Value' },
         },
         required: ['key', 'value'],
       },

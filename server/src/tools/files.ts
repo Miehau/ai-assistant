@@ -30,13 +30,13 @@ export function registerFileTools(
   registry.register({
     metadata: {
       name: 'files.read',
-      description: 'Read file content. Returns lines from the text file, optionally within a range. Loads images.',
+      description: 'Read managed file content.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Managed path to read: relative session workspace path, artifact://..., or @note/...' },
-          start_line: { type: 'integer', description: 'Start line (1-based, inclusive)' },
-          end_line: { type: 'integer', description: 'End line (1-based, inclusive)' },
+          path: { type: 'string', description: 'Managed path' },
+          start_line: { type: 'integer', description: '1-based start' },
+          end_line: { type: 'integer', description: '1-based end' },
         },
         required: ['path'],
       },
@@ -99,12 +99,12 @@ export function registerFileTools(
   registry.register({
     metadata: {
       name: 'files.write',
-      description: 'Write content to a file. Creates parent directories if needed.',
+      description: 'Write a managed file.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative session workspace path to write. artifact:// and @note/ are read-only.' },
-          content: { type: 'string', description: 'Content to write' },
+          path: { type: 'string', description: 'Relative path' },
+          content: { type: 'string', description: 'Content' },
         },
         required: ['path', 'content'],
       },
@@ -136,13 +136,13 @@ export function registerFileTools(
   registry.register({
     metadata: {
       name: 'files.edit',
-      description: 'Search and replace text in a file. Replaces the first occurrence of old_text with new_text.',
+      description: 'Replace first matching text in a managed file.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative session workspace path to edit. artifact:// and @note/ are read-only.' },
-          old_text: { type: 'string', description: 'Text to find' },
-          new_text: { type: 'string', description: 'Replacement text' },
+          path: { type: 'string', description: 'Relative path' },
+          old_text: { type: 'string', description: 'Find text' },
+          new_text: { type: 'string', description: 'Replacement' },
         },
         required: ['path', 'old_text', 'new_text'],
       },
@@ -182,12 +182,12 @@ export function registerFileTools(
   registry.register({
     metadata: {
       name: 'files.create',
-      description: 'Create a new file. Errors if the file already exists.',
+      description: 'Create a managed file.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative session workspace path for the new file. artifact:// and @note/ are read-only.' },
-          content: { type: 'string', description: 'File content' },
+          path: { type: 'string', description: 'Relative path' },
+          content: { type: 'string', description: 'Content' },
         },
         required: ['path', 'content'],
       },
@@ -226,12 +226,12 @@ export function registerFileTools(
   registry.register({
     metadata: {
       name: 'files.append',
-      description: 'Append content to an existing file.',
+      description: 'Append to a managed file.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative session workspace path to append to. artifact:// and @note/ are read-only.' },
-          content: { type: 'string', description: 'Content to append' },
+          path: { type: 'string', description: 'Relative path' },
+          content: { type: 'string', description: 'Content' },
         },
         required: ['path', 'content'],
       },
@@ -262,12 +262,12 @@ export function registerFileTools(
   registry.register({
     metadata: {
       name: 'files.list',
-      description: 'List files and directories. Returns names and sizes.',
+      description: 'List managed directory entries.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Managed directory path to list: relative session workspace path, artifact://..., or @note/...' },
-          recursive: { type: 'boolean', description: 'List recursively (default: false)' },
+          path: { type: 'string', description: 'Managed directory' },
+          recursive: { type: 'boolean', description: 'Default: false' },
         },
         required: ['path'],
       },

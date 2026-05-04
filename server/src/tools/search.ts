@@ -19,7 +19,7 @@ export function registerSearchTools(
   registry.register({
     metadata: {
       name: 'web_search',
-      description: 'Provider-native web search. Provider adapters map this to their native web search capability.',
+      description: 'Native web search.',
       parameters: {
         type: 'object',
         properties: {},
@@ -37,18 +37,17 @@ export function registerSearchTools(
   registry.register({
     metadata: {
       name: 'search',
-      description:
-        'Search managed file contents using ripgrep/grep. Returns matching lines with logical file path, line number, and snippet.',
+      description: 'Search managed file or note content.',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Search pattern (regex unless literal is true)' },
-          path: { type: 'string', description: 'Managed file or directory path: relative session workspace path, artifact://..., or @note/...' },
-          literal: { type: 'boolean', description: 'Treat query as literal string (default: false)' },
-          case_sensitive: { type: 'boolean', description: 'Case-sensitive search (default: false)' },
+          query: { type: 'string', description: 'Pattern' },
+          path: { type: 'string', description: 'Managed path' },
+          literal: { type: 'boolean', description: 'Default: false' },
+          case_sensitive: { type: 'boolean', description: 'Default: false' },
           max_results: {
             type: 'integer',
-            description: `Maximum results to return (default: ${MAX_RESULTS_DEFAULT})`,
+            description: `Default: ${MAX_RESULTS_DEFAULT}`,
           },
         },
         required: ['query', 'path'],

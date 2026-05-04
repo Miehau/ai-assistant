@@ -483,6 +483,28 @@ export class TelegramService {
 
     const content = command.content
     const resolution = await this.resolveSession(connection, message, content, command.startsNewSession)
+    const directReply = this.formatDirectTelegramReply(content)
+    if (directReply) {
+      await this.createMessageLink(
+        connection.id,
+        message.chat.id,
+        message.message_id,
+        resolution.sessionId,
+        null,
+        'user',
+      )
+      const note = await this.sendBotMessage(connection, message.chat.id, directReply, message.message_id)
+      if (note != null) {
+        await this.createMessageLink(connection.id, message.chat.id, note, resolution.sessionId, null, 'bot')
+      }
+      return {
+        ok: true,
+        status: 'processed',
+        sessionId: resolution.sessionId,
+        forked: resolution.forked,
+      }
+    }
+
     const prepared = await prepareSessionTurn(this.runtime, {
       userId: connection.userId,
       sessionId: resolution.sessionId,
@@ -751,6 +773,28 @@ export class TelegramService {
       startsNewSession: true,
       commandOnly: nextContent.length === 0,
     }
+  }
+
+  /**
+   * Handle tiny conversational Telegram turns without paying the full planner
+   * prompt/tool-schema cost. Only exact lightweight phrases are matched so
+   * task-bearing messages such as "hey can you..." still route to the agent.
+   */
+  private formatDirectTelegramReply(content: string): string | null {
+    const normalized = content
+      .toLowerCase()
+      .replace(/[.!?\s]+$/g, '')
+      .trim()
+
+    if (/^(hey|hi|hello|yo|hiya|howdy)$/.test(normalized)) {
+      return 'Hey. What should I work on?'
+    }
+
+    if (/^(thanks|thank you|thx)$/.test(normalized)) {
+      return 'You are welcome.'
+    }
+
+    return null
   }
 
   /** Create an app session owned by this Telegram connection. */

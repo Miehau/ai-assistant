@@ -11,15 +11,15 @@ export function registerShellTools(registry: { register: (h: ToolHandler) => voi
   registry.register({
     metadata: {
       name: 'shell.exec',
-      description: 'Execute a shell command. Returns stdout, stderr, and exit code.',
+      description: 'Execute a shell command.',
       parameters: {
         type: 'object',
         properties: {
-          command: { type: 'string', description: 'Shell command to execute' },
-          working_dir: { type: 'string', description: 'Working directory for the command. Relative paths are resolved from the current working directory. Omit to use the server process cwd.' },
+          command: { type: 'string', description: 'Command' },
+          working_dir: { type: 'string', description: 'Working directory' },
           timeout_ms: {
             type: 'integer',
-            description: `Timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS})`,
+            description: `Default: ${DEFAULT_TIMEOUT_MS}`,
           },
         },
         required: ['command'],
