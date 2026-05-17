@@ -52,6 +52,19 @@ DB_DIALECT=postgres DATABASE_URL=postgres://user:pass@host:5432/dbname ENCRYPTIO
 In the frontend, open Settings -> Backend and save the server URL plus the generated bearer token.
 Set `TRUST_PROXY=true` only when a trusted reverse proxy or platform is setting `X-Forwarded-For`/`X-Real-IP`.
 
+### LLM Observability
+
+The backend can send agent, LLM generation, and tool execution traces to Langfuse Cloud:
+
+```bash
+LANGFUSE_ENABLED=true
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+```
+
+By default, traces include metadata, timing, token usage, model/provider, tool names, and errors. Full prompt, response, tool argument, and tool output content is not captured unless `LANGFUSE_CAPTURE_CONTENT=true`.
+
 ## Prerequisites
 
 - [Bun](https://bun.sh/)

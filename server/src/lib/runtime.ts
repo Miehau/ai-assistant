@@ -27,6 +27,8 @@ import { TelegramTaskBridge } from '../services/telegram-task-bridge.js'
 import { registerThinkTool } from '../tools/think.js'
 import { logger } from './logger.js'
 import type { AppConfig } from './config.js'
+import { createLangfuseObservability } from '../observability/langfuse.js'
+import type { LLMObservability } from '../observability/types.js'
 import type { ProviderRegistry } from '../providers/types.js'
 import type { ToolExecutor } from '../tools/types.js'
 import type { EventSink, EventSource } from '../events/types.js'
@@ -92,6 +94,8 @@ export interface RuntimeContext {
   taskRunner: TaskRunner | null
   /** Telegram adapter for task acceptance anchors and completion replies. */
   telegramTaskBridge: TelegramTaskBridge | null
+  /** Optional Langfuse/OpenTelemetry-backed LLM observability. */
+  observability: LLMObservability
 }
 
 export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
@@ -115,6 +119,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     }
     logger.warn('ENCRYPTION_KEY not set — API keys stored without encryption. Set ENCRYPTION_KEY in .env for production.')
   }
+  const observability = await createLangfuseObservability(config)
 
   // 4. Create event emitter
   const events = new AgentEventEmitter()
@@ -267,6 +272,7 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
     agentAbortControllers: new Map(),
     taskRunner: null,
     telegramTaskBridge: null,
+    observability,
   }
 
   runtime.taskRunner = new TaskRunner(runtime, { tasksDir, notesDir })
@@ -300,6 +306,7 @@ export async function shutdownRuntime(runtime: RuntimeContext): Promise<void> {
     // Best-effort — don't block shutdown
   }
 
+  await runtime.observability.shutdown()
   await runtime.closeDatabase()
 
   logger.info('Runtime shutdown complete')

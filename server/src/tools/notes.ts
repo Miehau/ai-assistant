@@ -126,6 +126,13 @@ export function registerNoteTools(
       if (!markdown.trim()) {
         return { ok: false, error: 'source content is empty' }
       }
+      const unsupportedArtifactSource = describeUnsupportedArtifactSource(markdown)
+      if (unsupportedArtifactSource) {
+        return {
+          ok: false,
+          error: unsupportedArtifactSource,
+        }
+      }
 
       const qualityErrors = validateNoteMarkdown(markdown, {
         requireSourceUrl: profile === 'research',
@@ -200,6 +207,39 @@ function validateNoteMarkdown(markdown: string, opts: { requireSourceUrl: boolea
   }
 
   return errors
+}
+
+function describeUnsupportedArtifactSource(markdown: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(markdown)
+  } catch {
+    return null
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const object = parsed as Record<string, unknown>
+
+  if (
+    typeof object.path === 'string' &&
+    typeof object.content === 'string' &&
+    typeof object.start_line === 'number' &&
+    typeof object.end_line === 'number'
+  ) {
+    return [
+      `Cannot promote a files.read output artifact (${object.path}).`,
+      'Promote the original markdown report artifact instead, or synthesize a final markdown note from the read content.',
+    ].join(' ')
+  }
+
+  if (typeof object.body === 'string' && typeof object.status === 'number') {
+    return [
+      'Cannot promote a raw web.fetch response artifact.',
+      'Synthesize a final markdown note with findings and raw source URLs, then save or promote that note.',
+    ].join(' ')
+  }
+
+  return null
 }
 
 async function writeNoteFile(

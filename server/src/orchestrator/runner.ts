@@ -89,13 +89,15 @@ export async function runAgent(
     sessionFilesRoot: deps.sessionFilesRoot,
     inlineOutputLimitBytes: deps.inlineOutputLimitBytes,
     interceptHandlers: deps.interceptHandlers,
+    observability: deps.observability,
     agent,
     turnNumber: 0,
     signal,
     stream: options?.stream ?? false,
   }
 
-  try {
+  const executeRun = async (): Promise<RunResult> => {
+    try {
     // Resume: execute any approved-but-not-yet-executed tools
     await executePendingApprovedTools(ctx)
 
@@ -171,9 +173,7 @@ export async function runAgent(
 
       // Only stream for native tool providers — non-native providers output raw JSON
       // which is meaningless to stream character-by-character to the UI.
-      const llmResponse: LLMResponse = (ctx.stream && useNativeTools)
-        ? await streamLLMTurn(ctx.provider, llmRequest, deps, agentId, ctx.agent.sessionId, ctx.agent.parentId, ctx.agent.sourceCallId, ctx.agent.depth)
-        : await ctx.provider.generate(llmRequest)
+      const llmResponse: LLMResponse = await traceGenerationTurn(ctx, deps, modelName, llmRequest, useNativeTools, agentId)
 
       // 3. Handle companion text (thinking/reasoning shown alongside tool calls)
       if (llmResponse.companion_text) {
@@ -315,7 +315,7 @@ export async function runAgent(
       error: errorMsg,
       turnCount: ctx.turnNumber,
     }
-  } catch (err) {
+    } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
 
     // Agent may have been cancelled externally while a tool/LLM call was in flight.
@@ -364,18 +364,47 @@ export async function runAgent(
       timestamp: Date.now(),
     })
 
-    return {
-      agentId,
-      status: 'failed',
-      error: errorMsg,
-      turnCount: ctx.turnNumber,
+      return {
+        agentId,
+        status: 'failed',
+        error: errorMsg,
+        turnCount: ctx.turnNumber,
+      }
     }
   }
+
+  return deps.observability
+    ? deps.observability.traceAgent({ agent: ctx.agent }, executeRun)
+    : executeRun()
 }
 
 // ---------------------------------------------------------------------------
 // Streaming LLM turn
 // ---------------------------------------------------------------------------
+
+async function traceGenerationTurn(
+  ctx: RunContext,
+  deps: OrchestratorDeps,
+  modelName: string,
+  request: LLMRequest,
+  useNativeTools: boolean,
+  agentId: string,
+): Promise<LLMResponse> {
+  const generate = () => (ctx.stream && useNativeTools)
+    ? streamLLMTurn(ctx.provider, request, deps, agentId, ctx.agent.sessionId, ctx.agent.parentId, ctx.agent.sourceCallId, ctx.agent.depth)
+    : ctx.provider.generate(request)
+
+  return ctx.observability
+    ? ctx.observability.traceGeneration({
+        agent: ctx.agent,
+        turnNumber: ctx.turnNumber,
+        provider: ctx.agent.config.provider,
+        model: modelName,
+        request,
+        stream: ctx.stream && useNativeTools,
+      }, generate)
+    : generate()
+}
 
 async function streamLLMTurn(
   provider: LLMProvider,
@@ -489,12 +518,15 @@ async function executePendingApprovedTools(ctx: RunContext): Promise<void> {
     })
 
     const startMs = Date.now()
-    const result = await ctx.tools.execute(toolName, toolArgs, {
-      agent_id: ctx.agent.id,
-      session_id: ctx.agent.sessionId,
-      signal: ctx.signal,
-      events: ctx.events,
-    })
+    const result = await traceToolExecution(ctx, callId, toolName, toolArgs, () =>
+      ctx.tools.execute(toolName, toolArgs, {
+        agent_id: ctx.agent.id,
+        session_id: ctx.agent.sessionId,
+        signal: ctx.signal,
+        events: ctx.events,
+      }),
+      true,
+    )
     const durationMs = Date.now() - startMs
 
     const outputStr = await materializeToolOutput(result, {
@@ -733,7 +765,7 @@ async function executeTool(
     })
     const startMs = Date.now()
     const deps: OrchestratorDeps = buildDepsFromContext(ctx)
-    return handler(callId, args, ctx, deps, startMs)
+    return traceToolExecution(ctx, callId, name, args, () => handler(callId, args, ctx, deps, startMs))
   }
 
   // Hydrate args (auto-populate tool_outputs.* fields)
@@ -809,12 +841,14 @@ async function executeTool(
   })
 
   const startMs = Date.now()
-  const result = await ctx.tools.execute(name, hydratedArgs, {
-    agent_id: ctx.agent.id,
-    session_id: ctx.agent.sessionId,
-    signal: ctx.signal,
-    events: ctx.events,
-  })
+  const result = await traceToolExecution(ctx, callId, name, hydratedArgs, () =>
+    ctx.tools.execute(name, hydratedArgs, {
+      agent_id: ctx.agent.id,
+      session_id: ctx.agent.sessionId,
+      signal: ctx.signal,
+      events: ctx.events,
+    }),
+  )
   const durationMs = Date.now() - startMs
 
   const outputStr = await materializeToolOutput(result, {
@@ -923,7 +957,9 @@ async function executeToolBatch(
           timestamp: Date.now(),
         })
         const interceptStartMs = Date.now()
-        return handler(spec.callId, spec.args, ctx, deps, interceptStartMs)
+        return traceToolExecution(ctx, spec.callId, spec.tool, spec.args, () =>
+          handler(spec.callId, spec.args, ctx, deps, interceptStartMs),
+        )
       }))
 
       const waiting = outcomes.find((outcome) => outcome.type === 'waiting')
@@ -943,7 +979,9 @@ async function executeToolBatch(
         timestamp: Date.now(),
       })
       const interceptStartMs = Date.now()
-      const outcome = await handler(spec.callId, spec.args, ctx, deps, interceptStartMs)
+      const outcome = await traceToolExecution(ctx, spec.callId, spec.tool, spec.args, () =>
+        handler(spec.callId, spec.args, ctx, deps, interceptStartMs),
+      )
       if (outcome.type === 'waiting') {
         return outcome
       }
@@ -969,14 +1007,32 @@ async function executeToolBatch(
       })
     }
 
-    const batchResult = await ctx.tools.executeBatch(toolCalls, {
-      agent_id: ctx.agent.id,
-      session_id: ctx.agent.sessionId,
-      signal: ctx.signal,
+    const startedAt = new Map<string, number>()
+    const settled = await Promise.allSettled(toolCalls.map(async (tc) => {
+      startedAt.set(tc.call_id, Date.now())
+      const result = await traceToolExecution(ctx, tc.call_id, tc.name, tc.args, () =>
+        ctx.tools.execute(tc.name, tc.args, {
+          agent_id: ctx.agent.id,
+          session_id: ctx.agent.sessionId,
+          signal: ctx.signal,
+          events: ctx.events,
+        }),
+      )
+      return { call_id: tc.call_id, ...result }
+    }))
+
+    const results = settled.map((settledResult, index) => {
+      if (settledResult.status === 'fulfilled') return settledResult.value
+      return {
+        call_id: toolCalls[index].call_id,
+        ok: false as const,
+        error: settledResult.reason instanceof Error ? settledResult.reason.message : String(settledResult.reason),
+      }
     })
 
-    for (const res of batchResult.results) {
+    for (const res of results) {
       const spec = canExecute.find((s) => s.callId === res.call_id)
+      const durationMs = Date.now() - (startedAt.get(res.call_id) ?? Date.now())
       const outputStr = await materializeToolOutput(res, {
         sessionFilesRoot: ctx.sessionFilesRoot,
         inlineLimitBytes: ctx.inlineOutputLimitBytes,
@@ -993,6 +1049,7 @@ async function executeToolBatch(
         contentBlocks: res.content_blocks ?? null,
         isError: !res.ok,
         turnNumber: ctx.turnNumber,
+        durationMs,
       })
 
       if (res.ok && spec?.save && !isToolOutputsTool(spec.tool)) {
@@ -1008,7 +1065,7 @@ async function executeToolBatch(
         type: EVENT_TYPES.TOOL_COMPLETED,
         agent_id: ctx.agent.id,
         session_id: ctx.agent.sessionId,
-        payload: { callId: res.call_id, name: spec?.tool ?? 'unknown', success: res.ok, output: outputStr, durationMs: 0, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
+        payload: { callId: res.call_id, name: spec?.tool ?? 'unknown', success: res.ok, output: outputStr, durationMs, parentId: ctx.agent.parentId, depth: ctx.agent.depth },
         timestamp: Date.now(),
       })
     }
@@ -1308,7 +1365,21 @@ function buildDepsFromContext(ctx: RunContext): OrchestratorDeps {
     sessionFilesRoot: ctx.sessionFilesRoot,
     inlineOutputLimitBytes: ctx.inlineOutputLimitBytes,
     interceptHandlers: ctx.interceptHandlers,
+    observability: ctx.observability,
   }
+}
+
+function traceToolExecution<T>(
+  ctx: RunContext,
+  callId: string,
+  name: string,
+  args: Record<string, unknown>,
+  fn: () => Promise<T>,
+  approved?: boolean,
+): Promise<T> {
+  return ctx.observability
+    ? ctx.observability.traceTool({ agent: ctx.agent, callId, name, args, approved }, fn)
+    : fn()
 }
 
 function isToolOutputsTool(name: string): boolean {

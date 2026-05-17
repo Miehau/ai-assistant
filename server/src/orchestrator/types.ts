@@ -4,6 +4,7 @@ import type { ToolExecutor } from '../tools/types.js'
 import type { AgentRepository, ItemRepository, ToolOutputRepository, PreferenceRepository } from '../repositories/types.js'
 import type { EventSink } from '../events/types.js'
 import type { AgentDefinitionRegistry } from '../agents/registry.js'
+import type { LLMObservability } from '../observability/types.js'
 
 export type ControllerAction =
   | { action: 'next_step'; thinking?: unknown; step_type?: string; tool?: string; tools?: ToolCallSpec[]; args?: Record<string, unknown>; message?: string; question?: string; context?: string; save?: boolean }
@@ -55,6 +56,8 @@ export interface OrchestratorDeps {
   inlineOutputLimitBytes?: number
   /** Pluggable intercept handlers — keyed by tool name (e.g. 'delegate', 'workflow.run'). */
   interceptHandlers?: Map<string, InterceptHandler>
+  /** Optional LLM observability sink. No-op when disabled. */
+  observability?: LLMObservability
 }
 
 export interface RunContext {
@@ -70,6 +73,7 @@ export interface RunContext {
   readonly sessionFilesRoot: string
   readonly inlineOutputLimitBytes?: number
   readonly interceptHandlers?: Map<string, InterceptHandler>
+  readonly observability?: LLMObservability
   agent: Agent
   turnNumber: number
   signal: AbortSignal

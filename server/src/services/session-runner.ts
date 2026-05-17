@@ -47,6 +47,7 @@ export function buildDeps(runtime: RuntimeContext, model: string): OrchestratorD
     sessionFilesRoot: runtime.sessionFilesRoot,
     inlineOutputLimitBytes: runtime.inlineOutputLimitBytes,
     interceptHandlers: runtime.interceptHandlers,
+    observability: runtime.observability,
   }
 }
 

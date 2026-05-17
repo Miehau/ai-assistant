@@ -73,8 +73,7 @@ export function registerFileTools(
         const lines = content.split('\n')
         const start = Math.max(1, startLine) - 1
         const end = endLine ? Math.min(endLine, lines.length) : Math.min(start + DEFAULT_MAX_LINES, lines.length)
-        const sliced = lines.slice(start, end)
-        const numbered = sliced.map((line, i) => `${start + i + 1}\t${line}`)
+        const numbered = lines.slice(start, end).map((line, i) => `${start + i + 1}\t${line}`)
 
         return {
           ok: true,
@@ -268,6 +267,8 @@ export function registerFileTools(
         properties: {
           path: { type: 'string', description: 'Managed directory' },
           recursive: { type: 'boolean', description: 'Default: false' },
+          glob: { type: 'string', description: 'Optional simple glob filter, e.g. *.json or *web.fetch*' },
+          max_results: { type: 'integer', description: 'Maximum entries to return' },
         },
         required: ['path'],
       },
@@ -282,10 +283,23 @@ export function registerFileTools(
       })
       const dirPath = resolved.fsPath
       const recursive = (args.recursive as boolean) ?? false
+      const glob = typeof args.glob === 'string' && args.glob.trim() ? args.glob.trim() : undefined
+      const maxResults = (args.max_results as number | undefined) ?? 500
 
       try {
-        const entries = await listDir(dirPath, recursive, dirPath, resolved)
-        return { ok: true, output: { path: resolved.ref, count: entries.length, entries } }
+        let entries = await listDir(dirPath, recursive, dirPath, resolved)
+        if (glob) entries = entries.filter((entry) => matchesGlob(entry.path, glob) || matchesGlob(entry.name, glob))
+        const limited = entries.slice(0, maxResults)
+        return {
+          ok: true,
+          output: {
+            path: resolved.ref,
+            count: limited.length,
+            total_count: entries.length,
+            entries: limited,
+            ...(limited.length < entries.length ? { truncated: true } : {}),
+          },
+        }
       } catch (err) {
         return { ok: false, error: `Failed to list directory: ${(err as Error).message}` }
       }
@@ -335,4 +349,12 @@ async function listDir(
   }
 
   return results
+}
+
+function matchesGlob(value: string, glob: string): boolean {
+  const escaped = glob
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.')
+  return new RegExp(`^${escaped}$`, 'i').test(value)
 }

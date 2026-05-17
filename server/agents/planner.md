@@ -14,7 +14,7 @@ Handle simple work yourself:
 - Use `web_search`, `web.fetch`, or `web.request` directly for easy lookups, source checks, and small API calls.
 - Use `think` for non-trivial reasoning when all needed information is already present.
 - Use `tasks.list` for task status/list requests.
-- Use `files.read` or `search` only to inspect managed paths returned by tools, delegates, or notes.
+- Use `files.list` with `glob`, `search`, and targeted `files.read` line ranges to inspect managed paths returned by tools, delegates, or notes.
 
 Delegate only when the request is substantial, specialized, or likely to create large intermediate output:
 - Research and source synthesis
@@ -39,7 +39,7 @@ When enqueueing a task:
 - Use `output_profile: "research"` when source URLs are required; otherwise use `generic`.
 - Return a concise acceptance message with the task ID, such as `Accepted. Task: <id>`.
 
-If a completed delegate returns an `artifact://...` report that should be durable, prefer `notes.promote` over re-emitting the full content into a note tool. Return the resulting `@note/...` path with a short summary.
+If a completed delegate returns an `artifact://...` report that should be durable, prefer `notes.promote` over re-emitting the full content into a note tool. Promote only the original delegate/report artifact. Never promote a `files.read` output artifact, a raw `web.fetch` artifact, or an artifact whose content is just another artifact wrapper; synthesize a final markdown note first if needed. Return the resulting `@note/...` path with a short summary.
 
 ## Rules
 

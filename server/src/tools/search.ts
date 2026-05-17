@@ -6,6 +6,7 @@ import { managedFileRefForPath, resolveManagedFilePath } from './path-policy.js'
 const execFileAsync = promisify(execFile)
 
 const MAX_RESULTS_DEFAULT = 200
+const MAX_SNIPPET_CHARS = 500
 
 export interface SearchToolOptions {
   sessionFilesRoot: string
@@ -109,7 +110,17 @@ async function runSearch(
   searchPath: string,
   opts: { literal: boolean; caseSensitive: boolean; maxResults: number; signal: AbortSignal },
 ): Promise<GrepMatch[]> {
-  const rgArgs = ['--line-number', '--no-heading', '--with-filename', '--color=never']
+  const rgArgs = [
+    '--line-number',
+    '--no-heading',
+    '--with-filename',
+    '--color=never',
+    '--max-columns',
+    String(MAX_SNIPPET_CHARS),
+    '--max-columns-preview',
+    '--max-count',
+    String(opts.maxResults),
+  ]
   if (opts.literal) rgArgs.push('--fixed-strings')
   if (!opts.caseSensitive) rgArgs.push('--ignore-case')
   rgArgs.push('--', query, searchPath)
@@ -170,9 +181,14 @@ function parseGrepOutput(stdout: string, maxResults: number): GrepMatch[] {
     const snippet = line.slice(secondColon + 1)
 
     if (!isNaN(lineNum)) {
-      results.push({ path: filePath, line: lineNum, snippet })
+      results.push({ path: filePath, line: lineNum, snippet: truncateSnippet(snippet) })
     }
   }
 
   return results
+}
+
+function truncateSnippet(snippet: string): string {
+  if (snippet.length <= MAX_SNIPPET_CHARS) return snippet
+  return `${snippet.slice(0, MAX_SNIPPET_CHARS)}... [truncated]`
 }

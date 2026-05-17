@@ -132,6 +132,51 @@ const promotedGeneric = await registry.execute('notes.promote', {
 assert.equal(promotedGeneric.ok, true)
 assert.equal((promotedGeneric.output as { path: string }).path, '@note/generic-note.md')
 
+const filesReadWrapperNotice = await materializeTextOutput(JSON.stringify({
+  path: artifactRef,
+  start_line: 1,
+  end_line: 3,
+  total_lines: 3,
+  content: '1\t# Promoted Findings',
+}, null, 2), {
+  sessionFilesRoot,
+  inlineLimitBytes: 1,
+  sessionId: ctx.session_id,
+  agentId: ctx.agent_id,
+  callId: 'call-3',
+  toolName: 'files.read',
+  extension: 'json',
+})
+const filesReadWrapperRef = filesReadWrapperNotice.match(/artifact:\/\/\S+/)?.[0]
+const rejectedFilesReadPromote = await registry.execute('notes.promote', {
+  from: filesReadWrapperRef,
+  title: 'Files Read Wrapper',
+}, ctx)
+
+assert.equal(rejectedFilesReadPromote.ok, false)
+assert.match(String(rejectedFilesReadPromote.error), /files\.read output artifact/)
+
+const webFetchArtifactNotice = await materializeTextOutput(JSON.stringify({
+  status: 200,
+  body: '<html><body>Raw page</body></html>',
+}, null, 2), {
+  sessionFilesRoot,
+  inlineLimitBytes: 1,
+  sessionId: ctx.session_id,
+  agentId: ctx.agent_id,
+  callId: 'call-4',
+  toolName: 'web.fetch',
+  extension: 'json',
+})
+const webFetchArtifactRef = webFetchArtifactNotice.match(/artifact:\/\/\S+/)?.[0]
+const rejectedWebFetchPromote = await registry.execute('notes.promote', {
+  from: webFetchArtifactRef,
+  title: 'Raw Fetch',
+}, ctx)
+
+assert.equal(rejectedWebFetchPromote.ok, false)
+assert.match(String(rejectedWebFetchPromote.error), /raw web\.fetch response artifact/)
+
 const rejectedResearchPromote = await registry.execute('notes.promote', {
   from: genericArtifactRef,
   title: 'Research Without URL',

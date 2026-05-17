@@ -87,6 +87,35 @@ const artifactRead = await registry.execute('files.read', {
 assert.equal(artifactRead.ok, true)
 assert.match((artifactRead.output as { content: string }).content, /2\tartifact needle/)
 
+const longLineNotice = await materializeTextOutput(`prefix ${'x'.repeat(40_000)} suffix`, {
+  sessionFilesRoot,
+  inlineLimitBytes: 1,
+  sessionId,
+  agentId,
+  callId: 'call-long',
+  toolName: 'raw-json',
+  extension: 'json',
+})
+const longLineRef = longLineNotice.match(/artifact:\/\/\S+/)?.[0]
+const artifactList = await registry.execute('files.list', {
+  path: 'artifact://agent-123',
+  glob: '*raw-json.json',
+}, ctx)
+assert.equal(artifactList.ok, true)
+const artifactListOutput = artifactList.output as { count: number; entries: Array<{ path: string }> }
+assert.equal(artifactListOutput.count, 1)
+assert.equal(artifactListOutput.entries[0].path, longLineRef)
+
+const longLineSearch = await registry.execute('search', {
+  query: 'prefix',
+  path: longLineRef,
+  literal: true,
+}, ctx)
+assert.equal(longLineSearch.ok, true)
+const longLineSearchOutput = longLineSearch.output as { count: number; matches: Array<{ snippet: string }> }
+assert.equal(longLineSearchOutput.count, 1)
+assert(longLineSearchOutput.matches[0].snippet.length <= 520)
+
 const artifactSearch = await registry.execute('search', {
   query: 'artifact needle',
   path: artifactRef,

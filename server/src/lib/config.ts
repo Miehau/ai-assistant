@@ -35,6 +35,13 @@ const configSchema = z.object({
   rateLimitInferencePerMin: z.coerce.number().default(60),
   rateLimitTelegramPerMin: z.coerce.number().default(600),
   rateLimitHealthPerMin: z.coerce.number().default(20),
+  // --- LLM observability ---
+  langfuseEnabled: boolFromEnv.optional(),
+  langfuseBaseUrl: z.string().default('https://cloud.langfuse.com'),
+  langfusePublicKey: z.string().optional(),
+  langfuseSecretKey: z.string().optional(),
+  langfuseCaptureContent: boolFromEnv.default(false),
+  langfuseMaxContentChars: z.coerce.number().default(20000),
 })
 
 export type AppConfig = z.infer<typeof configSchema>
@@ -69,6 +76,12 @@ export function loadConfig(): AppConfig {
     rateLimitInferencePerMin: process.env.RATE_LIMIT_INFERENCE_PER_MIN,
     rateLimitTelegramPerMin: process.env.RATE_LIMIT_TELEGRAM_PER_MIN,
     rateLimitHealthPerMin: process.env.RATE_LIMIT_HEALTH_PER_MIN,
+    langfuseEnabled: process.env.LANGFUSE_ENABLED,
+    langfuseBaseUrl: process.env.LANGFUSE_BASE_URL,
+    langfusePublicKey: process.env.LANGFUSE_PUBLIC_KEY,
+    langfuseSecretKey: process.env.LANGFUSE_SECRET_KEY,
+    langfuseCaptureContent: process.env.LANGFUSE_CAPTURE_CONTENT,
+    langfuseMaxContentChars: process.env.LANGFUSE_MAX_CONTENT_CHARS,
   })
 
   if (
