@@ -28,15 +28,11 @@ export function registerWebTools(registry: { register: (h: ToolHandler) => void 
           headers,
         }, ctx.signal)
 
-        const body = await readResponseBody(response)
+        const body = await readResponseBody(response, { extractHtmlBody: true })
 
         return {
           ok: true,
-          output: {
-            status: response.status,
-            headers: Object.fromEntries(response.headers.entries()),
-            body,
-          },
+          output: response.ok ? body : { status: response.status, body },
         }
       } catch (err) {
         if (ctx.signal.aborted) {
@@ -98,7 +94,7 @@ export function registerWebTools(registry: { register: (h: ToolHandler) => void 
           body: body ?? undefined,
         }, ctx.signal)
 
-        const responseBody = await readResponseBody(response)
+        const responseBody = await readResponseBody(response, { extractHtmlBody: false })
 
         return {
           ok: true,
@@ -159,13 +155,12 @@ export function registerWebTools(registry: { register: (h: ToolHandler) => void 
           body,
         }, ctx.signal)
 
-        const responseBody = await readResponseBody(response)
+        const responseBody = await readResponseBody(response, { extractHtmlBody: true })
 
         return {
           ok: true,
           output: {
             status: response.status,
-            headers: Object.fromEntries(response.headers.entries()),
             body: responseBody,
           },
         }
@@ -231,16 +226,17 @@ async function fetchWithCookies(
   throw new Error(`Too many redirects (>${MAX_REDIRECTS})`)
 }
 
-async function readResponseBody(response: Response): Promise<unknown> {
+async function readResponseBody(
+  response: Response,
+  options: { extractHtmlBody: boolean },
+): Promise<unknown> {
   const text = await response.text()
 
-  if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
-    return text.slice(0, MAX_RESPONSE_BYTES) + '\n... [truncated]'
-  }
-
-  // Try to parse as JSON
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('json')) {
+    if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
+      return text.slice(0, MAX_RESPONSE_BYTES) + '\n... [truncated]'
+    }
     try {
       return JSON.parse(text)
     } catch {
@@ -248,7 +244,62 @@ async function readResponseBody(response: Response): Promise<unknown> {
     }
   }
 
+  const body = options.extractHtmlBody && contentType.includes('html')
+    ? extractReadableHtmlBody(text)
+    : text
+
+  if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES) {
+    return body.slice(0, MAX_RESPONSE_BYTES) + '\n... [truncated]'
+  }
+
+  return body
+}
+
+function extractReadableHtmlBody(html: string): string {
+  const body = extractHtmlBodyFragment(html)
+  return decodeHtmlEntities(
+    body
+      .replace(/<(script|style|template|noscript|svg)\b[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<(br|hr)\b[^>]*>/gi, '\n')
+      .replace(/<\/(p|div|section|article|header|footer|main|aside|nav|li|tr|h[1-6])>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[ \t\f\v]+/g, ' ')
+      .replace(/ *\n */g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim(),
+  )
+}
+
+function extractHtmlBodyFragment(html: string): string {
+  const bodyMatch = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)
+  if (bodyMatch) return bodyMatch[1]
+
+  const openBodyMatch = /<body\b[^>]*>/i.exec(html)
+  if (openBodyMatch) return html.slice(openBodyMatch.index + openBodyMatch[0].length)
+
+  return html.replace(/<head\b[\s\S]*?<\/head>/i, ' ')
+}
+
+function decodeHtmlEntities(text: string): string {
   return text
+    .replace(/&#(\d+);/g, (match, code: string) => decodeCodePoint(match, Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (match, code: string) => decodeCodePoint(match, Number.parseInt(code, 16)))
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+}
+
+function decodeCodePoint(fallback: string, codePoint: number): string {
+  try {
+    return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : fallback
+  } catch {
+    return fallback
+  }
 }
 
 /** Attach stored cookies to request headers (does not overwrite manually-set Cookie header). */
