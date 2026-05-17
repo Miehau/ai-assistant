@@ -155,6 +155,8 @@ const rejectedFilesReadPromote = await registry.execute('notes.promote', {
 
 assert.equal(rejectedFilesReadPromote.ok, false)
 assert.match(String(rejectedFilesReadPromote.error), /files\.read output artifact/)
+assert.match(String(rejectedFilesReadPromote.error), /Next steps: inspect the referenced path/)
+assert.match(String(rejectedFilesReadPromote.error), /Do not retry notes\.promote/)
 
 const webFetchArtifactNotice = await materializeTextOutput(JSON.stringify({
   status: 200,
@@ -176,6 +178,8 @@ const rejectedWebFetchPromote = await registry.execute('notes.promote', {
 
 assert.equal(rejectedWebFetchPromote.ok, false)
 assert.match(String(rejectedWebFetchPromote.error), /raw web\.fetch response artifact/)
+assert.match(String(rejectedWebFetchPromote.error), /A fetch artifact is source evidence/)
+assert.match(String(rejectedWebFetchPromote.error), /Do not retry notes\.promote/)
 
 const rejectedResearchPromote = await registry.execute('notes.promote', {
   from: genericArtifactRef,
@@ -185,5 +189,6 @@ const rejectedResearchPromote = await registry.execute('notes.promote', {
 
 assert.equal(rejectedResearchPromote.ok, false)
 assert.match(String(rejectedResearchPromote.error), /raw http\(s\) source URL/)
+assert.match(String(rejectedResearchPromote.error), /Next steps: inspect any referenced artifacts/)
 
 console.log('Notes tool tests passed')

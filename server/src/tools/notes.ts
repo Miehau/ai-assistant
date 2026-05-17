@@ -71,7 +71,7 @@ export function registerNoteTools(
   registry.register({
     metadata: {
       name: 'notes.promote',
-      description: 'Promote existing managed markdown to a durable note.',
+      description: 'Promote an existing managed markdown report to a durable note. The source must be final markdown, not a raw tool-output JSON artifact.',
       parameters: {
         type: 'object',
         properties: {
@@ -140,7 +140,7 @@ export function registerNoteTools(
       if (qualityErrors.length > 0) {
         return {
           ok: false,
-          error: `Promoted note failed quality checks: ${qualityErrors.join('; ')}`,
+          error: formatQualityError('Promoted note failed quality checks', qualityErrors),
         }
       }
 
@@ -228,18 +228,30 @@ function describeUnsupportedArtifactSource(markdown: string): string | null {
   ) {
     return [
       `Cannot promote a files.read output artifact (${object.path}).`,
-      'Promote the original markdown report artifact instead, or synthesize a final markdown note from the read content.',
+      'This JSON is only a wrapper around a file excerpt, not a final note.',
+      'Next steps: inspect the referenced path with search/files.read as needed, synthesize a clean markdown report with no artifact:// references, include raw source URLs for research notes, then promote that markdown report artifact or save it with notes.save_research_note.',
+      'Do not retry notes.promote with this same files.read artifact.',
     ].join(' ')
   }
 
   if (typeof object.body === 'string' && typeof object.status === 'number') {
     return [
       'Cannot promote a raw web.fetch response artifact.',
-      'Synthesize a final markdown note with findings and raw source URLs, then save or promote that note.',
+      'A fetch artifact is source evidence, not a final note.',
+      'Next steps: extract the relevant facts from the body, cite the original source URL, synthesize a clean markdown report with no artifact:// references, then promote that markdown report artifact or save it with notes.save_research_note.',
+      'Do not retry notes.promote with this same web.fetch artifact.',
     ].join(' ')
   }
 
   return null
+}
+
+function formatQualityError(prefix: string, errors: string[]): string {
+  return [
+    `${prefix}: ${errors.join('; ')}.`,
+    'Next steps: inspect any referenced artifacts with search/files.read, copy only the relevant evidence into a new final markdown report, replace artifact:// references and provider citation placeholders with raw source URLs, then promote or save that cleaned markdown.',
+    'Do not retry notes.promote with unchanged content.',
+  ].join(' ')
 }
 
 async function writeNoteFile(
