@@ -3,6 +3,8 @@ import type { LLMRequest, LLMResponse } from '../providers/types.js'
 
 export interface AgentTraceContext {
   agent: Agent
+  input?: unknown
+  inputSource?: string
 }
 
 export interface GenerationTraceContext {

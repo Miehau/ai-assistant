@@ -10,6 +10,7 @@ import type { LLMMessage, LLMRequest } from '../providers/types.js'
 import { buildDeps, prepareSessionTurn } from '../services/session-runner.js'
 import { runAgent } from '../orchestrator/runner.js'
 import { listTasks } from '../tasks/storage.js'
+import type { AgentTraceContext, GenerationTraceContext, ToolTraceContext } from '../observability/types.js'
 
 async function main() {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'task-runner-test-'))
@@ -22,10 +23,28 @@ async function main() {
   delete process.env.OPENAI_API_KEY
   delete process.env.OLLAMA_BASE_URL
   delete process.env.OPENROUTER_API_KEY
+  process.env.LANGFUSE_ENABLED = 'false'
+  delete process.env.LANGFUSE_PUBLIC_KEY
+  delete process.env.LANGFUSE_SECRET_KEY
 
   let runtime: RuntimeContext | null = null
   try {
     runtime = await initRuntime(loadConfig())
+    const tracedAgents: AgentTraceContext[] = []
+    runtime.observability = {
+      enabled: true,
+      traceAgent(context, fn) {
+        tracedAgents.push(context)
+        return fn()
+      },
+      traceGeneration(_context: GenerationTraceContext, fn) {
+        return fn()
+      },
+      traceTool(_context: ToolTraceContext, fn) {
+        return fn()
+      },
+      async shutdown() {},
+    }
     const user = await runtime.repositories.users.create({
       email: 'task-runner@test.local',
       apiKeyHash: createHash('sha256').update('task-runner-test-key').digest('hex'),
@@ -97,6 +116,12 @@ async function main() {
     const callbackItems = await runtime.repositories.items.listByAgent(prepared.agent.id)
     assert(callbackItems.some((item) => item.role === 'user' && item.content?.includes(`Task ID: ${taskId}`)))
     assert(callbackItems.some((item) => item.role === 'assistant' && item.content === 'Callback saw completion and is ready to notify the user.'))
+
+    const rootTraces = tracedAgents.filter((context) => context.agent.id === prepared.agent.id)
+    assert.equal(rootTraces.length, 2)
+    assert.equal(rootTraces[0]?.input, 'Set up a callback-capable planner session.')
+    assert.match(String(rootTraces[1]?.input ?? ''), /Background task completed\./)
+    assert.equal(rootTraces[1]?.inputSource, 'latest_user_message')
 
     console.log('task-runner tests passed')
   } finally {
