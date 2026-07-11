@@ -139,6 +139,8 @@ export const mcpServers = sqliteTable(
   'mcp_servers',
   {
     id: text('id').primaryKey(),
+    userId: text('user_id').references(() => users.id).notNull(),
+    authMode: text('auth_mode').default('auto').notNull(),
     name: text('name').notNull(),
     transport: text('transport').notNull(),
     command: text('command'),
@@ -154,6 +156,7 @@ export const mcpServers = sqliteTable(
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => [
+    index('mcp_servers_user_id_idx').on(table.userId),
     index('mcp_servers_name_idx').on(table.name),
     index('mcp_servers_enabled_idx').on(table.enabled),
   ]
@@ -163,7 +166,7 @@ export const mcpTools = sqliteTable(
   'mcp_tools',
   {
     id: text('id').primaryKey(),
-    serverId: text('server_id').references(() => mcpServers.id).notNull(),
+    serverId: text('server_id').references(() => mcpServers.id, { onDelete: 'cascade' }).notNull(),
     remoteName: text('remote_name').notNull(),
     registeredName: text('registered_name').notNull(),
     description: text('description'),
@@ -177,6 +180,36 @@ export const mcpTools = sqliteTable(
     index('mcp_tools_registered_name_idx').on(table.registeredName),
   ]
 )
+
+export const mcpOauthCredentials = sqliteTable('mcp_oauth_credentials', {
+  serverId: text('server_id').primaryKey().references(() => mcpServers.id, { onDelete: 'cascade' }),
+  userId: text('user_id').references(() => users.id).notNull(),
+  resourceUrl: text('resource_url').notNull(),
+  tokens: text('tokens'),
+  clientInformation: text('client_information'),
+  discovery: text('discovery'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+}, (table) => [
+  index('mcp_oauth_credentials_user_id_idx').on(table.userId),
+])
+
+export const mcpOauthSessions = sqliteTable('mcp_oauth_sessions', {
+  id: text('id').primaryKey(),
+  serverId: text('server_id').references(() => mcpServers.id, { onDelete: 'cascade' }).notNull(),
+  userId: text('user_id').references(() => users.id).notNull(),
+  stateHash: text('state_hash').unique().notNull(),
+  codeVerifier: text('code_verifier').notNull(),
+  status: text('status').notNull(),
+  error: text('error'),
+  expiresAt: integer('expires_at').notNull(),
+  consumedAt: integer('consumed_at'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+}, (table) => [
+  index('mcp_oauth_sessions_owner_idx').on(table.userId, table.serverId),
+  index('mcp_oauth_sessions_expiry_idx').on(table.expiresAt),
+])
 
 export const telegramConnections = sqliteTable(
   'telegram_connections',

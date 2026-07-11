@@ -35,6 +35,7 @@ const configSchema = z.object({
   rateLimitInferencePerMin: z.coerce.number().default(60),
   rateLimitTelegramPerMin: z.coerce.number().default(600),
   rateLimitHealthPerMin: z.coerce.number().default(20),
+  rateLimitOAuthCallbackPerMin: z.coerce.number().default(30),
   // --- LLM observability ---
   langfuseEnabled: boolFromEnv.optional(),
   langfuseBaseUrl: z.string().default('https://cloud.langfuse.com'),
@@ -76,6 +77,7 @@ export function loadConfig(): AppConfig {
     rateLimitInferencePerMin: process.env.RATE_LIMIT_INFERENCE_PER_MIN,
     rateLimitTelegramPerMin: process.env.RATE_LIMIT_TELEGRAM_PER_MIN,
     rateLimitHealthPerMin: process.env.RATE_LIMIT_HEALTH_PER_MIN,
+    rateLimitOAuthCallbackPerMin: process.env.RATE_LIMIT_OAUTH_CALLBACK_PER_MIN,
     langfuseEnabled: process.env.LANGFUSE_ENABLED,
     langfuseBaseUrl: process.env.LANGFUSE_BASE_URL,
     langfusePublicKey: process.env.LANGFUSE_PUBLIC_KEY,

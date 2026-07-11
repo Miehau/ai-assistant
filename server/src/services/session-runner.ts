@@ -122,7 +122,7 @@ export async function prepareSessionTurn(
 
     const allowedTools = body.allowedTools ?? agentDef?.tools
     const mcpToolSnapshot = body.mcpServerIds?.length
-      ? await runtime.mcps.getNewSessionToolSnapshot(body.mcpServerIds)
+      ? await runtime.mcps.getNewSessionToolSnapshot(body.userId, body.mcpServerIds)
       : undefined
     const config: AgentConfig = {
       model,

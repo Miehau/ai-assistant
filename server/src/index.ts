@@ -22,6 +22,7 @@ import { authMiddleware } from './middleware/auth.js'
 import { mcpRoutes } from './routes/mcps.js'
 import { telegramRoutes, telegramWebhookRoutes } from './routes/telegram.js'
 import { createRateLimiter } from './lib/rate-limit.js'
+import { mcpOAuthCallbackRoutes } from './routes/mcp-oauth-callback.js'
 
 type AppEnv = {
   Variables: {
@@ -60,7 +61,8 @@ async function main() {
         : { origin: '*', credentials: false },
     ),
   )
-  app.use('*', honoLogger())
+  const requestLogger = honoLogger()
+  app.use('*', (c, next) => c.req.path === '/oauth/mcp/callback' ? next() : requestLogger(c, next))
 
   // Inject runtime into context
   app.use('*', async (c, next) => {
@@ -91,6 +93,18 @@ async function main() {
     }),
   )
   app.route('/telegram', telegramWebhookRoutes(runtime))
+
+  // MCP OAuth callback — public by design. One-time state is its sole authority.
+  app.use(
+    '/oauth/mcp/*',
+    createRateLimiter({
+      name: 'mcp-oauth-callback',
+      limit: config.rateLimitOAuthCallbackPerMin,
+      keyBy: 'ip',
+      trustProxy: config.trustProxy,
+    }),
+  )
+  app.route('/oauth/mcp', mcpOAuthCallbackRoutes(runtime))
 
   // Pre-auth failure throttle, then auth + per-user rate limit for /api/*
   app.use(

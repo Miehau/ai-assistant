@@ -95,6 +95,12 @@ server/                 # Hono backend (the real backend)
 src-tauri/              # Tauri shell (thin native wrapper)
 ```
 
+## Documentation
+
+- [MCP OAuth architecture and API contract](src-tauri/docs/mcp-oauth.md)
+- [MCP OAuth test and release guide](src-tauri/docs/mcp-oauth-testing.md)
+- [Agent engineering guardrails](src-tauri/docs/agent/README.md)
+
 ## Tech Stack
 
 - **Frontend**: SvelteKit 2, Svelte 5, TypeScript, TailwindCSS, shadcn-svelte

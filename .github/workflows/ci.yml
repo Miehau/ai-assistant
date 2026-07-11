@@ -5,6 +5,27 @@ on:
   pull_request:
 
 jobs:
+  mcp-oauth:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+      - name: Install backend dependencies
+        working-directory: server
+        run: bun install --frozen-lockfile
+      - name: Run frontend MCP contract and artifact checks
+        run: bun run test:mcp-frontend
+      - name: Run deterministic MCP OAuth suite
+        working-directory: server
+        run: bun run test:mcp-oauth
+
   preflight:
     runs-on: ubuntu-22.04
     steps:

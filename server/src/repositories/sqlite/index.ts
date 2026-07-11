@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
-import { eq, and, desc, asc, sql, max, isNull, or } from 'drizzle-orm'
+import { eq, and, desc, asc, sql, max, isNull, or, lte } from 'drizzle-orm'
 import { v4 as uuid } from 'uuid'
 import { createHash } from 'crypto'
 import { encrypt, decrypt, deriveKey } from '../../lib/crypto.js'
@@ -36,6 +36,8 @@ import type {
   McpRepository,
   StoredMcpServer,
   StoredMcpTool,
+  StoredMcpOAuthCredentials,
+  StoredMcpOAuthSession,
   TelegramRepository,
   StoredTelegramConnection,
   StoredTelegramMessageLink,
@@ -176,6 +178,8 @@ function toSystemPromptRecord(row: typeof schema.systemPrompts.$inferSelect): Sy
 function toStoredMcpServer(row: typeof schema.mcpServers.$inferSelect): StoredMcpServer {
   return {
     id: row.id,
+    userId: row.userId,
+    authMode: row.authMode as StoredMcpServer['authMode'],
     name: row.name,
     transport: row.transport as StoredMcpServer['transport'],
     command: row.command ?? null,
@@ -902,18 +906,43 @@ function createWorkflowRunRepo(db: DrizzleInstance): WorkflowRunRepository {
   }
 }
 
-function createMcpRepo(db: DrizzleInstance): McpRepository {
+function createMcpRepo(db: DrizzleInstance, encKey: string | null): McpRepository {
+  const ownedTool = (userId: string) => sql`${schema.mcpTools.serverId} IN (SELECT id FROM mcp_servers WHERE user_id = ${userId})`
+  const decryptField = (value: string | null): string | undefined => value ? decrypt(value, requireMcpEncryptionKey(encKey)) : undefined
+  const toCredentials = (row: typeof schema.mcpOauthCredentials.$inferSelect): StoredMcpOAuthCredentials => ({
+    serverId: row.serverId,
+    userId: row.userId,
+    resourceUrl: row.resourceUrl,
+    tokens: decryptField(row.tokens),
+    clientInformation: decryptField(row.clientInformation),
+    discovery: decryptField(row.discovery),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  })
+  const toSession = (row: typeof schema.mcpOauthSessions.$inferSelect): StoredMcpOAuthSession => ({
+    id: row.id,
+    serverId: row.serverId,
+    userId: row.userId,
+    stateHash: row.stateHash,
+    codeVerifier: decrypt(row.codeVerifier, requireMcpEncryptionKey(encKey)),
+    status: row.status as StoredMcpOAuthSession['status'],
+    error: row.error ?? null,
+    expiresAt: row.expiresAt,
+    consumedAt: row.consumedAt ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  })
   return {
-    async listEnabledServers(): Promise<StoredMcpServer[]> {
-      return db.select().from(schema.mcpServers).where(eq(schema.mcpServers.enabled, 1)).all().map(toStoredMcpServer)
+    async listEnabledServers(userId): Promise<StoredMcpServer[]> {
+      return db.select().from(schema.mcpServers).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.enabled, 1))).all().map(toStoredMcpServer)
     },
 
-    async listServers(): Promise<StoredMcpServer[]> {
-      return db.select().from(schema.mcpServers).orderBy(asc(schema.mcpServers.name)).all().map(toStoredMcpServer)
+    async listServers(userId): Promise<StoredMcpServer[]> {
+      return db.select().from(schema.mcpServers).where(eq(schema.mcpServers.userId, userId)).orderBy(asc(schema.mcpServers.name)).all().map(toStoredMcpServer)
     },
 
-    async getServer(id: string): Promise<StoredMcpServer | null> {
-      const row = db.select().from(schema.mcpServers).where(eq(schema.mcpServers.id, id)).limit(1).all()[0]
+    async getServer(userId, id): Promise<StoredMcpServer | null> {
+      const row = db.select().from(schema.mcpServers).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.id, id))).limit(1).all()[0]
       return row ? toStoredMcpServer(row) : null
     },
 
@@ -924,9 +953,10 @@ function createMcpRepo(db: DrizzleInstance): McpRepository {
       }).run()
     },
 
-    async updateServer(id, input): Promise<void> {
+    async updateServer(userId, id, input): Promise<boolean> {
       const updates: Record<string, unknown> = {}
       if (input.name !== undefined) updates.name = input.name
+      if (input.authMode !== undefined) updates.authMode = input.authMode
       if (input.transport !== undefined) updates.transport = input.transport
       if (input.command !== undefined) updates.command = input.command
       if (input.args !== undefined) updates.args = input.args
@@ -938,46 +968,53 @@ function createMcpRepo(db: DrizzleInstance): McpRepository {
       if (input.status !== undefined) updates.status = input.status
       if ('error' in input) updates.error = input.error
       updates.updatedAt = input.updatedAt ?? Date.now()
-      db.update(schema.mcpServers).set(updates).where(eq(schema.mcpServers.id, id)).run()
+      return db.update(schema.mcpServers).set(updates).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.id, id))).run().changes > 0
     },
 
-    async deleteServerAndTools(id: string): Promise<void> {
-      db.transaction((tx) => {
+    async deleteServerAndTools(userId, id): Promise<boolean> {
+      return db.transaction((tx) => {
+        const owned = tx.select({ id: schema.mcpServers.id }).from(schema.mcpServers).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.id, id))).limit(1).all()[0]
+        if (!owned) return false
+        tx.delete(schema.mcpOauthSessions).where(and(eq(schema.mcpOauthSessions.userId, userId), eq(schema.mcpOauthSessions.serverId, id))).run()
+        tx.delete(schema.mcpOauthCredentials).where(and(eq(schema.mcpOauthCredentials.userId, userId), eq(schema.mcpOauthCredentials.serverId, id))).run()
         tx.delete(schema.mcpTools).where(eq(schema.mcpTools.serverId, id)).run()
-        tx.delete(schema.mcpServers).where(eq(schema.mcpServers.id, id)).run()
+        tx.delete(schema.mcpServers).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.id, id))).run()
+        return true
       })
     },
 
-    async listTools(serverId?: string): Promise<StoredMcpTool[]> {
+    async listTools(userId, serverId): Promise<StoredMcpTool[]> {
       const rows = serverId
-        ? db.select().from(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId)).orderBy(asc(schema.mcpTools.remoteName)).all()
-        : db.select().from(schema.mcpTools).orderBy(asc(schema.mcpTools.remoteName)).all()
+        ? db.select().from(schema.mcpTools).where(and(eq(schema.mcpTools.serverId, serverId), ownedTool(userId))).orderBy(asc(schema.mcpTools.remoteName)).all()
+        : db.select().from(schema.mcpTools).where(ownedTool(userId)).orderBy(asc(schema.mcpTools.remoteName)).all()
       return rows.map(toStoredMcpTool)
     },
 
-    async getTool(id: string): Promise<StoredMcpTool | null> {
-      const row = db.select().from(schema.mcpTools).where(eq(schema.mcpTools.id, id)).limit(1).all()[0]
+    async getTool(userId, id): Promise<StoredMcpTool | null> {
+      const row = db.select().from(schema.mcpTools).where(and(eq(schema.mcpTools.id, id), ownedTool(userId))).limit(1).all()[0]
       return row ? toStoredMcpTool(row) : null
     },
 
-    async getToolByServerAndRemoteName(serverId: string, remoteName: string): Promise<StoredMcpTool | null> {
+    async getToolByServerAndRemoteName(userId, serverId, remoteName): Promise<StoredMcpTool | null> {
       const row = db
         .select()
         .from(schema.mcpTools)
-        .where(and(eq(schema.mcpTools.serverId, serverId), eq(schema.mcpTools.remoteName, remoteName)))
+        .where(and(eq(schema.mcpTools.serverId, serverId), eq(schema.mcpTools.remoteName, remoteName), ownedTool(userId)))
         .limit(1)
         .all()[0]
       return row ? toStoredMcpTool(row) : null
     },
 
-    async createTool(input): Promise<void> {
+    async createTool(userId, input): Promise<boolean> {
+      if (!await this.getServer(userId, input.serverId)) return false
       db.insert(schema.mcpTools).values({
         ...input,
         enabledForNewSessions: input.enabledForNewSessions ? 1 : 0,
       }).run()
+      return true
     },
 
-    async updateTool(id, input): Promise<void> {
+    async updateTool(userId, id, input): Promise<boolean> {
       const updates: Record<string, unknown> = {}
       if (input.registeredName !== undefined) updates.registeredName = input.registeredName
       if (input.description !== undefined) updates.description = input.description
@@ -986,13 +1023,93 @@ function createMcpRepo(db: DrizzleInstance): McpRepository {
         updates.enabledForNewSessions = input.enabledForNewSessions ? 1 : 0
       }
       updates.updatedAt = input.updatedAt ?? Date.now()
-      db.update(schema.mcpTools).set(updates).where(eq(schema.mcpTools.id, id)).run()
+      return db.update(schema.mcpTools).set(updates).where(and(eq(schema.mcpTools.id, id), ownedTool(userId))).run().changes > 0
     },
 
-    async deleteToolsForServer(serverId: string): Promise<void> {
-      db.delete(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId)).run()
+    async deleteToolsForServer(userId, serverId): Promise<void> {
+      db.delete(schema.mcpTools).where(and(eq(schema.mcpTools.serverId, serverId), ownedTool(userId))).run()
+    },
+
+    async getOAuthCredentials(userId, serverId) {
+      const row = db.select().from(schema.mcpOauthCredentials).where(and(eq(schema.mcpOauthCredentials.userId, userId), eq(schema.mcpOauthCredentials.serverId, serverId))).limit(1).all()[0]
+      return row ? toCredentials(row) : null
+    },
+
+    async saveOAuthCredentials(input) {
+      const key = requireMcpEncryptionKey(encKey)
+      if (!await this.getServer(input.userId, input.serverId)) throw new Error('MCP server not found')
+      const current = await this.getOAuthCredentials(input.userId, input.serverId)
+      const tokens = input.tokens === undefined ? current?.tokens : input.tokens
+      const clientInformation = input.clientInformation === undefined ? current?.clientInformation : input.clientInformation
+      const discovery = input.discovery === undefined ? current?.discovery : input.discovery
+      const values = {
+        serverId: input.serverId,
+        userId: input.userId,
+        resourceUrl: input.resourceUrl,
+        tokens: tokens ? encrypt(tokens, key) : null,
+        clientInformation: clientInformation ? encrypt(clientInformation, key) : null,
+        discovery: discovery ? encrypt(discovery, key) : null,
+        createdAt: input.updatedAt,
+        updatedAt: input.updatedAt,
+      }
+      db.insert(schema.mcpOauthCredentials).values(values).onConflictDoUpdate({
+        target: schema.mcpOauthCredentials.serverId,
+        set: { ...values, createdAt: sql`created_at` },
+      }).run()
+    },
+
+    async deleteOAuthCredentials(userId, serverId) {
+      return db.delete(schema.mcpOauthCredentials).where(and(eq(schema.mcpOauthCredentials.userId, userId), eq(schema.mcpOauthCredentials.serverId, serverId))).run().changes > 0
+    },
+
+    async createOAuthSession(input) {
+      const key = requireMcpEncryptionKey(encKey)
+      if (!await this.getServer(input.userId, input.serverId)) throw new Error('MCP server not found')
+      db.transaction((tx) => {
+        tx.update(schema.mcpOauthSessions).set({ status: 'cancelled', error: 'Replaced by a newer sign-in attempt.', updatedAt: input.createdAt }).where(and(eq(schema.mcpOauthSessions.userId, input.userId), eq(schema.mcpOauthSessions.serverId, input.serverId), eq(schema.mcpOauthSessions.status, 'pending'))).run()
+        tx.insert(schema.mcpOauthSessions).values({ ...input, codeVerifier: encrypt(input.codeVerifier, key) }).run()
+      })
+    },
+
+    async getOAuthSession(userId, serverId, sessionId) {
+      const where = and(
+        eq(schema.mcpOauthSessions.userId, userId),
+        eq(schema.mcpOauthSessions.serverId, serverId),
+        ...(sessionId ? [eq(schema.mcpOauthSessions.id, sessionId)] : []),
+      )
+      const row = db.select().from(schema.mcpOauthSessions).where(where).orderBy(sql`${schema.mcpOauthSessions.status} = 'pending' DESC`, desc(schema.mcpOauthSessions.createdAt)).limit(1).all()[0]
+      return row ? toSession(row) : null
+    },
+
+    async getOAuthSessionByStateHash(stateHash) {
+      const row = db.select().from(schema.mcpOauthSessions).where(eq(schema.mcpOauthSessions.stateHash, stateHash)).limit(1).all()[0]
+      return row ? toSession(row) : null
+    },
+
+    async updateOAuthSession(userId, serverId, sessionId, input) {
+      return db.update(schema.mcpOauthSessions).set({ ...input, updatedAt: input.updatedAt ?? Date.now() }).where(and(eq(schema.mcpOauthSessions.userId, userId), eq(schema.mcpOauthSessions.serverId, serverId), eq(schema.mcpOauthSessions.id, sessionId))).run().changes > 0
+    },
+
+    async consumeOAuthSession(stateHash, now) {
+      return db.transaction((tx) => {
+        const row = tx.select().from(schema.mcpOauthSessions).where(and(eq(schema.mcpOauthSessions.stateHash, stateHash), eq(schema.mcpOauthSessions.status, 'pending'), isNull(schema.mcpOauthSessions.consumedAt))).limit(1).all()[0]
+        if (!row || row.expiresAt <= now) return null
+        const changed = tx.update(schema.mcpOauthSessions).set({ consumedAt: now, updatedAt: now }).where(and(eq(schema.mcpOauthSessions.id, row.id), eq(schema.mcpOauthSessions.status, 'pending'), isNull(schema.mcpOauthSessions.consumedAt))).run().changes
+        return changed ? toSession({ ...row, consumedAt: now, updatedAt: now }) : null
+      })
+    },
+
+    async cleanupExpiredOAuthSessions(now, limit) {
+      const rows = db.select({ id: schema.mcpOauthSessions.id }).from(schema.mcpOauthSessions).where(and(eq(schema.mcpOauthSessions.status, 'pending'), lte(schema.mcpOauthSessions.expiresAt, now))).limit(Math.max(0, limit)).all()
+      for (const row of rows) db.update(schema.mcpOauthSessions).set({ status: 'expired', updatedAt: now }).where(eq(schema.mcpOauthSessions.id, row.id)).run()
+      return rows.length
     },
   }
+}
+
+function requireMcpEncryptionKey(encKey: string | null): string {
+  if (!encKey) throw new Error('ENCRYPTION_KEY is required for MCP OAuth persistence')
+  return encKey
 }
 
 function createTelegramRepo(db: DrizzleInstance): TelegramRepository {
@@ -1224,6 +1341,8 @@ export function createDatabase(url: string): DrizzleInstance {
     );
     CREATE TABLE IF NOT EXISTS mcp_servers (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      auth_mode TEXT NOT NULL DEFAULT 'auto',
       name TEXT NOT NULL,
       transport TEXT NOT NULL,
       command TEXT,
@@ -1240,12 +1359,35 @@ export function createDatabase(url: string): DrizzleInstance {
     );
     CREATE TABLE IF NOT EXISTS mcp_tools (
       id TEXT PRIMARY KEY,
-      server_id TEXT NOT NULL REFERENCES mcp_servers(id),
+      server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
       remote_name TEXT NOT NULL,
       registered_name TEXT NOT NULL,
       description TEXT,
       input_schema TEXT,
       enabled_for_new_sessions INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mcp_oauth_credentials (
+      server_id TEXT PRIMARY KEY REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      resource_url TEXT NOT NULL,
+      tokens TEXT,
+      client_information TEXT,
+      discovery TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mcp_oauth_sessions (
+      id TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      state_hash TEXT UNIQUE NOT NULL,
+      code_verifier TEXT NOT NULL,
+      status TEXT NOT NULL,
+      error TEXT,
+      expires_at INTEGER NOT NULL,
+      consumed_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -1289,6 +1431,10 @@ export function createDatabase(url: string): DrizzleInstance {
     CREATE INDEX IF NOT EXISTS mcp_servers_enabled_idx ON mcp_servers(enabled);
     CREATE INDEX IF NOT EXISTS mcp_tools_server_id_idx ON mcp_tools(server_id);
     CREATE INDEX IF NOT EXISTS mcp_tools_registered_name_idx ON mcp_tools(registered_name);
+    CREATE INDEX IF NOT EXISTS mcp_oauth_credentials_user_id_idx ON mcp_oauth_credentials(user_id);
+    CREATE INDEX IF NOT EXISTS mcp_oauth_sessions_owner_idx ON mcp_oauth_sessions(user_id, server_id);
+    CREATE INDEX IF NOT EXISTS mcp_oauth_sessions_expiry_idx ON mcp_oauth_sessions(expires_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS mcp_oauth_sessions_one_pending_idx ON mcp_oauth_sessions(user_id, server_id) WHERE status = 'pending';
     CREATE INDEX IF NOT EXISTS telegram_connections_user_id_idx ON telegram_connections(user_id);
     CREATE INDEX IF NOT EXISTS telegram_connections_status_idx ON telegram_connections(status);
     CREATE INDEX IF NOT EXISTS telegram_message_links_session_id_idx ON telegram_message_links(session_id);
@@ -1302,6 +1448,33 @@ export function createDatabase(url: string): DrizzleInstance {
   try { sqlite.exec(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT REFERENCES sessions(id);`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE sessions ADD COLUMN forked_from_item_id TEXT REFERENCES items(id);`) } catch { /* already exists */ }
   try { sqlite.exec(`ALTER TABLE sessions ADD COLUMN source TEXT;`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE mcp_servers ADD COLUMN user_id TEXT REFERENCES users(id);`) } catch { /* already exists */ }
+  try { sqlite.exec(`ALTER TABLE mcp_servers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'auto';`) } catch { /* already exists */ }
+  sqlite.exec(`
+    UPDATE mcp_servers
+    SET user_id = (SELECT id FROM users ORDER BY created_at ASC LIMIT 1)
+    WHERE user_id IS NULL;
+    UPDATE mcp_servers
+    SET auth_mode = CASE
+      WHEN transport = 'stdio' THEN 'none'
+      WHEN bearer_token IS NOT NULL AND bearer_token != '' THEN 'bearer'
+      ELSE 'auto'
+    END
+    WHERE auth_mode = 'auto';
+  `)
+  const orphanedMcpServers = (sqlite.prepare(`SELECT COUNT(*) AS count FROM mcp_servers WHERE user_id IS NULL`).get() as { count: number }).count
+  if (orphanedMcpServers > 0) {
+    throw new Error('Existing MCP servers require an application user before migration; create an API key and restart')
+  }
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS mcp_servers_user_id_idx ON mcp_servers(user_id);
+    CREATE TRIGGER IF NOT EXISTS mcp_servers_require_user_insert
+      BEFORE INSERT ON mcp_servers WHEN NEW.user_id IS NULL
+      BEGIN SELECT RAISE(ABORT, 'mcp_servers.user_id is required'); END;
+    CREATE TRIGGER IF NOT EXISTS mcp_servers_require_user_update
+      BEFORE UPDATE OF user_id ON mcp_servers WHEN NEW.user_id IS NULL
+      BEGIN SELECT RAISE(ABORT, 'mcp_servers.user_id is required'); END;
+  `)
 
   return drizzle(sqlite, { schema })
 }
@@ -1332,7 +1505,7 @@ export class SQLiteRepositories {
     this.systemPrompts = createSystemPromptRepo(db)
     this.preferences = createPreferenceRepo(db)
     this.workflowRuns = createWorkflowRunRepo(db)
-    this.mcp = createMcpRepo(db)
+    this.mcp = createMcpRepo(db, encKey)
     this.telegram = createTelegramRepo(db)
   }
 }

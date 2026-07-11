@@ -11,7 +11,11 @@ function getClientIp(c: Context, trustProxy: boolean): string {
     if (realIp) return realIp
   }
 
-  return getConnInfo(c).remote.address ?? 'unknown'
+  try {
+    return getConnInfo(c).remote.address ?? 'unknown'
+  } catch {
+    return 'unknown'
+  }
 }
 
 function getUserId(c: Context): string | undefined {
