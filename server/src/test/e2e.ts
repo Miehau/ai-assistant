@@ -649,14 +649,14 @@ async function main() {
         },
       },
     )
-    assert(second.sessionId === firstSessionId && !second.forked, 'Telegram free message continues the current chat session')
-    await waitForTelegramBotReplies(runtime, firstSessionId, 2)
-    assert(sentMessages.some((payload) => payload.reply_to_message_id === 11), 'Telegram continuation reply is anchored to the inbound message')
+    assert(second.sessionId !== firstSessionId && !second.forked, 'Telegram non-reply message starts a new session')
+    await waitForTelegramBotReplies(runtime, second.sessionId!, 1)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 11), 'Telegram new-session reply is anchored to the inbound message')
 
     const secondSessionLinks = runtime.db
       .select()
       .from(schema.telegramMessageLinks)
-      .where(eq(schema.telegramMessageLinks.sessionId, firstSessionId))
+      .where(eq(schema.telegramMessageLinks.sessionId, second.sessionId!))
       .all()
       .sort((a, b) => a.createdAt - b.createdAt)
     const secondBotReplyId = secondSessionLinks[secondSessionLinks.length - 1]?.telegramMessageId
@@ -681,6 +681,14 @@ async function main() {
     await waitForTelegramBotReplies(runtime, newFromReply.sessionId!, 1)
     assert(sentMessages.some((payload) => payload.reply_to_message_id === 12), '/new with text replies to the command message')
 
+    const newSessionLinks = runtime.db
+      .select()
+      .from(schema.telegramMessageLinks)
+      .where(eq(schema.telegramMessageLinks.sessionId, newFromReply.sessionId!))
+      .all()
+      .sort((a, b) => a.createdAt - b.createdAt)
+    const newBotReplyId = newSessionLinks[newSessionLinks.length - 1]?.telegramMessageId
+
     const continuedNew = await telegram.processWebhook(
       telegramConn.id,
       telegramConnRow.webhookPathSecret,
@@ -689,13 +697,14 @@ async function main() {
         update_id: 5,
         message: {
           message_id: 13,
-          text: 'continue separate topic without replying',
+          text: 'continue separate topic by replying',
           from: { id: 42 },
           chat: { id: 500, type: 'private' },
+          reply_to_message: { message_id: newBotReplyId! },
         },
       },
     )
-    assert(continuedNew.sessionId === newFromReply.sessionId && !continuedNew.forked, 'Telegram free message after /new continues that new session')
+    assert(continuedNew.sessionId === newFromReply.sessionId && !continuedNew.forked, 'Replying to a /new session continues it')
     await waitForTelegramBotReplies(runtime, newFromReply.sessionId!, 2)
     assert(sentMessages.some((payload) => payload.reply_to_message_id === 13), 'Telegram reply after /new continuation is anchored to the inbound message')
 
@@ -717,7 +726,7 @@ async function main() {
     assert(commandOnly.sessionId !== firstSessionId && !commandOnly.forked, '/new command-only advances the current chat session')
     assert(sentMessages.some((payload) => (
       payload.reply_to_message_id === 14 &&
-      payload.text === 'New Telegram session started. Send the next message to continue it.'
+      payload.text === 'New Telegram session started. Reply to this message to continue it.'
     )), '/new command-only acknowledgement is anchored to the command message')
 
     const commandOnlyLinks = runtime.db
@@ -740,10 +749,11 @@ async function main() {
           text: 'first prompt after command-only new',
           from: { id: 42 },
           chat: { id: 500, type: 'private' },
+          reply_to_message: { message_id: commandOnlyAnchorId! },
         },
       },
     )
-    assert(resumedNew.sessionId === commandOnly.sessionId && !resumedNew.forked, 'Free message after /new command-only continues that new session')
+    assert(resumedNew.sessionId === commandOnly.sessionId && !resumedNew.forked, 'Reply to /new command-only acknowledgement continues that session')
     await waitForTelegramBotReplies(runtime, commandOnly.sessionId!, 2)
     assert(sentMessages.some((payload) => payload.reply_to_message_id === 15), 'Telegram reply after /new command-only is anchored to the inbound message')
 
@@ -763,7 +773,7 @@ async function main() {
       },
     )
     assert(resumedFirst.sessionId === firstSessionId && !resumedFirst.forked, 'Replying to an earlier message brings that Telegram session back into scope')
-    await waitForTelegramBotReplies(runtime, firstSessionId, 3)
+    await waitForTelegramBotReplies(runtime, firstSessionId, 2)
     assert(sentMessages.some((payload) => payload.reply_to_message_id === 16), 'Telegram resumed-session reply is anchored to the inbound reply')
 
     const voice = await telegram.processWebhook(
@@ -783,11 +793,12 @@ async function main() {
           },
           from: { id: 42 },
           chat: { id: 500, type: 'private' },
+          reply_to_message: { message_id: firstBotReplyId! },
         },
       },
     )
-    assert(voice.sessionId === firstSessionId && !voice.forked, 'Telegram voice message is transcribed and continues the active session')
-    await waitForTelegramBotReplies(runtime, firstSessionId, 4)
+    assert(voice.sessionId === firstSessionId && !voice.forked, 'Telegram voice reply continues the replied-to session')
+    await waitForTelegramBotReplies(runtime, firstSessionId, 3)
     assert(sentMessages.some((payload) => payload.reply_to_message_id === 17), 'Telegram voice reply is anchored to the inbound message')
 
     const firstSessionAgents = await repos.agents.listBySession(firstSessionId)
@@ -799,8 +810,8 @@ async function main() {
     )
 
     const sessionCountAfterTelegram = (await repos.sessions.listByUser(devUser!.id)).length
-    assert(sessionCountAfterTelegram === sessionCountBeforeTelegram + 4, 'Telegram tests created one direct greeting session, one initial session, and two /new sessions')
-    assert(secondBotReplyId !== firstBotReplyId, 'Continuing the Telegram thread advances the head message id')
+    assert(sessionCountAfterTelegram === sessionCountBeforeTelegram + 5, 'Telegram tests created one session per non-reply message and two explicit /new sessions')
+    assert(secondBotReplyId !== firstBotReplyId, 'Separate Telegram sessions have distinct reply anchors')
 
     // ──────────────────────────────────────────
     // 15. Cleanup — delete test session (cascades agents, items, tool outputs)

@@ -473,7 +473,7 @@ export class TelegramService {
       const note = await this.sendBotMessage(
         connection,
         message.chat.id,
-        'New Telegram session started. Send the next message to continue it.',
+        'New Telegram session started. Reply to this message to continue it.',
         message.message_id,
       )
       if (note != null) {
@@ -627,9 +627,8 @@ export class TelegramService {
   /**
    * Choose which app session a Telegram message belongs to.
    *
-   * /new starts a fresh Telegram session. Ordinary non-reply messages continue
-   * the current chat session, while replies explicitly select the session linked
-   * to the replied-to Telegram message.
+   * /new and ordinary non-reply messages start a fresh Telegram session. Replies
+   * continue the session linked to the replied-to Telegram message.
    */
   private async resolveSession(
     connection: TelegramConnectionRow,
@@ -646,10 +645,6 @@ export class TelegramService {
     }
 
     if (!replyToMessageId) {
-      const head = await this.getChatHeadLink(connection.id, chatId)
-      if (head) {
-        return { sessionId: head.sessionId, forked: false }
-      }
       const session = await this.createTelegramSession(connection, content)
       return { sessionId: session.id, forked: false }
     }
@@ -855,11 +850,6 @@ export class TelegramService {
   /** Find the app transcript item associated with a Telegram message. */
   private async getMessageLink(connectionId: string, chatId: string, messageId: number): Promise<TelegramMessageLinkRow | null> {
     return this.runtime.repositories.telegram.getMessageLink(connectionId, chatId, messageId)
-  }
-
-  /** Return the newest Telegram message linked in a chat. */
-  private async getChatHeadLink(connectionId: string, chatId: string): Promise<TelegramMessageLinkRow | null> {
-    return this.runtime.repositories.telegram.getChatHeadLink(connectionId, chatId)
   }
 
   /** Persist the mapping between a Telegram message and an app session/item. */
