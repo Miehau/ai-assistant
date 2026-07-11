@@ -9,7 +9,7 @@ import type {
   StepExecutionOutcome,
   ToolCallSpec,
 } from './types.js'
-import type { WaitingFor } from '../domain/types.js'
+import type { Item, WaitingFor } from '../domain/types.js'
 import type { LLMProvider, LLMRequest, LLMToolDefinition, LLMResponse } from '../providers/types.js'
 import type { ToolCall } from '../tools/types.js'
 import { startAgent, completeAgent, failAgent, cancelAgent, waitForMany } from '../domain/agent.js'
@@ -373,9 +373,36 @@ export async function runAgent(
     }
   }
 
-  return deps.observability
-    ? deps.observability.traceAgent({ agent: ctx.agent }, executeRun)
-    : executeRun()
+  if (!deps.observability) {
+    return executeRun()
+  }
+
+  const traceInput = await resolveAgentTraceInput(ctx.items, agentId, ctx.agent.task)
+  return deps.observability.traceAgent({
+    agent: ctx.agent,
+    input: traceInput.input,
+    inputSource: traceInput.source,
+  }, executeRun)
+}
+
+async function resolveAgentTraceInput(
+  items: OrchestratorDeps['items'],
+  agentId: string,
+  fallback: string,
+): Promise<{ input: string; source: string }> {
+  const history = await items.listByAgent(agentId)
+  const latestUser = latestMessage(history, 'user')
+  if (latestUser?.content) {
+    return { input: latestUser.content, source: 'latest_user_message' }
+  }
+  return { input: fallback, source: 'agent_task' }
+}
+
+function latestMessage(items: Item[], role: 'user' | 'assistant'): Item | undefined {
+  return [...items].reverse().find((item) => (
+    item.type === 'message' &&
+    item.role === role
+  ))
 }
 
 // ---------------------------------------------------------------------------

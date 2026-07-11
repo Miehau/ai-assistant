@@ -112,9 +112,10 @@ class LangfuseObservability implements LLMObservability {
           model: context.agent.config.model,
           maxTurns: context.agent.config.max_turns,
           responseFormat: context.agent.config.response_format ?? 'markdown',
+          inputSource: context.inputSource ?? 'agent_task',
         }
         agentSpan.update({
-          input: summarizeValue(context.agent.task, this.captureContent, this.maxContentChars),
+          input: summarizeValue(context.input ?? context.agent.task, this.captureContent, this.maxContentChars),
           metadata,
         })
 
