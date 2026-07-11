@@ -33,7 +33,8 @@ jobs:
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
-      - uses: dtolnay/rust-toolchain@stable
+      # Tauri v1's Wry 0.24 stack does not compile on Linux with Rust >= 1.94.
+      - uses: dtolnay/rust-toolchain@1.93.1
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
