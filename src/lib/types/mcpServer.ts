@@ -1,22 +1,39 @@
+export type McpTransport = "stdio" | "streamable_http";
+export type McpAuthMode = "auto" | "none" | "bearer" | "oauth";
+export type McpAuthStatus = "not_required" | "required" | "pending" | "authorized" | "error";
+export type McpConnectionStatus = "disabled" | "connecting" | "connected" | "error";
+export type McpOAuthSessionStatus = "pending" | "authorized" | "denied" | "expired" | "cancelled" | "error";
+
+export interface McpOAuthSession {
+    id: string;
+    serverId: string;
+    status: McpOAuthSessionStatus;
+    authorizationUrl?: string;
+    expiresAt: number;
+    error: string | null;
+}
+
 export interface McpServer {
     id: string;
     name: string;
-    transport: "stdio" | "streamable_http";
+    transport: McpTransport;
     command: string;
     args: string[];
     env: Record<string, string>;
     cwd: string | null;
     url: string;
     bearerTokenConfigured: boolean;
+    authMode: McpAuthMode;
+    authStatus: McpAuthStatus;
+    connectionStatus: McpConnectionStatus;
+    oauthCredentialsConfigured: boolean;
+    oauthSession: McpOAuthSession | null;
     enabled: boolean;
-    status: "disabled" | "connected" | "error";
+    status: "disabled" | "connecting" | "connected" | "error";
     error: string | null;
     createdAt: number;
     updatedAt: number;
     tools: McpTool[];
-    auth_type: string;
-    api_key?: string;
-    created_at: number;
 }
 
 export interface McpTool {
@@ -33,29 +50,25 @@ export interface McpTool {
 
 export interface CreateMcpServerInput {
     name: string;
-    transport?: "stdio" | "streamable_http";
+    transport?: McpTransport;
     command?: string | null;
     args?: string[];
     env?: Record<string, string>;
     cwd?: string | null;
     url?: string | null;
     bearerToken?: string | null;
+    authMode?: McpAuthMode;
     enabled?: boolean;
-    auth_type?: string;
-    api_key?: string;
 }
 
-export interface UpdateMcpServerInput {
+export interface UpdateMcpServerInput extends Partial<CreateMcpServerInput> {
     id: string;
-    name?: string;
-    transport?: "stdio" | "streamable_http";
-    command?: string | null;
-    args?: string[];
-    env?: Record<string, string>;
-    cwd?: string | null;
-    url?: string | null;
-    bearerToken?: string | null;
-    enabled?: boolean;
-    auth_type?: string;
-    api_key?: string;
+}
+
+export interface McpOAuthStartResponse {
+    session: McpOAuthSession & { authorizationUrl: string };
+}
+
+export interface McpOAuthSessionResponse {
+    session: McpOAuthSession | null;
 }

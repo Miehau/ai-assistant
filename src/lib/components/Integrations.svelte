@@ -11,9 +11,7 @@
   import * as Select from "$lib/components/ui/select";
   import { Plus, Edit2, Check, X, Eye, EyeOff, Trash2 } from "lucide-svelte";
   import type { IntegrationMetadata, GoogleCalendarListItem } from "$lib/types/integrations";
-  import type { McpServer } from "$lib/types/mcpServer";
   import type { IntegrationConnection } from "$lib/types/integrationConnection";
-  import { mcpServerService } from "$lib/services/mcpServerService.svelte";
   import { integrationConnectionService } from "$lib/services/integrationConnectionService.svelte";
 
   let { embedded = false }: { embedded?: boolean } = $props();
@@ -57,25 +55,7 @@
   let showEditConnectionAccessToken = $state(false);
   let showEditConnectionRefreshToken = $state(false);
 
-  let newName = $state("");
-  let newUrl = $state("");
-  let newAuthType = $state("api_key");
-  let newApiKey = $state("");
-  let showNewApiKey = $state(false);
-  let isAdding = $state(false);
   let isLoading = $state(false);
-
-  let editingId = $state<string | null>(null);
-  let editName = $state("");
-  let editUrl = $state("");
-  let editAuthType = $state("api_key");
-  let editApiKey = $state("");
-  let showEditApiKey = $state(false);
-
-  const authOptions = [
-    { value: "none", label: "No auth" },
-    { value: "api_key", label: "API key" }
-  ];
   const connectionIntegrations = $derived(
     integrations.filter((item) => item.id !== "mcp" && item.id !== "gmail")
   );
@@ -83,7 +63,6 @@
   onMount(async () => {
     await loadIntegrations();
     await integrationConnectionService.loadConnections();
-    await mcpServerService.loadServers();
   });
 
   $effect(() => {
@@ -118,10 +97,6 @@
         newConnectionIntegrationId = first.id;
       }
     }
-  }
-
-  function authLabel(value: string) {
-    return authOptions.find((option) => option.value === value)?.label ?? value;
   }
 
   function integrationLabel(id: string) {
@@ -419,86 +394,6 @@
     }
   }
 
-  async function addServer() {
-    if (!newName.trim() || !newUrl.trim()) return;
-
-    isLoading = true;
-    try {
-      const apiKey = newAuthType === "api_key" ? newApiKey.trim() || undefined : undefined;
-      const server = await mcpServerService.createServer({
-        name: newName.trim(),
-        url: newUrl.trim(),
-        auth_type: newAuthType,
-        api_key: apiKey
-      });
-      if (server) {
-        newName = "";
-        newUrl = "";
-        newAuthType = "api_key";
-        newApiKey = "";
-        isAdding = false;
-      }
-    } finally {
-      isLoading = false;
-    }
-  }
-
-  function startEdit(server: McpServer) {
-    editingId = server.id;
-    editName = server.name;
-    editUrl = server.url;
-    editAuthType = server.auth_type || "api_key";
-    editApiKey = server.api_key || "";
-    showEditApiKey = false;
-  }
-
-  function cancelEdit() {
-    editingId = null;
-    editName = "";
-    editUrl = "";
-    editAuthType = "api_key";
-    editApiKey = "";
-    showEditApiKey = false;
-  }
-
-  async function saveEdit() {
-    if (!editingId || !editName.trim() || !editUrl.trim()) return;
-
-    isLoading = true;
-    try {
-      const apiKey = editAuthType === "api_key" ? editApiKey.trim() : "";
-      await mcpServerService.updateServer({
-        id: editingId,
-        name: editName.trim(),
-        url: editUrl.trim(),
-        auth_type: editAuthType,
-        api_key: apiKey
-      });
-      cancelEdit();
-    } finally {
-      isLoading = false;
-    }
-  }
-
-  async function deleteServer(id: string) {
-    if (!confirm("Are you sure you want to delete this MCP server?")) return;
-
-    isLoading = true;
-    try {
-      await mcpServerService.deleteServer(id);
-    } finally {
-      isLoading = false;
-    }
-  }
-
-  async function testServer(id: string) {
-    isLoading = true;
-    try {
-      await mcpServerService.testServer(id);
-    } finally {
-      isLoading = false;
-    }
-  }
 </script>
 
 <div class={embedded ? "space-y-5" : "mt-8"}>
@@ -512,7 +407,7 @@
       <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Integrations</p>
       <h3 class="text-xl font-semibold">Integration catalog</h3>
       <p class="text-sm text-muted-foreground/70 mt-1">
-        Available plugins and their capabilities. Configure MCP servers below.
+        Available plugins and their capabilities.
       </p>
     {/if}
   </div>
@@ -1109,304 +1004,4 @@
     </Card.Content>
   </Card.Root>
 
-  <div class={embedded ? "mt-5 mb-2" : "mt-8 mb-4"}>
-    {#if embedded}
-      <h3 class="text-sm font-semibold">MCP servers</h3>
-      <p class="text-[11px] text-muted-foreground/70 mt-1">
-        Add local or remote MCP servers and manage auth.
-      </p>
-    {:else}
-      <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">MCP</p>
-      <h3 class="text-xl font-semibold">MCP servers</h3>
-      <p class="text-sm text-muted-foreground/70 mt-1">
-        Add local or remote MCP servers, manage auth, and keep connections organized.
-      </p>
-    {/if}
-  </div>
-
-  <Card.Root
-    class={embedded ? "border-white/10 bg-white/5 shadow-none rounded-2xl" : "surface-card border-0 overflow-hidden"}
-  >
-    <Card.Content class={embedded ? "p-4 pt-4" : "p-6"}>
-      <div class="space-y-6">
-        {#each mcpServerService.servers as server (server.id)}
-          <div class="pb-6 border-b surface-divider last:border-0 last:pb-0">
-            {#if editingId === server.id}
-              <div class="space-y-3">
-                <div>
-                  <label
-                    class="text-xs font-medium text-muted-foreground mb-1 block"
-                    for={`edit-mcp-name-${server.id}`}
-                  >
-                    Name
-                  </label>
-                  <Input
-                    id={`edit-mcp-name-${server.id}`}
-                    bind:value={editName}
-                    placeholder="My MCP Server"
-                    class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
-                  />
-                </div>
-                <div>
-                  <label
-                    class="text-xs font-medium text-muted-foreground mb-1 block"
-                    for={`edit-mcp-url-${server.id}`}
-                  >
-                    URL
-                  </label>
-                  <Input
-                    id={`edit-mcp-url-${server.id}`}
-                    bind:value={editUrl}
-                    placeholder="http://localhost:3000"
-                    class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
-                  />
-                </div>
-                <div>
-                  <p
-                    id={`edit-mcp-auth-type-${server.id}`}
-                    class="text-xs font-medium text-muted-foreground mb-1"
-                  >
-                    Auth type
-                  </p>
-                  <Select.Root
-                    selected={{ value: editAuthType, label: authLabel(editAuthType) }}
-                    onSelectedChange={(v) => {
-                      if (v) editAuthType = v.value;
-                    }}
-                  >
-                    <Select.Trigger
-                      class="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                      aria-labelledby={`edit-mcp-auth-type-${server.id}`}
-                    >
-                      <span>{authLabel(editAuthType)}</span>
-                    </Select.Trigger>
-                    <Select.Portal>
-                      <Select.Content>
-                        <Select.ScrollUpButton />
-                        <Select.Viewport>
-                          {#each authOptions as option}
-                            <Select.Item value={option.value}>
-                              {option.label}
-                            </Select.Item>
-                          {/each}
-                        </Select.Viewport>
-                        <Select.ScrollDownButton />
-                      </Select.Content>
-                    </Select.Portal>
-                  </Select.Root>
-                </div>
-                <div>
-                  <label
-                    class="text-xs font-medium text-muted-foreground mb-1 block"
-                    for={`edit-mcp-api-key-${server.id}`}
-                  >
-                    API Key (optional)
-                  </label>
-                  <div class="relative">
-                    <Input
-                      id={`edit-mcp-api-key-${server.id}`}
-                      type={showEditApiKey ? "text" : "password"}
-                      bind:value={editApiKey}
-                      placeholder="API key"
-                      class="pr-10 glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
-                      disabled={editAuthType !== "api_key"}
-                    />
-                    <button
-                      type="button"
-                      class="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground hover:text-foreground"
-                      onclick={() => showEditApiKey = !showEditApiKey}
-                      disabled={editAuthType !== "api_key"}
-                    >
-                      {#if showEditApiKey}
-                        <EyeOff class="h-4 w-4" />
-                      {:else}
-                        <Eye class="h-4 w-4" />
-                      {/if}
-                    </button>
-                  </div>
-                </div>
-                <div class="flex gap-2">
-                  <Button
-                    size="sm"
-                    class="glass-badge hover:glass-light"
-                    onclick={saveEdit}
-                    disabled={isLoading}
-                  >
-                    <Check class="h-4 w-4 mr-1" />
-                    Save
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onclick={cancelEdit}
-                  >
-                    <X class="h-4 w-4 mr-1" />
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            {:else}
-              <div class="flex items-start justify-between">
-                <div>
-                  <h3 class="text-sm font-medium">{server.name}</h3>
-                  <p class="text-xs text-muted-foreground mt-1 font-mono truncate max-w-md">{server.url}</p>
-                  <p class="text-xs text-muted-foreground mt-0.5">Auth: {authLabel(server.auth_type)}</p>
-                  {#if server.api_key}
-                    <p class="text-xs text-muted-foreground mt-0.5">API key configured</p>
-                  {/if}
-                </div>
-                <div class="flex gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    class="h-8"
-                    onclick={() => testServer(server.id)}
-                  >
-                    Test
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    class="h-8 w-8 hover:bg-white/5"
-                    onclick={() => startEdit(server)}
-                  >
-                    <Edit2 class="h-4 w-4" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    class="h-8 w-8 text-destructive hover:text-destructive hover:bg-white/5"
-                    onclick={() => deleteServer(server.id)}
-                  >
-                    <Trash2 class="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            {/if}
-          </div>
-        {/each}
-
-        {#if isAdding}
-          <div class="pt-6 border-t surface-divider space-y-3">
-            <h3 class="text-xs font-medium text-muted-foreground">Add MCP Server</h3>
-            <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block" for="new-mcp-name">
-                Name
-              </label>
-              <Input
-                id="new-mcp-name"
-                bind:value={newName}
-                placeholder="My MCP Server"
-                class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
-              />
-            </div>
-            <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block" for="new-mcp-url">
-                URL
-              </label>
-              <Input
-                id="new-mcp-url"
-                bind:value={newUrl}
-                placeholder="http://localhost:3000"
-                class="glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
-              />
-            </div>
-            <div>
-              <p id="new-mcp-auth-type" class="text-xs font-medium text-muted-foreground mb-1">
-                Auth type
-              </p>
-              <Select.Root
-                selected={{ value: newAuthType, label: authLabel(newAuthType) }}
-                onSelectedChange={(v) => {
-                  if (v) newAuthType = v.value;
-                }}
-              >
-                <Select.Trigger
-                  class="w-full h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                  aria-labelledby="new-mcp-auth-type"
-                >
-                  <span>{authLabel(newAuthType)}</span>
-                </Select.Trigger>
-                <Select.Portal>
-                  <Select.Content>
-                    <Select.ScrollUpButton />
-                    <Select.Viewport>
-                      {#each authOptions as option}
-                        <Select.Item value={option.value}>
-                          {option.label}
-                        </Select.Item>
-                      {/each}
-                    </Select.Viewport>
-                    <Select.ScrollDownButton />
-                  </Select.Content>
-                </Select.Portal>
-              </Select.Root>
-            </div>
-            <div>
-              <label class="text-xs font-medium text-muted-foreground mb-1 block" for="new-mcp-api-key">
-                API Key (optional)
-              </label>
-              <div class="relative">
-                <Input
-                  id="new-mcp-api-key"
-                  type={showNewApiKey ? "text" : "password"}
-                  bind:value={newApiKey}
-                  placeholder="API key"
-                  class="pr-10 glass-panel-minimal border-white/10 focus-within:ring-1 focus-within:ring-white/15"
-                  disabled={newAuthType !== "api_key"}
-                />
-                <button
-                  type="button"
-                  class="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground hover:text-foreground"
-                  onclick={() => showNewApiKey = !showNewApiKey}
-                  disabled={newAuthType !== "api_key"}
-                >
-                  {#if showNewApiKey}
-                    <EyeOff class="h-4 w-4" />
-                  {:else}
-                    <Eye class="h-4 w-4" />
-                  {/if}
-                </button>
-              </div>
-            </div>
-            <div class="flex gap-2">
-              <Button
-                size="sm"
-                class="glass-badge hover:glass-light"
-                onclick={addServer}
-                disabled={isLoading}
-              >
-                <Plus class="h-4 w-4 mr-1" />
-                Add
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onclick={() => {
-                  isAdding = false;
-                  newName = "";
-                  newUrl = "";
-                  newAuthType = "api_key";
-                  newApiKey = "";
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        {:else}
-          <div class="pt-6 border-t surface-divider">
-            <Button
-              size="sm"
-              class="glass-badge hover:glass-light"
-              onclick={() => isAdding = true}
-            >
-              <Plus class="h-4 w-4 mr-1" />
-              Add MCP server
-            </Button>
-          </div>
-        {/if}
-      </div>
-    </Card.Content>
-  </Card.Root>
 </div>

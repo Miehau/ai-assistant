@@ -24,7 +24,7 @@ import type { AgentTraceEntry } from './types/agent';
 import type { AgentEvent, AgentEventType } from './types/events';
 import type { ToolMetadata } from './types/tools';
 import type { IntegrationMetadata, GoogleCalendarListItem } from './types/integrations';
-import type { McpServer, CreateMcpServerInput, UpdateMcpServerInput } from './types/mcpServer';
+import type { McpServer, CreateMcpServerInput, UpdateMcpServerInput, McpOAuthSession, McpOAuthStartResponse, McpOAuthSessionResponse } from './types/mcpServer';
 import type {
     IntegrationConnection,
     CreateIntegrationConnectionInput,
@@ -51,6 +51,9 @@ export type {
     McpServer,
     CreateMcpServerInput,
     UpdateMcpServerInput,
+    McpOAuthSession,
+    McpOAuthStartResponse,
+    McpOAuthSessionResponse,
     IntegrationConnection,
     CreateIntegrationConnectionInput,
     UpdateIntegrationConnectionInput,

@@ -1,6 +1,6 @@
 import postgres from 'postgres'
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js'
-import { and, asc, desc, eq, isNull, max, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, max, or, sql, lte } from 'drizzle-orm'
 import { v4 as uuid } from 'uuid'
 import { encrypt, decrypt, deriveKey } from '../../lib/crypto.js'
 import * as schema from '../../db/schema-pg.js'
@@ -24,6 +24,8 @@ import type {
   SessionRepository,
   StoredMcpServer,
   StoredMcpTool,
+  StoredMcpOAuthCredentials,
+  StoredMcpOAuthSession,
   StoredTelegramConnection,
   StoredTelegramMessageLink,
   SystemPromptRecord,
@@ -177,6 +179,8 @@ function toSystemPromptRecord(row: typeof schema.systemPrompts.$inferSelect): Sy
 function toStoredMcpServer(row: typeof schema.mcpServers.$inferSelect): StoredMcpServer {
   return {
     id: row.id,
+    userId: row.userId,
+    authMode: row.authMode as StoredMcpServer['authMode'],
     name: row.name,
     transport: row.transport as StoredMcpServer['transport'],
     command: row.command ?? null,
@@ -772,20 +776,45 @@ function createWorkflowRunRepo(db: PgDrizzleInstance): WorkflowRunRepository {
   }
 }
 
-function createMcpRepo(db: PgDrizzleInstance): McpRepository {
+function createMcpRepo(db: PgDrizzleInstance, encKey: string | null): McpRepository {
+  const ownedTool = (userId: string) => sql`${schema.mcpTools.serverId} IN (SELECT id FROM mcp_servers WHERE user_id = ${userId})`
+  const decryptField = (value: string | null): string | undefined => value ? decrypt(value, requireMcpEncryptionKey(encKey)) : undefined
+  const toCredentials = (row: typeof schema.mcpOauthCredentials.$inferSelect): StoredMcpOAuthCredentials => ({
+    serverId: row.serverId,
+    userId: row.userId,
+    resourceUrl: row.resourceUrl,
+    tokens: decryptField(row.tokens),
+    clientInformation: decryptField(row.clientInformation),
+    discovery: decryptField(row.discovery),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  })
+  const toSession = (row: typeof schema.mcpOauthSessions.$inferSelect): StoredMcpOAuthSession => ({
+    id: row.id,
+    serverId: row.serverId,
+    userId: row.userId,
+    stateHash: row.stateHash,
+    codeVerifier: decrypt(row.codeVerifier, requireMcpEncryptionKey(encKey)),
+    status: row.status as StoredMcpOAuthSession['status'],
+    error: row.error ?? null,
+    expiresAt: row.expiresAt,
+    consumedAt: row.consumedAt ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  })
   return {
-    async listEnabledServers(): Promise<StoredMcpServer[]> {
-      const rows = await db.select().from(schema.mcpServers).where(eq(schema.mcpServers.enabled, true))
+    async listEnabledServers(userId): Promise<StoredMcpServer[]> {
+      const rows = await db.select().from(schema.mcpServers).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.enabled, true)))
       return rows.map(toStoredMcpServer)
     },
 
-    async listServers(): Promise<StoredMcpServer[]> {
-      const rows = await db.select().from(schema.mcpServers).orderBy(asc(schema.mcpServers.name))
+    async listServers(userId): Promise<StoredMcpServer[]> {
+      const rows = await db.select().from(schema.mcpServers).where(eq(schema.mcpServers.userId, userId)).orderBy(asc(schema.mcpServers.name))
       return rows.map(toStoredMcpServer)
     },
 
-    async getServer(id: string): Promise<StoredMcpServer | null> {
-      const rows = await db.select().from(schema.mcpServers).where(eq(schema.mcpServers.id, id)).limit(1)
+    async getServer(userId, id): Promise<StoredMcpServer | null> {
+      const rows = await db.select().from(schema.mcpServers).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.id, id))).limit(1)
       return rows[0] ? toStoredMcpServer(rows[0]) : null
     },
 
@@ -793,50 +822,135 @@ function createMcpRepo(db: PgDrizzleInstance): McpRepository {
       await db.insert(schema.mcpServers).values(input)
     },
 
-    async updateServer(id, input): Promise<void> {
-      await db.update(schema.mcpServers).set({ ...input, updatedAt: input.updatedAt ?? Date.now() } as any).where(eq(schema.mcpServers.id, id))
+    async updateServer(userId, id, input): Promise<boolean> {
+      const rows = await db.update(schema.mcpServers).set({ ...input, updatedAt: input.updatedAt ?? Date.now() } as any).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.id, id))).returning({ id: schema.mcpServers.id })
+      return rows.length > 0
     },
 
-    async deleteServerAndTools(id: string): Promise<void> {
-      await db.transaction(async (tx) => {
+    async deleteServerAndTools(userId, id): Promise<boolean> {
+      return db.transaction(async (tx) => {
+        const owned = await tx.select({ id: schema.mcpServers.id }).from(schema.mcpServers).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.id, id))).limit(1)
+        if (!owned[0]) return false
+        await tx.delete(schema.mcpOauthSessions).where(and(eq(schema.mcpOauthSessions.userId, userId), eq(schema.mcpOauthSessions.serverId, id)))
+        await tx.delete(schema.mcpOauthCredentials).where(and(eq(schema.mcpOauthCredentials.userId, userId), eq(schema.mcpOauthCredentials.serverId, id)))
         await tx.delete(schema.mcpTools).where(eq(schema.mcpTools.serverId, id))
-        await tx.delete(schema.mcpServers).where(eq(schema.mcpServers.id, id))
+        await tx.delete(schema.mcpServers).where(and(eq(schema.mcpServers.userId, userId), eq(schema.mcpServers.id, id)))
+        return true
       })
     },
 
-    async listTools(serverId?: string): Promise<StoredMcpTool[]> {
+    async listTools(userId, serverId): Promise<StoredMcpTool[]> {
       const rows = serverId
-        ? await db.select().from(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId)).orderBy(asc(schema.mcpTools.remoteName))
-        : await db.select().from(schema.mcpTools).orderBy(asc(schema.mcpTools.remoteName))
+        ? await db.select().from(schema.mcpTools).where(and(eq(schema.mcpTools.serverId, serverId), ownedTool(userId))).orderBy(asc(schema.mcpTools.remoteName))
+        : await db.select().from(schema.mcpTools).where(ownedTool(userId)).orderBy(asc(schema.mcpTools.remoteName))
       return rows.map(toStoredMcpTool)
     },
 
-    async getTool(id: string): Promise<StoredMcpTool | null> {
-      const rows = await db.select().from(schema.mcpTools).where(eq(schema.mcpTools.id, id)).limit(1)
+    async getTool(userId, id): Promise<StoredMcpTool | null> {
+      const rows = await db.select().from(schema.mcpTools).where(and(eq(schema.mcpTools.id, id), ownedTool(userId))).limit(1)
       return rows[0] ? toStoredMcpTool(rows[0]) : null
     },
 
-    async getToolByServerAndRemoteName(serverId: string, remoteName: string): Promise<StoredMcpTool | null> {
+    async getToolByServerAndRemoteName(userId, serverId, remoteName): Promise<StoredMcpTool | null> {
       const rows = await db
         .select()
         .from(schema.mcpTools)
-        .where(and(eq(schema.mcpTools.serverId, serverId), eq(schema.mcpTools.remoteName, remoteName)))
+        .where(and(eq(schema.mcpTools.serverId, serverId), eq(schema.mcpTools.remoteName, remoteName), ownedTool(userId)))
         .limit(1)
       return rows[0] ? toStoredMcpTool(rows[0]) : null
     },
 
-    async createTool(input): Promise<void> {
+    async createTool(userId, input): Promise<boolean> {
+      if (!await this.getServer(userId, input.serverId)) return false
       await db.insert(schema.mcpTools).values(input)
+      return true
     },
 
-    async updateTool(id, input): Promise<void> {
-      await db.update(schema.mcpTools).set({ ...input, updatedAt: input.updatedAt ?? Date.now() } as any).where(eq(schema.mcpTools.id, id))
+    async updateTool(userId, id, input): Promise<boolean> {
+      const rows = await db.update(schema.mcpTools).set({ ...input, updatedAt: input.updatedAt ?? Date.now() } as any).where(and(eq(schema.mcpTools.id, id), ownedTool(userId))).returning({ id: schema.mcpTools.id })
+      return rows.length > 0
     },
 
-    async deleteToolsForServer(serverId: string): Promise<void> {
-      await db.delete(schema.mcpTools).where(eq(schema.mcpTools.serverId, serverId))
+    async deleteToolsForServer(userId, serverId): Promise<void> {
+      await db.delete(schema.mcpTools).where(and(eq(schema.mcpTools.serverId, serverId), ownedTool(userId)))
+    },
+
+    async getOAuthCredentials(userId, serverId) {
+      const rows = await db.select().from(schema.mcpOauthCredentials).where(and(eq(schema.mcpOauthCredentials.userId, userId), eq(schema.mcpOauthCredentials.serverId, serverId))).limit(1)
+      return rows[0] ? toCredentials(rows[0]) : null
+    },
+
+    async saveOAuthCredentials(input) {
+      const key = requireMcpEncryptionKey(encKey)
+      if (!await this.getServer(input.userId, input.serverId)) throw new Error('MCP server not found')
+      const current = await this.getOAuthCredentials(input.userId, input.serverId)
+      const tokens = input.tokens === undefined ? current?.tokens : input.tokens
+      const clientInformation = input.clientInformation === undefined ? current?.clientInformation : input.clientInformation
+      const discovery = input.discovery === undefined ? current?.discovery : input.discovery
+      const values = {
+        serverId: input.serverId,
+        userId: input.userId,
+        resourceUrl: input.resourceUrl,
+        tokens: tokens ? encrypt(tokens, key) : null,
+        clientInformation: clientInformation ? encrypt(clientInformation, key) : null,
+        discovery: discovery ? encrypt(discovery, key) : null,
+        createdAt: input.updatedAt,
+        updatedAt: input.updatedAt,
+      }
+      await db.insert(schema.mcpOauthCredentials).values(values).onConflictDoUpdate({ target: schema.mcpOauthCredentials.serverId, set: { ...values, createdAt: sql`mcp_oauth_credentials.created_at` } })
+    },
+
+    async deleteOAuthCredentials(userId, serverId) {
+      const rows = await db.delete(schema.mcpOauthCredentials).where(and(eq(schema.mcpOauthCredentials.userId, userId), eq(schema.mcpOauthCredentials.serverId, serverId))).returning({ id: schema.mcpOauthCredentials.serverId })
+      return rows.length > 0
+    },
+
+    async createOAuthSession(input) {
+      const key = requireMcpEncryptionKey(encKey)
+      if (!await this.getServer(input.userId, input.serverId)) throw new Error('MCP server not found')
+      await db.transaction(async (tx) => {
+        await tx.update(schema.mcpOauthSessions).set({ status: 'cancelled', error: 'Replaced by a newer sign-in attempt.', updatedAt: input.createdAt }).where(and(eq(schema.mcpOauthSessions.userId, input.userId), eq(schema.mcpOauthSessions.serverId, input.serverId), eq(schema.mcpOauthSessions.status, 'pending')))
+        await tx.insert(schema.mcpOauthSessions).values({ ...input, codeVerifier: encrypt(input.codeVerifier, key) })
+      })
+    },
+
+    async getOAuthSession(userId, serverId, sessionId) {
+      const where = and(eq(schema.mcpOauthSessions.userId, userId), eq(schema.mcpOauthSessions.serverId, serverId), ...(sessionId ? [eq(schema.mcpOauthSessions.id, sessionId)] : []))
+      const rows = await db.select().from(schema.mcpOauthSessions).where(where).orderBy(sql`${schema.mcpOauthSessions.status} = 'pending' DESC`, desc(schema.mcpOauthSessions.createdAt)).limit(1)
+      return rows[0] ? toSession(rows[0]) : null
+    },
+
+    async getOAuthSessionByStateHash(stateHash) {
+      const rows = await db.select().from(schema.mcpOauthSessions).where(eq(schema.mcpOauthSessions.stateHash, stateHash)).limit(1)
+      return rows[0] ? toSession(rows[0]) : null
+    },
+
+    async updateOAuthSession(userId, serverId, sessionId, input) {
+      const rows = await db.update(schema.mcpOauthSessions).set({ ...input, updatedAt: input.updatedAt ?? Date.now() }).where(and(eq(schema.mcpOauthSessions.userId, userId), eq(schema.mcpOauthSessions.serverId, serverId), eq(schema.mcpOauthSessions.id, sessionId))).returning({ id: schema.mcpOauthSessions.id })
+      return rows.length > 0
+    },
+
+    async consumeOAuthSession(stateHash, now) {
+      return db.transaction(async (tx) => {
+        const rows = await tx.select().from(schema.mcpOauthSessions).where(and(eq(schema.mcpOauthSessions.stateHash, stateHash), eq(schema.mcpOauthSessions.status, 'pending'), isNull(schema.mcpOauthSessions.consumedAt))).limit(1)
+        const row = rows[0]
+        if (!row || row.expiresAt <= now) return null
+        const changed = await tx.update(schema.mcpOauthSessions).set({ consumedAt: now, updatedAt: now }).where(and(eq(schema.mcpOauthSessions.id, row.id), eq(schema.mcpOauthSessions.status, 'pending'), isNull(schema.mcpOauthSessions.consumedAt))).returning({ id: schema.mcpOauthSessions.id })
+        return changed[0] ? toSession({ ...row, consumedAt: now, updatedAt: now }) : null
+      })
+    },
+
+    async cleanupExpiredOAuthSessions(now, limit) {
+      const rows = await db.select({ id: schema.mcpOauthSessions.id }).from(schema.mcpOauthSessions).where(and(eq(schema.mcpOauthSessions.status, 'pending'), lte(schema.mcpOauthSessions.expiresAt, now))).limit(Math.max(0, limit))
+      for (const row of rows) await db.update(schema.mcpOauthSessions).set({ status: 'expired', updatedAt: now }).where(eq(schema.mcpOauthSessions.id, row.id))
+      return rows.length
     },
   }
+}
+
+function requireMcpEncryptionKey(encKey: string | null): string {
+  if (!encKey) throw new Error('ENCRYPTION_KEY is required for MCP OAuth persistence')
+  return encKey
 }
 
 function createTelegramRepo(db: PgDrizzleInstance): TelegramRepository {
@@ -977,12 +1091,12 @@ export class PostgresRepositories {
     this.systemPrompts = createSystemPromptRepo(db)
     this.preferences = createPreferenceRepo(db)
     this.workflowRuns = createWorkflowRunRepo(db)
-    this.mcp = createMcpRepo(db)
+    this.mcp = createMcpRepo(db, encKey)
     this.telegram = createTelegramRepo(db)
   }
 }
 
-async function ensurePgSchema(client: PgClient): Promise<void> {
+export async function ensurePgSchema(client: PgClient): Promise<void> {
   await client.unsafe(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -1090,6 +1204,8 @@ async function ensurePgSchema(client: PgClient): Promise<void> {
     );
     CREATE TABLE IF NOT EXISTS mcp_servers (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      auth_mode TEXT NOT NULL DEFAULT 'auto',
       name TEXT NOT NULL,
       transport TEXT NOT NULL,
       command TEXT,
@@ -1112,6 +1228,29 @@ async function ensurePgSchema(client: PgClient): Promise<void> {
       description TEXT,
       input_schema TEXT,
       enabled_for_new_sessions BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mcp_oauth_credentials (
+      server_id TEXT PRIMARY KEY REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      resource_url TEXT NOT NULL,
+      tokens TEXT,
+      client_information TEXT,
+      discovery TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mcp_oauth_sessions (
+      id TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id),
+      state_hash TEXT UNIQUE NOT NULL,
+      code_verifier TEXT NOT NULL,
+      status TEXT NOT NULL,
+      error TEXT,
+      expires_at BIGINT NOT NULL,
+      consumed_at BIGINT,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
     );
@@ -1155,10 +1294,22 @@ async function ensurePgSchema(client: PgClient): Promise<void> {
     CREATE INDEX IF NOT EXISTS mcp_servers_enabled_idx ON mcp_servers(enabled);
     CREATE INDEX IF NOT EXISTS mcp_tools_server_id_idx ON mcp_tools(server_id);
     CREATE INDEX IF NOT EXISTS mcp_tools_registered_name_idx ON mcp_tools(registered_name);
+    CREATE INDEX IF NOT EXISTS mcp_oauth_credentials_user_id_idx ON mcp_oauth_credentials(user_id);
+    CREATE INDEX IF NOT EXISTS mcp_oauth_sessions_owner_idx ON mcp_oauth_sessions(user_id, server_id);
+    CREATE INDEX IF NOT EXISTS mcp_oauth_sessions_expiry_idx ON mcp_oauth_sessions(expires_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS mcp_oauth_sessions_one_pending_idx ON mcp_oauth_sessions(user_id, server_id) WHERE status = 'pending';
     CREATE INDEX IF NOT EXISTS telegram_connections_user_id_idx ON telegram_connections(user_id);
     CREATE INDEX IF NOT EXISTS telegram_connections_status_idx ON telegram_connections(status);
     CREATE INDEX IF NOT EXISTS telegram_message_links_session_id_idx ON telegram_message_links(session_id);
     CREATE INDEX IF NOT EXISTS telegram_message_links_connection_chat_message_idx
       ON telegram_message_links(connection_id, telegram_chat_id, telegram_message_id);
   `)
+  await client.unsafe(`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id)`)
+  await client.unsafe(`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS auth_mode TEXT NOT NULL DEFAULT 'auto'`)
+  await client.unsafe(`UPDATE mcp_servers SET user_id = (SELECT id FROM users ORDER BY created_at ASC LIMIT 1) WHERE user_id IS NULL`)
+  await client.unsafe(`UPDATE mcp_servers SET auth_mode = CASE WHEN transport = 'stdio' THEN 'none' WHEN bearer_token IS NOT NULL AND bearer_token != '' THEN 'bearer' ELSE 'auto' END WHERE auth_mode = 'auto'`)
+  const orphaned = await client<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM mcp_servers WHERE user_id IS NULL`
+  if ((orphaned[0]?.count ?? 0) > 0) throw new Error('Existing MCP servers require an application user before migration; create an API key and restart')
+  await client.unsafe(`ALTER TABLE mcp_servers ALTER COLUMN user_id SET NOT NULL`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS mcp_servers_user_id_idx ON mcp_servers(user_id)`)
 }

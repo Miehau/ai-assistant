@@ -27,6 +27,8 @@ import type {
   McpServer,
   CreateMcpServerInput,
   UpdateMcpServerInput,
+  McpOAuthStartResponse,
+  McpOAuthSessionResponse,
   IntegrationConnection,
   CreateIntegrationConnectionInput,
   UpdateIntegrationConnectionInput,
@@ -353,7 +355,7 @@ class BackendClient {
     return (await this.http.listMcpServers()).find((server) => server.id === id) as McpServer | undefined ?? null;
   }
   async createMcpServer(input: CreateMcpServerInput): Promise<McpServer> {
-    return this.http.createMcpServer(input as any) as Promise<unknown> as Promise<McpServer>;
+    return this.http.createMcpServer({ transport: input.transport ?? 'streamable_http', ...input }) as Promise<unknown> as Promise<McpServer>;
   }
   async updateMcpServer(input: UpdateMcpServerInput): Promise<McpServer | null> {
     const { id, ...updates } = input;
@@ -364,11 +366,29 @@ class BackendClient {
     return true;
   }
   async testMcpServer(id: string): Promise<{ ok: boolean; status: number }> {
-    const server = await this.http.updateMcpServer(id, { enabled: true });
-    return { ok: server.status === 'connected', status: server.status === 'connected' ? 200 : 500 };
+    const server = await this.http.connectMcpServer(id);
+    return { ok: server.connectionStatus === 'connected', status: server.connectionStatus === 'connected' ? 200 : 500 };
   }
   async setMcpToolEnabled(serverId: string, toolName: string, enabledForNewSessions: boolean): Promise<void> {
     await this.http.updateMcpTool(serverId, toolName, enabledForNewSessions);
+  }
+  async connectMcpServer(id: string, signal?: AbortSignal): Promise<McpServer> {
+    return this.http.connectMcpServer(id, signal) as Promise<unknown> as Promise<McpServer>;
+  }
+  async reconnectMcpServer(id: string, signal?: AbortSignal): Promise<McpServer> {
+    return this.http.reconnectMcpServer(id, signal) as Promise<unknown> as Promise<McpServer>;
+  }
+  async disconnectMcpServer(id: string, signal?: AbortSignal): Promise<McpServer> {
+    return this.http.disconnectMcpServer(id, signal) as Promise<unknown> as Promise<McpServer>;
+  }
+  async startMcpOAuth(id: string, signal?: AbortSignal): Promise<McpOAuthStartResponse> {
+    return this.http.startMcpOAuth(id, signal) as Promise<unknown> as Promise<McpOAuthStartResponse>;
+  }
+  async getMcpOAuthSession(id: string, signal?: AbortSignal): Promise<McpOAuthSessionResponse> {
+    return this.http.getMcpOAuthSession(id, signal) as Promise<unknown> as Promise<McpOAuthSessionResponse>;
+  }
+  async cancelMcpOAuth(id: string, signal?: AbortSignal): Promise<McpServer> {
+    return this.http.cancelMcpOAuth(id, signal) as Promise<unknown> as Promise<McpServer>;
   }
 
   // ============ Tools ============

@@ -164,8 +164,13 @@ export interface McpServer {
   cwd: string | null;
   url: string | null;
   bearerTokenConfigured: boolean;
+  authMode: 'auto' | 'none' | 'bearer' | 'oauth';
+  authStatus: 'not_required' | 'required' | 'pending' | 'authorized' | 'error';
+  connectionStatus: 'disabled' | 'connecting' | 'connected' | 'error';
+  oauthCredentialsConfigured: boolean;
+  oauthSession: McpOAuthSession | null;
   enabled: boolean;
-  status: 'disabled' | 'connected' | 'error';
+  status: 'disabled' | 'connecting' | 'connected' | 'error';
   error: string | null;
   createdAt: number;
   updatedAt: number;
@@ -181,10 +186,20 @@ export interface CreateMcpServerRequest {
   cwd?: string | null;
   url?: string | null;
   bearerToken?: string | null;
+  authMode?: 'auto' | 'none' | 'bearer' | 'oauth';
   enabled?: boolean;
 }
 
 export type UpdateMcpServerRequest = Partial<CreateMcpServerRequest>;
+
+export interface McpOAuthSession {
+  id: string;
+  serverId: string;
+  status: 'pending' | 'authorized' | 'denied' | 'expired' | 'cancelled' | 'error';
+  authorizationUrl?: string;
+  expiresAt: number;
+  error: string | null;
+}
 
 export interface ModelInfo {
   id?: string;
@@ -643,6 +658,30 @@ export class HttpBackendClient {
 
   async deleteMcpServer(id: string, signal?: AbortSignal): Promise<{ ok: boolean }> {
     return this.request<{ ok: boolean }>('DELETE', `/api/mcps/${id}`, undefined, signal);
+  }
+
+  async connectMcpServer(id: string, signal?: AbortSignal): Promise<McpServer> {
+    return this.request<McpServer>('POST', `/api/mcps/${id}/connect`, undefined, signal);
+  }
+
+  async reconnectMcpServer(id: string, signal?: AbortSignal): Promise<McpServer> {
+    return this.request<McpServer>('POST', `/api/mcps/${id}/reconnect`, undefined, signal);
+  }
+
+  async disconnectMcpServer(id: string, signal?: AbortSignal): Promise<McpServer> {
+    return this.request<McpServer>('POST', `/api/mcps/${id}/disconnect`, undefined, signal);
+  }
+
+  async startMcpOAuth(id: string, signal?: AbortSignal): Promise<{ session: McpOAuthSession & { authorizationUrl: string } }> {
+    return this.request('POST', `/api/mcps/${id}/oauth/start`, undefined, signal);
+  }
+
+  async getMcpOAuthSession(id: string, signal?: AbortSignal): Promise<{ session: McpOAuthSession | null }> {
+    return this.request('GET', `/api/mcps/${id}/oauth/session`, undefined, signal);
+  }
+
+  async cancelMcpOAuth(id: string, signal?: AbortSignal): Promise<McpServer> {
+    return this.request('POST', `/api/mcps/${id}/oauth/cancel`, undefined, signal);
   }
 
   async updateMcpTool(

@@ -237,10 +237,12 @@ export interface WorkflowRunRepository {
 // --- MCP persistence ---
 
 export type StoredMcpTransport = 'stdio' | 'streamable_http'
-export type StoredMcpServerStatus = 'disabled' | 'connected' | 'error'
+export type StoredMcpServerStatus = 'disabled' | 'connecting' | 'connected' | 'error'
 
 export interface StoredMcpServer {
   id: string
+  userId: string
+  authMode: 'auto' | 'none' | 'bearer' | 'oauth'
   name: string
   transport: StoredMcpTransport
   command: string | null
@@ -270,6 +272,8 @@ export interface StoredMcpTool {
 
 export interface CreateStoredMcpServerInput {
   id: string
+  userId: string
+  authMode: StoredMcpServer['authMode']
   name: string
   transport: StoredMcpTransport
   command: string | null
@@ -286,6 +290,7 @@ export interface CreateStoredMcpServerInput {
 }
 
 export interface UpdateStoredMcpServerInput {
+  authMode?: StoredMcpServer['authMode']
   name?: string
   transport?: StoredMcpTransport
   command?: string | null
@@ -321,18 +326,71 @@ export interface UpdateStoredMcpToolInput {
 }
 
 export interface McpRepository {
-  listEnabledServers(): Promise<StoredMcpServer[]>
-  listServers(): Promise<StoredMcpServer[]>
-  getServer(id: string): Promise<StoredMcpServer | null>
+  listEnabledServers(userId: string): Promise<StoredMcpServer[]>
+  listServers(userId: string): Promise<StoredMcpServer[]>
+  getServer(userId: string, id: string): Promise<StoredMcpServer | null>
   createServer(input: CreateStoredMcpServerInput): Promise<void>
-  updateServer(id: string, input: UpdateStoredMcpServerInput): Promise<void>
-  deleteServerAndTools(id: string): Promise<void>
-  listTools(serverId?: string): Promise<StoredMcpTool[]>
-  getTool(id: string): Promise<StoredMcpTool | null>
-  getToolByServerAndRemoteName(serverId: string, remoteName: string): Promise<StoredMcpTool | null>
-  createTool(input: CreateStoredMcpToolInput): Promise<void>
-  updateTool(id: string, input: UpdateStoredMcpToolInput): Promise<void>
-  deleteToolsForServer(serverId: string): Promise<void>
+  updateServer(userId: string, id: string, input: UpdateStoredMcpServerInput): Promise<boolean>
+  deleteServerAndTools(userId: string, id: string): Promise<boolean>
+  listTools(userId: string, serverId?: string): Promise<StoredMcpTool[]>
+  getTool(userId: string, id: string): Promise<StoredMcpTool | null>
+  getToolByServerAndRemoteName(userId: string, serverId: string, remoteName: string): Promise<StoredMcpTool | null>
+  createTool(userId: string, input: CreateStoredMcpToolInput): Promise<boolean>
+  updateTool(userId: string, id: string, input: UpdateStoredMcpToolInput): Promise<boolean>
+  deleteToolsForServer(userId: string, serverId: string): Promise<void>
+  getOAuthCredentials(userId: string, serverId: string): Promise<StoredMcpOAuthCredentials | null>
+  saveOAuthCredentials(input: SaveMcpOAuthCredentialsInput): Promise<void>
+  deleteOAuthCredentials(userId: string, serverId: string): Promise<boolean>
+  createOAuthSession(input: CreateMcpOAuthSessionInput): Promise<void>
+  getOAuthSession(userId: string, serverId: string, sessionId?: string): Promise<StoredMcpOAuthSession | null>
+  getOAuthSessionByStateHash(stateHash: string): Promise<StoredMcpOAuthSession | null>
+  updateOAuthSession(userId: string, serverId: string, sessionId: string, input: UpdateMcpOAuthSessionInput): Promise<boolean>
+  consumeOAuthSession(stateHash: string, now: number): Promise<StoredMcpOAuthSession | null>
+  cleanupExpiredOAuthSessions(now: number, limit: number): Promise<number>
+}
+
+export interface McpOAuthCredentialData {
+  tokens?: string | null
+  clientInformation?: string | null
+  discovery?: string | null
+}
+
+export interface StoredMcpOAuthCredentials extends McpOAuthCredentialData {
+  serverId: string
+  userId: string
+  resourceUrl: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SaveMcpOAuthCredentialsInput extends McpOAuthCredentialData {
+  serverId: string
+  userId: string
+  resourceUrl: string
+  updatedAt: number
+}
+
+export interface StoredMcpOAuthSession {
+  id: string
+  serverId: string
+  userId: string
+  stateHash: string
+  codeVerifier: string
+  status: 'pending' | 'authorized' | 'denied' | 'expired' | 'cancelled' | 'error'
+  error: string | null
+  expiresAt: number
+  consumedAt: number | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CreateMcpOAuthSessionInput extends StoredMcpOAuthSession {}
+
+export interface UpdateMcpOAuthSessionInput {
+  status?: StoredMcpOAuthSession['status']
+  error?: string | null
+  consumedAt?: number | null
+  updatedAt?: number
 }
 
 // --- Telegram persistence ---

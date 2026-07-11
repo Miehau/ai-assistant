@@ -51,6 +51,13 @@ export const availableModels = writable<Model[]>([]);
 export const systemPrompts = writable<SystemPrompt[]>([]);
 export const availableMcpServers = writable<McpServer[]>([]);
 export const selectedMcpServerIds = writable<string[]>([]);
+mcpServerService.onServersChanged((servers) => {
+  availableMcpServers.set(servers);
+  const availableIds = new Set(
+    servers.filter((server) => server.enabled && server.connectionStatus === 'connected').map((server) => server.id),
+  );
+  selectedMcpServerIds.update((ids) => ids.filter((id) => availableIds.has(id)));
+});
 export const selectedModel = writable<string>('');
 export const selectedSystemPrompt = writable<SystemPrompt | null>(null);
 export const streamingEnabled = writable<boolean>(true);

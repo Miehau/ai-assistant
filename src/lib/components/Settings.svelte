@@ -14,6 +14,8 @@
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";
   import Integrations from "$lib/components/Integrations.svelte";
+  import McpServersSettings from "$lib/components/McpServersSettings.svelte";
+  import { settingsSection } from "$lib/stores/drawers";
 
   let { showClose = false, onClose }: { showClose?: boolean; onClose?: () => void } = $props();
 
@@ -48,7 +50,9 @@
   let toolApprovalError = $state<string | null>(null);
   let toolApprovalErrorTool = $state<string | null>(null);
   const isDev = import.meta.env.DEV;
-  let activeTab = $state<"tools" | "backend" | "vault" | "integrations">("tools");
+  let activeTab = $state<"tools" | "backend" | "vault" | "connections">("tools");
+
+  $effect(() => { activeTab = $settingsSection; });
 
   $effect(() => {
     if (activeTab === "tools") {
@@ -353,7 +357,7 @@
           ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
           : "text-muted-foreground/70 hover:text-foreground"
       }`}
-      onclick={() => (activeTab = "tools")}
+      onclick={() => ($settingsSection = "tools")}
     >
       Tools
     </button>
@@ -363,7 +367,7 @@
           ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
           : "text-muted-foreground/70 hover:text-foreground"
       }`}
-      onclick={() => (activeTab = "backend")}
+      onclick={() => ($settingsSection = "backend")}
     >
       Backend
     </button>
@@ -373,19 +377,19 @@
           ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
           : "text-muted-foreground/70 hover:text-foreground"
       }`}
-      onclick={() => (activeTab = "vault")}
+      onclick={() => ($settingsSection = "vault")}
     >
       Vault
     </button>
     <button
       class={`px-3 py-1 rounded-lg transition-all ${
-        activeTab === "integrations"
+        activeTab === "connections"
           ? "bg-emerald-500/15 text-emerald-200 border border-emerald-400/40"
           : "text-muted-foreground/70 hover:text-foreground"
       }`}
-      onclick={() => (activeTab = "integrations")}
+      onclick={() => ($settingsSection = "connections")}
     >
-      Integrations
+      Connections
     </button>
   </div>
 
@@ -705,15 +709,16 @@
           </div>
         </div>
       </div>
-    {:else if activeTab === "integrations"}
+    {:else if activeTab === "connections"}
       <div class="h-full min-h-0 overflow-y-auto pr-1">
         <div class="mb-3">
-          <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Integrations</p>
-          <h3 class="text-sm font-semibold">Connections and MCP</h3>
+          <p class="text-[11px] uppercase tracking-wide text-muted-foreground/70">Settings → Connections</p>
+          <h3 class="text-sm font-semibold">Connections</h3>
           <p class="text-[11px] text-muted-foreground/70 mt-1">
             Manage OAuth connections, tokens, and MCP servers.
           </p>
         </div>
+        <McpServersSettings />
         <Integrations embedded />
       </div>
     {/if}

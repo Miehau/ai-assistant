@@ -166,8 +166,8 @@ export async function initRuntime(config: AppConfig): Promise<RuntimeContext> {
   const interceptHandlers = new Map<string, InterceptHandler>()
   registerDelegateTools(tools, agentDefinitions, interceptHandlers)
 
-  const mcps = new McpManager(repos.mcp, tools, config.encryptionKey)
-  await mcps.initialize()
+  const mcps = new McpManager(repos.mcp, repos.sessions, tools, config.encryptionKey, config.publicBaseUrl, config.nodeEnv)
+  await mcps.initialize((await repos.users.list()).map((user) => user.id))
 
   const toolCount = tools.listMetadata().length
   logger.info({ toolCount }, 'Tool registry initialized')

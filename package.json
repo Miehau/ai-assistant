@@ -10,7 +10,8 @@
     "build:tauri": "tauri build",
     "dev": "tauri dev",
     "build": "bun run build:web && bun run build:tauri",
-    "preflight": "bun run build:web && cargo test --manifest-path src-tauri/Cargo.toml"
+    "preflight": "bun run build:web && cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:mcp-frontend": "node --import ./server/node_modules/tsx/dist/loader.mjs src/lib/services/mcpOAuthPolling.test.ts && node --import ./server/node_modules/tsx/dist/loader.mjs src/lib/components/mcpManagement.test.ts"
   },
   "license": "MIT",
   "dependencies": {

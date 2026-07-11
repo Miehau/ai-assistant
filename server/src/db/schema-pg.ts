@@ -147,6 +147,8 @@ export const mcpServers = pgTable(
   'mcp_servers',
   {
     id: text('id').primaryKey(),
+    userId: text('user_id').references(() => users.id).notNull(),
+    authMode: text('auth_mode').default('auto').notNull(),
     name: text('name').notNull(),
     transport: text('transport').notNull(),
     command: text('command'),
@@ -162,6 +164,7 @@ export const mcpServers = pgTable(
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
   },
   (table) => [
+    index('mcp_servers_user_id_idx').on(table.userId),
     index('mcp_servers_name_idx').on(table.name),
     index('mcp_servers_enabled_idx').on(table.enabled),
   ],
@@ -171,7 +174,7 @@ export const mcpTools = pgTable(
   'mcp_tools',
   {
     id: text('id').primaryKey(),
-    serverId: text('server_id').references(() => mcpServers.id).notNull(),
+    serverId: text('server_id').references(() => mcpServers.id, { onDelete: 'cascade' }).notNull(),
     remoteName: text('remote_name').notNull(),
     registeredName: text('registered_name').notNull(),
     description: text('description'),
@@ -185,6 +188,36 @@ export const mcpTools = pgTable(
     index('mcp_tools_registered_name_idx').on(table.registeredName),
   ],
 )
+
+export const mcpOauthCredentials = pgTable('mcp_oauth_credentials', {
+  serverId: text('server_id').primaryKey().references(() => mcpServers.id, { onDelete: 'cascade' }),
+  userId: text('user_id').references(() => users.id).notNull(),
+  resourceUrl: text('resource_url').notNull(),
+  tokens: text('tokens'),
+  clientInformation: text('client_information'),
+  discovery: text('discovery'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+}, (table) => [
+  index('mcp_oauth_credentials_user_id_idx').on(table.userId),
+])
+
+export const mcpOauthSessions = pgTable('mcp_oauth_sessions', {
+  id: text('id').primaryKey(),
+  serverId: text('server_id').references(() => mcpServers.id, { onDelete: 'cascade' }).notNull(),
+  userId: text('user_id').references(() => users.id).notNull(),
+  stateHash: text('state_hash').unique().notNull(),
+  codeVerifier: text('code_verifier').notNull(),
+  status: text('status').notNull(),
+  error: text('error'),
+  expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+  consumedAt: bigint('consumed_at', { mode: 'number' }),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+}, (table) => [
+  index('mcp_oauth_sessions_owner_idx').on(table.userId, table.serverId),
+  index('mcp_oauth_sessions_expiry_idx').on(table.expiresAt),
+])
 
 export const telegramConnections = pgTable(
   'telegram_connections',

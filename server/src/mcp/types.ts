@@ -1,7 +1,29 @@
 import type { ToolMetadata } from '../tools/types.js'
 
 export type McpTransport = 'stdio' | 'streamable_http'
-export type McpServerStatus = 'disabled' | 'connected' | 'error'
+export type McpServerStatus = 'disabled' | 'connecting' | 'connected' | 'error'
+export type McpAuthMode = 'auto' | 'none' | 'bearer' | 'oauth'
+export type McpAuthStatus = 'not_required' | 'required' | 'pending' | 'authorized' | 'error'
+export type McpConnectionStatus = 'disabled' | 'connecting' | 'connected' | 'error'
+export type McpOAuthSessionStatus = 'pending' | 'authorized' | 'denied' | 'expired' | 'cancelled' | 'error'
+
+export interface McpOAuthSessionRecord {
+  id: string
+  serverId: string
+  status: McpOAuthSessionStatus
+  authorizationUrl?: string
+  expiresAt: number
+  error: string | null
+}
+
+export interface McpConnectionState {
+  authMode: McpAuthMode
+  authStatus: McpAuthStatus
+  connectionStatus: McpConnectionStatus
+  oauthCredentialsConfigured: boolean
+  oauthSession: McpOAuthSessionRecord | null
+  error: string | null
+}
 
 export interface McpToolRecord {
   id: string
@@ -25,6 +47,11 @@ export interface McpServerRecord {
   cwd: string | null
   url: string | null
   bearerTokenConfigured: boolean
+  authMode: McpAuthMode
+  authStatus: McpAuthStatus
+  connectionStatus: McpConnectionStatus
+  oauthCredentialsConfigured: boolean
+  oauthSession: McpOAuthSessionRecord | null
   enabled: boolean
   status: McpServerStatus
   error: string | null
@@ -42,6 +69,7 @@ export interface CreateMcpServerInput {
   cwd?: string | null
   url?: string | null
   bearerToken?: string | null
+  authMode?: McpAuthMode
   enabled?: boolean
 }
 
@@ -54,6 +82,7 @@ export interface UpdateMcpServerInput {
   cwd?: string | null
   url?: string | null
   bearerToken?: string | null
+  authMode?: McpAuthMode
   enabled?: boolean
 }
 
