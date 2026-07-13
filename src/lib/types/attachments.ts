@@ -28,3 +28,9 @@ export interface Attachment {
   file_path?: string;
   file_metadata?: FileMetadata;
 }
+
+const AUDIO_FILE_EXTENSION = /\.(aac|flac|m4a|mp3|mp4|oga|ogg|opus|wav|webm)$/i;
+
+export function isAudioFile(file: Pick<File, 'name' | 'type'>): boolean {
+  return file.type.startsWith('audio/') || AUDIO_FILE_EXTENSION.test(file.name);
+}

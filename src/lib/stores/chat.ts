@@ -1381,6 +1381,23 @@ function generateMessageId(): string {
   return uuidv4();
 }
 
+async function transcribeAudioAttachments(items: Attachment[], signal: AbortSignal): Promise<Attachment[]> {
+  return Promise.all(items.map(async (attachment) => {
+    if (attachment.attachment_type !== 'audio' || attachment.transcript) return attachment;
+    const response = await fetch(attachment.data);
+    if (!response.ok) throw new Error(`Could not read audio attachment: ${attachment.name}`);
+    const result = await getHttpBackend().transcribeAudio(await response.blob(), attachment.name, signal);
+    return { ...attachment, transcript: result.text };
+  }));
+}
+
+function appendAudioTranscripts(message: string, items: Attachment[]): string {
+  const transcripts = items
+    .filter((attachment) => attachment.attachment_type === 'audio' && attachment.transcript)
+    .map((attachment) => `[Audio transcript: ${attachment.name}]\n${attachment.transcript}`);
+  return [message.trim(), ...transcripts].filter(Boolean).join('\n\n');
+}
+
 export async function sendMessage() {
   if (get(isLoading)) return;
 
@@ -1395,6 +1412,8 @@ export async function sendMessage() {
   if (!currentMessageValue.trim() && attachmentsValue.length === 0) return;
 
   isLoading.set(true);
+  const requestController = new AbortController();
+  honoStreamController = requestController;
 
   try {
     const models = get(availableModels);
@@ -1408,9 +1427,8 @@ export async function sendMessage() {
       selectedModel.set(selectedModelObject.model_name);
     }
 
-    // Clear input fields
-    currentMessage.set('');
-    attachments.set([]);
+    const normalizedAttachments = await transcribeAudioAttachments(attachmentsValue, requestController.signal);
+    const normalizedMessage = appendAudioTranscripts(currentMessageValue, normalizedAttachments);
 
     // Default system prompt
     const defaultSystemPrompt =
@@ -1427,6 +1445,11 @@ export async function sendMessage() {
     // Get or create the current conversation
     const currentConversation = conversationService.getCurrentConversation()
       ?? await conversationService.setCurrentConversation(null);
+    if (requestController.signal.aborted) return;
+
+    // Clear input fields only after preparation succeeds and cancellation is no longer pending.
+    currentMessage.set('');
+    attachments.set([]);
 
     // Check if this is the first message in a new conversation
     const shouldGenerateTitle = isFirstMessageValue;
@@ -1453,44 +1476,39 @@ export async function sendMessage() {
       {
         id: userMessageId,
         type: 'sent' as const,
-        content: currentMessageValue,
-        attachments: attachmentsValue.length ? attachmentsValue : undefined,
+        content: normalizedMessage,
+        attachments: normalizedAttachments.length ? normalizedAttachments : undefined,
         timestamp: Date.now(),
       },
     ]);
 
-    honoStreamController = new AbortController();
-    try {
-      const result = await streamMessageViaHono(
-        currentMessageValue,
-        {
-          conversationId: currentConversation.id,
-          messageId: assistantMessageId,
-          sessionId,
-          model: selectedModelObject && selectedModelValue
-            ? `${selectedModelObject.provider}:${selectedModelValue}`
-            : selectedModelValue || undefined,
-          agent: 'planner',
-          systemPrompt: systemPromptContent,
-          mcpServerIds: isFirstMessageValue ? selectedMcpServerIdsValue : undefined,
-          // Persist session ID eagerly — if the stream is aborted before `done`,
-          // the next follow-up message still has the correct session to resume.
-          onSessionId: (sid) => sessionMap.set(currentConversation.id, sid),
-          // Persist agent ID eagerly so cancel works even if the stream throws
-          // (e.g. on max-turn failure) before the `done` event returns it.
-          onAgentId: (id) => { honoAgentId = id; },
-        },
-        handleAgentEvent,
-        honoStreamController.signal,
-      );
-      if (result.sessionId) {
-        sessionMap.set(currentConversation.id, result.sessionId);
-      }
-      if (result.agentId) {
-        honoAgentId = result.agentId;
-      }
-    } finally {
-      honoStreamController = null;
+    const result = await streamMessageViaHono(
+      normalizedMessage,
+      {
+        conversationId: currentConversation.id,
+        messageId: assistantMessageId,
+        sessionId,
+        model: selectedModelObject && selectedModelValue
+          ? `${selectedModelObject.provider}:${selectedModelValue}`
+          : selectedModelValue || undefined,
+        agent: 'planner',
+        systemPrompt: systemPromptContent,
+        mcpServerIds: isFirstMessageValue ? selectedMcpServerIdsValue : undefined,
+        // Persist session ID eagerly — if the stream is aborted before `done`,
+        // the next follow-up message still has the correct session to resume.
+        onSessionId: (sid) => sessionMap.set(currentConversation.id, sid),
+        // Persist agent ID eagerly so cancel works even if the stream throws
+        // (e.g. on max-turn failure) before the `done` event returns it.
+        onAgentId: (id) => { honoAgentId = id; },
+      },
+      handleAgentEvent,
+      requestController.signal,
+    );
+    if (result.sessionId) {
+      sessionMap.set(currentConversation.id, result.sessionId);
+    }
+    if (result.agentId) {
+      honoAgentId = result.agentId;
     }
 
     // Generate a title for the conversation if this is the first message
@@ -1511,23 +1529,22 @@ export async function sendMessage() {
     finalizeRunningToolCalls('Request failed', Date.now());
     resetStreamingState();
   } finally {
-    // Loading state cleared on stream completion.
+    if (honoStreamController === requestController) honoStreamController = null;
   }
 }
 
 export async function cancelCurrentAgentRequest() {
   const messageId = streamingAssistantMessageId || pendingAssistantMessageId;
-  if (!messageId) {
-    isLoading.set(false);
-    return;
-  }
-
-  cancelledAssistantMessageIds.add(messageId);
-
   if (honoStreamController) {
     honoStreamController.abort();
     honoStreamController = null;
   }
+  if (!messageId) {
+    resetStreamingState();
+    return;
+  }
+
+  cancelledAssistantMessageIds.add(messageId);
 
   if (honoAgentId) {
     const agentId = honoAgentId;

@@ -392,6 +392,7 @@ async function main() {
     // ──────────────────────────────────────────
     console.log('\n14. Telegram integration')
     let providerGenerateCalls = 0
+    const transcriptionFormats: string[] = []
     const telegramProviderSystemPrompts: string[] = []
     const stubProvider = {
       async generate(request: { messages: Array<{ role: string; content: unknown }> }) {
@@ -416,7 +417,8 @@ async function main() {
           },
         }
       },
-      async transcribeAudio() {
+      async transcribeAudio(request: { input_audio: { format: string } }) {
+        transcriptionFormats.push(request.input_audio.format)
         return {
           text: 'voice note transcript from OpenRouter',
           usage: { input_tokens: 1, output_tokens: 4 },
@@ -482,13 +484,22 @@ async function main() {
       }
 
       if (method === 'getFile') {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { file_id?: string }
+        const extension = request.file_id?.includes('mp3')
+          ? 'mp3'
+          : request.file_id?.includes('m4a')
+            ? 'm4a'
+            : 'ogg'
+        const filePath = request.file_id?.includes('noext')
+          ? 'audio/file_123'
+          : `audio/file_123.${extension}`
         return new Response(JSON.stringify({
           ok: true,
           result: {
-            file_id: 'voice-file',
-            file_unique_id: 'voice-file-unique',
+            file_id: request.file_id ?? 'voice-file',
+            file_unique_id: `${request.file_id ?? 'voice-file'}-unique`,
             file_size: 14,
-            file_path: 'voice/file_123.ogg',
+            file_path: filePath,
           },
         }), {
           status: 200,
@@ -801,12 +812,95 @@ async function main() {
     await waitForTelegramBotReplies(runtime, firstSessionId, 3)
     assert(sentMessages.some((payload) => payload.reply_to_message_id === 17), 'Telegram voice reply is anchored to the inbound message')
 
+    const audio = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 10,
+        message: {
+          message_id: 18,
+          audio: {
+            file_id: 'audio-mp3-file',
+            file_unique_id: 'audio-mp3-unique',
+            duration: 4,
+            file_name: 'recording.mp3',
+            mime_type: 'audio/mpeg',
+            file_size: 14,
+          },
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+          reply_to_message: { message_id: firstBotReplyId! },
+        },
+      },
+    )
+    assert(audio.sessionId === firstSessionId, 'Telegram audio upload continues the replied-to session')
+    await waitForTelegramBotReplies(runtime, firstSessionId, 4)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 18), 'Telegram audio reply is anchored to the inbound message')
+
+    const audioDocument = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 11,
+        message: {
+          message_id: 19,
+          document: {
+            file_id: 'document-m4a-file',
+            file_unique_id: 'document-m4a-unique',
+            file_name: 'recording.m4a',
+            mime_type: 'application/octet-stream',
+            file_size: 14,
+          },
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+          reply_to_message: { message_id: firstBotReplyId! },
+        },
+      },
+    )
+    assert(audioDocument.sessionId === firstSessionId, 'Telegram audio document continues the replied-to session')
+    await waitForTelegramBotReplies(runtime, firstSessionId, 5)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 19), 'Telegram audio document reply is anchored to the inbound message')
+
+    const metadataPoorVoice = await telegram.processWebhook(
+      telegramConn.id,
+      telegramConnRow.webhookPathSecret,
+      telegramConnRow.webhookHeaderSecret,
+      {
+        update_id: 12,
+        message: {
+          message_id: 20,
+          voice: {
+            file_id: 'voice-noext-file',
+            file_unique_id: 'voice-noext-unique',
+            duration: 2,
+            file_size: 14,
+          },
+          from: { id: 42 },
+          chat: { id: 500, type: 'private' },
+          reply_to_message: { message_id: firstBotReplyId! },
+        },
+      },
+    )
+    assert(metadataPoorVoice.sessionId === firstSessionId, 'Telegram voice without format metadata continues its replied-to session')
+    await waitForTelegramBotReplies(runtime, firstSessionId, 6)
+    assert(sentMessages.some((payload) => payload.reply_to_message_id === 20), 'Telegram metadata-poor voice reply is anchored to the inbound message')
+    assert(
+      transcriptionFormats.join(',') === 'ogg,mp3,m4a,ogg',
+      'Telegram audio formats are normalized for transcription',
+    )
+
     const firstSessionAgents = await repos.agents.listBySession(firstSessionId)
     const firstRootAgent = firstSessionAgents.find((agent) => agent.parentId === null)
     const firstRootItems = firstRootAgent ? await repos.items.listByAgent(firstRootAgent.id) : []
     assert(
       firstRootItems.some((item) => item.role === 'user' && item.content?.includes('voice note transcript from OpenRouter')),
       'Telegram voice transcript is persisted as the user turn text',
+    )
+    assert(
+      firstRootItems.some((item) => item.role === 'user' && item.content?.includes('[Telegram audio transcript: recording.m4a]')),
+      'Telegram audio document transcript is persisted as user text',
     )
 
     const sessionCountAfterTelegram = (await repos.sessions.listByUser(devUser!.id)).length

@@ -67,6 +67,11 @@ export interface CompletionResponse {
   error?: string;
 }
 
+export interface AudioTranscriptionResponse {
+  text: string;
+  usage?: unknown;
+}
+
 export interface AgentStatusResponse {
   id: string;
   sessionId: string;
@@ -378,6 +383,38 @@ export class HttpBackendClient {
   // ========================================================================
   // Chat / Completions
   // ========================================================================
+
+  async transcribeAudio(
+    file: Blob,
+    fileName: string,
+    signal?: AbortSignal,
+  ): Promise<AudioTranscriptionResponse> {
+    const form = new FormData();
+    form.append('file', file, fileName);
+    const headers = this.headers();
+    delete headers['Content-Type'];
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.serverUrl}/api/audio/transcriptions`, {
+        method: 'POST',
+        headers,
+        body: form,
+        signal,
+      });
+    } catch (err) {
+      throw new HttpBackendError(
+        `Network error: ${err instanceof Error ? err.message : String(err)}`,
+        0,
+      );
+    }
+
+    if (!res.ok) {
+      const errorBody = await res.json().catch(() => null) as { error?: string } | null;
+      throw new HttpBackendError(errorBody?.error ?? `HTTP ${res.status}`, res.status, errorBody);
+    }
+    return await res.json() as AudioTranscriptionResponse;
+  }
 
   /**
    * Non-streaming completion. Returns when the agent finishes or is waiting.

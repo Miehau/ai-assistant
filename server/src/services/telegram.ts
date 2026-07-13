@@ -1,8 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { RuntimeContext } from '../lib/runtime.js'
-import { splitModelId } from '../lib/model.js'
 import { decrypt, deriveKey, encrypt } from '../lib/crypto.js'
 import { buildDeps, prepareSessionTurn } from './session-runner.js'
+import {
+  isSupportedAudioFile,
+  MAX_AUDIO_BYTES,
+  transcribeAudio,
+} from './audio-transcription.js'
 import {
   formatTelegramHtml,
   splitTelegramText,
@@ -115,6 +119,8 @@ interface TelegramMessage {
   text?: string
   caption?: string
   voice?: TelegramVoice
+  audio?: TelegramAudio
+  document?: TelegramDocument
   from?: TelegramUser
   chat: TelegramChat
   reply_to_message?: {
@@ -122,12 +128,28 @@ interface TelegramMessage {
   }
 }
 
-interface TelegramVoice {
+interface TelegramAudioFile {
   file_id: string
   file_unique_id: string
-  duration: number
   mime_type?: string
   file_size?: number
+  file_name?: string
+}
+
+interface TelegramVoice extends TelegramAudioFile {
+  duration: number
+}
+
+interface TelegramAudio extends TelegramAudioFile {
+  duration: number
+  title?: string
+  performer?: string
+}
+
+interface TelegramDocument extends TelegramAudioFile {}
+
+interface TelegramInboundAudio extends TelegramAudioFile {
+  kind: 'voice' | 'audio' | 'document'
 }
 
 export interface TelegramUpdate {
@@ -147,8 +169,6 @@ interface TelegramFile {
   file_size?: number
   file_path?: string
 }
-
-const MAX_TELEGRAM_VOICE_BYTES = 20 * 1024 * 1024
 
 export class TelegramService {
   private readonly encKey: string | null
@@ -450,10 +470,15 @@ export class TelegramService {
 
     await this.runtime.repositories.telegram.createUpdateDedupe(connection.id, update.update_id)
 
-    const rawContent = await this.extractMessageContent(connection, message)
+    const inboundAudio = this.getInboundAudio(message)
+    const rawContent = await this.extractMessageContent(connection, message, inboundAudio)
     if (!rawContent) {
-      if (message.voice) {
-        return { ok: true, status: 'ignored', reason: 'voice_transcription_failed' }
+      if (inboundAudio) {
+        return {
+          ok: true,
+          status: 'ignored',
+          reason: inboundAudio.kind === 'voice' ? 'voice_transcription_failed' : 'audio_transcription_failed',
+        }
       }
       await this.sendBotMessage(connection, message.chat.id, 'Only text messages are supported right now.', message.message_id)
       return { ok: true, status: 'ignored', reason: 'unsupported_message_type' }
@@ -658,68 +683,76 @@ export class TelegramService {
     return { sessionId: session.id, forked: false }
   }
 
-  /** Convert Telegram text/caption/voice input into the text command the agent sees. */
-  private async extractMessageContent(connection: TelegramConnectionRow, message: TelegramMessage): Promise<string> {
+  /** Convert Telegram text/caption/audio input into the text command the agent sees. */
+  private async extractMessageContent(
+    connection: TelegramConnectionRow,
+    message: TelegramMessage,
+    audio: TelegramInboundAudio | null,
+  ): Promise<string> {
     const textContent = message.text?.trim() || message.caption?.trim() || ''
-    if (!message.voice) return textContent
+    if (!audio) return textContent
 
     try {
       await this.sendChatAction(connection, message.chat.id, 'typing')
-      const transcript = await this.transcribeTelegramVoice(connection, message.voice)
-      if (!transcript) return textContent
-      const transcriptBlock = `[Telegram voice transcript]\n${transcript}`
+      const transcript = await this.transcribeTelegramAudio(connection, audio)
+      const label = audio.file_name ? `: ${audio.file_name}` : ''
+      const transcriptBlock = `[Telegram audio transcript${label}]\n${transcript}`
       return textContent ? `${textContent}\n\n${transcriptBlock}` : transcriptBlock
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
       await this.sendBotMessage(
         connection,
         message.chat.id,
-        `I couldn't transcribe that voice message: ${this.truncateForTelegram(detail, 700)}`,
+        `I couldn't transcribe that audio: ${this.truncateForTelegram(detail, 700)}`,
         message.message_id,
       )
       return textContent
     }
   }
 
-  /** Download a Telegram voice file and transcribe it with the configured STT model. */
-  private async transcribeTelegramVoice(connection: TelegramConnectionRow, voice: TelegramVoice): Promise<string> {
-    const transcriptionModel = this.runtime.config.telegramTranscriptionModel?.trim()
-    if (!transcriptionModel) {
-      throw new Error('TELEGRAM_TRANSCRIPTION_MODEL is not configured')
+  /** Return Telegram media that is safe to treat as audio. */
+  private getInboundAudio(message: TelegramMessage): TelegramInboundAudio | null {
+    if (message.voice) return { ...message.voice, kind: 'voice' }
+    if (message.audio) return { ...message.audio, kind: 'audio' }
+    if (
+      message.document &&
+      isSupportedAudioFile(message.document.mime_type, message.document.file_name)
+    ) {
+      return { ...message.document, kind: 'document' }
     }
+    return null
+  }
 
-    if (voice.file_size != null && voice.file_size > MAX_TELEGRAM_VOICE_BYTES) {
-      throw new Error(`voice message is too large (${voice.file_size} bytes)`)
+  /** Download a Telegram audio file and transcribe it with the shared STT service. */
+  private async transcribeTelegramAudio(
+    connection: TelegramConnectionRow,
+    audio: TelegramInboundAudio,
+  ): Promise<string> {
+    if (audio.file_size != null && audio.file_size > MAX_AUDIO_BYTES) {
+      throw new Error(`audio is too large (${audio.file_size} bytes)`)
     }
 
     const fileResponse = await this.callTelegram<TelegramFile>(connection, 'getFile', {
-      file_id: voice.file_id,
+      file_id: audio.file_id,
     })
     if (!fileResponse.ok || !fileResponse.result?.file_path) {
       throw new Error(fileResponse.description ?? 'Telegram getFile failed')
     }
 
-    if (fileResponse.result.file_size != null && fileResponse.result.file_size > MAX_TELEGRAM_VOICE_BYTES) {
-      throw new Error(`voice message is too large (${fileResponse.result.file_size} bytes)`)
+    if (fileResponse.result.file_size != null && fileResponse.result.file_size > MAX_AUDIO_BYTES) {
+      throw new Error(`audio is too large (${fileResponse.result.file_size} bytes)`)
     }
 
     const audioBytes = await this.downloadTelegramFile(connection, fileResponse.result.file_path)
-    const { provider, model } = splitModelId(transcriptionModel)
-    const transcriptionProvider = this.runtime.providers.resolve(transcriptionModel)
-    if (!transcriptionProvider.transcribeAudio) {
-      throw new Error(`Provider "${provider}" does not support audio transcription`)
-    }
-
-    const response = await transcriptionProvider.transcribeAudio({
-      model,
-      input_audio: {
-        data: Buffer.from(audioBytes).toString('base64'),
-        format: this.inferAudioFormat(voice.mime_type, fileResponse.result.file_path),
-      },
-      signal: this.runtime.shutdownController.signal,
+    const candidateName = audio.file_name ?? fileResponse.result.file_path
+    const response = await transcribeAudio(this.runtime, {
+      bytes: audioBytes,
+      mimeType: audio.mime_type,
+      fileName: audio.kind === 'voice' && !isSupportedAudioFile(audio.mime_type, candidateName)
+        ? 'voice.ogg'
+        : candidateName,
     })
-
-    return response.text.trim()
+    return response.text
   }
 
   /** Download file bytes through Telegram's file endpoint with a hard size cap. */
@@ -731,34 +764,15 @@ export class TelegramService {
     }
 
     const contentLength = response.headers.get('content-length')
-    if (contentLength && Number(contentLength) > MAX_TELEGRAM_VOICE_BYTES) {
-      throw new Error(`voice message is too large (${contentLength} bytes)`)
+    if (contentLength && Number(contentLength) > MAX_AUDIO_BYTES) {
+      throw new Error(`audio is too large (${contentLength} bytes)`)
     }
 
     const bytes = await response.arrayBuffer()
-    if (bytes.byteLength > MAX_TELEGRAM_VOICE_BYTES) {
-      throw new Error(`voice message is too large (${bytes.byteLength} bytes)`)
+    if (bytes.byteLength > MAX_AUDIO_BYTES) {
+      throw new Error(`audio is too large (${bytes.byteLength} bytes)`)
     }
     return bytes
-  }
-
-  /** Map Telegram MIME/path metadata to OpenRouter's transcription format string. */
-  private inferAudioFormat(mimeType: string | undefined, filePath: string): string {
-    const normalizedMime = mimeType?.toLowerCase() ?? ''
-    if (normalizedMime.includes('ogg')) return 'ogg'
-    if (normalizedMime.includes('webm')) return 'webm'
-    if (normalizedMime.includes('mpeg') || normalizedMime.includes('mp3')) return 'mp3'
-    if (normalizedMime.includes('mp4') || normalizedMime.includes('m4a')) return 'm4a'
-    if (normalizedMime.includes('aac')) return 'aac'
-    if (normalizedMime.includes('flac')) return 'flac'
-    if (normalizedMime.includes('wav')) return 'wav'
-
-    const extension = filePath.toLowerCase().split('.').pop()
-    if (extension === 'oga') return 'ogg'
-    if (extension && ['ogg', 'webm', 'mp3', 'm4a', 'aac', 'flac', 'wav'].includes(extension)) {
-      return extension
-    }
-    return 'ogg'
   }
 
   /** Parse Telegram slash commands that affect session routing. */
