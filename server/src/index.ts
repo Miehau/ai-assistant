@@ -9,6 +9,7 @@ import { loadConfig } from './lib/config.js'
 import { initRuntime, shutdownRuntime } from './lib/runtime.js'
 import type { RuntimeContext } from './lib/runtime.js'
 import { chatRoutes } from './routes/chat.js'
+import { audioRoutes } from './routes/audio.js'
 import { sessionRoutes } from './routes/sessions.js'
 import { modelRoutes } from './routes/models.js'
 import { apiKeyRoutes } from './routes/api-keys.js'
@@ -129,6 +130,7 @@ async function main() {
   )
 
   // API Routes
+  app.route('/api/audio', audioRoutes(runtime))
   app.route('/api/chat', chatRoutes(runtime))
   app.route('/api/sessions', sessionRoutes(runtime))
   app.route('/api/models', modelRoutes(runtime))

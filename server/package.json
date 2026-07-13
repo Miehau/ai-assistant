@@ -9,6 +9,7 @@
     "test:mcp-oauth-provider": "node --import tsx src/test/mcp-oauth-provider.ts",
     "test:mcp-oauth-integration": "node --import tsx src/test/mcp-oauth-integration.ts",
     "test:mcp-routes": "node --import tsx src/test/mcp-routes.ts",
+    "test:audio": "node --import tsx src/test/audio-transcription.ts && node --import tsx src/test/audio-routes.ts",
     "test:mcp-oauth": "bun run build && node --import tsx src/test/mcp-oauth-contract.ts && bun run test:mcp-repository && bun run test:mcp-oauth-provider && bun run test:mcp-oauth-integration && bun run test:mcp-routes",
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",

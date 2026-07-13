@@ -5,6 +5,7 @@
   import { Paperclip, Send, Square } from "lucide-svelte";
   import { cancelCurrentAgentRequest } from "$lib/stores/chat";
   import type { Attachment, Message } from "$lib/types";
+  import { isAudioFile } from "$lib/types/attachments";
   import { get } from "svelte/store";
   import { currentConversation } from "$lib/services/conversation";
   import CostEstimator from "./CostEstimator.svelte";
@@ -89,6 +90,7 @@
         });
 
         const newAttachments = await Promise.all(files.map(async (file, index) => {
+          const audioFile = isAudioFile(file);
           // Simulate progress updates (in a real implementation, you would get this from the upload API)
           const progressInterval = setInterval(() => {
             if (uploadProgress[file.name] < 90) {
@@ -98,18 +100,6 @@
           }, 100);
 
           try {
-            // Determine the attachment type based on file MIME type
-            let attachmentType = "";
-            if (file.type.startsWith('text/') || file.name.match(/\.(txt|md|json|js|ts|py|rs|svelte)$/)) {
-              attachmentType = "text/plain";
-            } else if (file.type.startsWith('audio/')) {
-              attachmentType = "audio";
-            } else if (file.type.startsWith('image/')) {
-              attachmentType = "image";
-            } else {
-              attachmentType = file.type || "application/octet-stream";
-            }
-
             // Update progress
             uploadProgress[file.name] = 50;
             uploadProgress = {...uploadProgress};
@@ -130,7 +120,7 @@
               const base64Data = await fileToBase64(file);
               uploadProgress[file.name] = 100;
               uploadProgress = {...uploadProgress};
-              const type = file.type.startsWith('audio/') ? 'audio' as const : 'image' as const;
+              const type = audioFile ? 'audio' as const : 'image' as const;
               return {
                 attachment_type: type,
                 name: file.name,
@@ -157,7 +147,7 @@
             } else {
               // Need to get base64 data for fallback
               const fallbackBase64 = await fileToBase64(file);
-              if (file.type.startsWith('audio/')) {
+              if (audioFile) {
                 return {
                   attachment_type: "audio" as const,
                   name: file.name,
