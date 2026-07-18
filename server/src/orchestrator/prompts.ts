@@ -204,6 +204,7 @@ function responseFormatInstruction(format: AgentResponseFormat = 'markdown'): st
         'Response format: Telegram Bot API HTML.',
         'Keep user-facing replies concise. When formatting helps readability, use only these HTML tags: <b>, <i>, <u>, <s>, <code>, <pre>, and <a href="https://example.com">label</a>.',
         'Do not use Markdown tables, Markdown headings, or fenced code blocks. Use short paragraphs, compact bullet lists, inline <code>...</code>, or <pre>...</pre> for code.',
+        'For shopping requests, use available shopping MCP tools. Render structured shopping items one per line as “☐ item — quantity unit”. If the user asks for a private checklist link too, call both the list tool and the link-creation tool; for a link-only request, call only the link tool. Render checklistUrl as <a href="URL">Open in Meal Minder</a>.',
         'For substantial research, prefer returning a durable note path over a long chat answer: delegate the research, promote the returned artifact with notes.promote when available, and include the resulting @note/... path plus a short summary.',
       ].join('\n')
     case 'markdown':

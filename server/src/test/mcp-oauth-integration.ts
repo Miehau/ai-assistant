@@ -37,6 +37,24 @@ try {
   assert.equal(connected.tools[0]?.remoteName, 'ping')
   const selectedTools = await manager.getNewSessionToolSnapshot(user.id, [oauth.id])
   assert.equal(selectedTools[0]?.name, connected.tools[0]?.registeredName)
+  assert.equal((await manager.getNewSessionToolSnapshot(user.id))[0]?.name, connected.tools[0]?.registeredName)
+  assert.deepEqual(await manager.getNewSessionToolSnapshot(user.id, []), [])
+  const now = Date.now()
+  await repos.mcp.createTool(user.id, {
+    id: 'shopping-list-tool',
+    serverId: oauth.id,
+    remoteName: 'list_shopping_items',
+    registeredName: 'mcp.Meal_Minder.list_shopping_items',
+    description: 'List shopping items',
+    inputSchema: '{"type":"object"}',
+    enabledForNewSessions: true,
+    createdAt: now,
+    updatedAt: now,
+  })
+  const shoppingTool = (await manager.getNewSessionToolSnapshot(user.id))
+    .find(tool => tool.name === 'mcp.Meal_Minder.list_shopping_items')
+  assert.equal(shoppingTool?.requires_approval, false)
+  assert.equal(selectedTools[0]?.requires_approval, true)
 
   const chat = await repos.sessions.create({ userId: user.id, title: 'OAuth tool call' })
   const call = await registry.execute(connected.tools[0].registeredName, { value: 'oauth' }, {
@@ -44,6 +62,13 @@ try {
   })
   assert.equal(call.ok, true)
   assert.match(String(call.output), /pong:oauth/)
+  const structuredCall = await registry.execute(connected.tools[0].registeredName, { value: 'structured' }, {
+    agent_id: 'agent', session_id: chat.id, signal: new AbortController().signal,
+  })
+  assert.deepEqual(structuredCall.output, {
+    text: 'pong:structured',
+    structuredContent: { checklistUrl: 'https://meals.example/checklist/test' },
+  })
   assert.equal(await manager.getServer(otherUser.id, oauth.id), null)
   assert.deepEqual(await manager.getNewSessionToolSnapshot(otherUser.id, [oauth.id]), [])
   await assert.rejects(() => manager.startOAuth(otherUser.id, oauth.id), /not found/)

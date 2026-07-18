@@ -23,6 +23,7 @@ import { PersistentMcpOAuthProvider, type PendingAuthorization } from './oauth-p
 import { buildOAuthCallbackUrl } from './oauth-config.js'
 
 type McpClient = Client
+const autoExecutableMcpTools = new Set(['list_shopping_items', 'create_shopping_checklist_link'])
 
 const createServerSchema = z.object({
   name: z.string().min(1).max(80),
@@ -177,10 +178,12 @@ export class McpManager {
     return this.toToolRecord(updated)
   }
 
-  async getNewSessionToolSnapshot(userId: string, serverIds: string[]): Promise<McpToolSnapshot[]> {
-    if (serverIds.length === 0) return []
-    const servers = (await Promise.all(serverIds.map((id) => this.repository.getServer(userId, id))))
-      .filter((server): server is StoredMcpServer => Boolean(server?.enabled))
+  async getNewSessionToolSnapshot(userId: string, serverIds?: string[]): Promise<McpToolSnapshot[]> {
+    if (serverIds?.length === 0) return []
+    const servers = serverIds
+      ? (await Promise.all(serverIds.map((id) => this.repository.getServer(userId, id))))
+        .filter((server): server is StoredMcpServer => Boolean(server?.enabled))
+      : await this.repository.listEnabledServers(userId)
     const enabledServerIds = new Set(servers.map((server) => server.id))
     if (enabledServerIds.size === 0) return []
 
@@ -190,7 +193,7 @@ export class McpManager {
         name: tool.registeredName,
         description: this.toToolRecord(tool).description,
         parameters: this.toToolRecord(tool).inputSchema,
-        requires_approval: true,
+        requires_approval: !autoExecutableMcpTools.has(tool.remoteName),
         source_id: tool.serverId,
       }))
   }
@@ -356,7 +359,7 @@ export class McpManager {
           name: tool.registeredName,
           description: tool.description,
           parameters: tool.inputSchema,
-          requires_approval: true,
+          requires_approval: !autoExecutableMcpTools.has(tool.remoteName),
         },
         handle: (args, ctx) => this.callTool(userId, ctx.session_id, tool.serverId, tool.remoteName, args, ctx.signal),
         preview: () => ({ summary: `Call MCP tool ${tool.remoteName}` }),
@@ -617,9 +620,13 @@ function mapCallResult(result: Awaited<ReturnType<Client['callTool']>>): ToolRes
     }
   }
 
+  const text = formatMcpContent(result.content)
+  const structuredContent = result.structuredContent
   return {
     ok: true,
-    output: formatMcpContent(result.content) || result,
+    output: structuredContent === undefined
+      ? text || result
+      : { text, structuredContent },
     ...(contentBlocks.length > 0 && { content_blocks: contentBlocks }),
   }
 }
