@@ -610,7 +610,8 @@ async function main() {
     assert(
       telegramProviderSystemPrompts.some((content) => (
         content.includes('## Additional Instructions') &&
-        content.includes('Response format: Telegram Bot API HTML')
+        content.includes('Response format: Telegram Bot API HTML') &&
+        content.includes('Open in Meal Minder')
       )),
       'Telegram prompt includes HTML formatting instructions as additional instructions',
     )

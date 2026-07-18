@@ -123,7 +123,10 @@ export class OAuthMcpFixture {
     const server = new McpServer({ name: 'oauth-fixture', version: '1.0.0' })
     server.registerTool('ping', {
       description: 'Return a deterministic fixture response', inputSchema: { value: z.string().optional() },
-    }, async ({ value }) => ({ content: [{ type: 'text', text: value ? `pong:${value}` : 'pong' }] }))
+    }, async ({ value }) => ({
+      content: [{ type: 'text', text: value ? `pong:${value}` : 'pong' }],
+      ...(value === 'structured' ? { structuredContent: { checklistUrl: 'https://meals.example/checklist/test' } } : {}),
+    }))
     const transport = new WebStandardStreamableHTTPServerTransport()
     await server.connect(transport)
     return transport.handleRequest(request)
